@@ -245,7 +245,6 @@ end
 -- ----------------------------------------------------------------------
 local COMMAND_SUGGESTIONS = {
     -- client/scenttrail.lua
-    { command = 'k9nosehunt', keySuffix = 'k9nosehunt' , featureFlag = 'ScentTrailHunt' },
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
     { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' , featureFlag = 'PursuitSprint' },
     -- client/kennel.lua -- COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
@@ -274,7 +273,6 @@ local COMMAND_SUGGESTIONS = {
     -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
     -- 'k9train' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
-    { command = 'k9train', keySuffix = 'k9train' , featureFlag = 'TrainingMode' },
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
     -- client/vision.lua -- OWNER REVERSAL (coder-architect, this pass):
@@ -294,7 +292,6 @@ local COMMAND_SUGGESTIONS = {
     -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
     -- client/recall.lua
-    { command = 'k9recall', keySuffix = 'k9recall' , featureFlag = 'Recall' },
     -- client/movement.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCamera', keySuffix = 'toggle_camera' },
     -- client/movement.lua -- menu-parity pass ("chat commands, 3rd eye, and
@@ -318,7 +315,6 @@ local COMMAND_SUGGESTIONS = {
     -- item, but no chat command.
     { command = 'k9treat', keySuffix = 'k9treat' },
     -- client/sarcalls.lua
-    { command = 'k9sarcall', keySuffix = 'k9sarcall' , featureFlag = 'SARCalls' },
     -- client/defense.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:confirmHandlerDownDefense', keySuffix = 'confirm_handler_down_defense' },
     -- client/dangerwarn.lua (qbx_k9unit: namespace) -- Alert already had a
@@ -381,9 +377,6 @@ local COMMAND_SUGGESTIONS = {
     -- file's own comment), never chat-suggested under their own names.
     { command = 'k9permission', keySuffix = 'k9permission' },
     -- server/scentlineup.lua
-    { command = 'k9lineup', keySuffix = 'k9lineup' , featureFlag = 'ScentLineup' },
-    { command = 'k9lineuppick', keySuffix = 'k9lineuppick' , featureFlag = 'ScentLineup' },
-    { command = 'k9lineupcancel', keySuffix = 'k9lineupcancel' , featureFlag = 'ScentLineup' },
 }
 
 --- Registers one `chat:addSuggestion` for a resolved command name, reading

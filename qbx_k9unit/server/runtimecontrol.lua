@@ -564,11 +564,6 @@ local FEATURE_TIERS = {
     DoorInteraction        = { tier = 'live' },
     CertificationExpiry    = { tier = 'live', note = 'New/renewed grants getting an expiry date works immediately either way. The courtesy expiry-warning sweep thread only starts if this was already true when server/certifications.lua loaded -- turning it on mid-session does not start a sweep that never began; a restart is needed for the warning sweep specifically (grants themselves are unaffected).' },
     FatigueSystem          = { tier = 'live' },
-    MoodSystem             = { tier = 'live' },
-    FearStressSystem       = { tier = 'live' },
-    DistractionSystem      = { tier = 'live' },
-    InjuryLimping          = { tier = 'live' },
-    HungerThirstSystem     = { tier = 'live', note = 'server/wellbeing.lua has no raw top-level gate for this. The shared tick thread runs unconditionally and re-checks Config.Features.HungerThirstSystem fresh on every tick before decaying hunger/thirst, and each of feedK9Hunger/giveK9Water/drinkFromBowl opens with its own "if not Config.Features.HungerThirstSystem then return end" on every single invocation -- genuinely live in both directions, with no partial-liveness caveat (same shape as ScentVision above).' },
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
     FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
@@ -615,8 +610,6 @@ local FEATURE_TIERS = {
 
     -- tier = 'rawtoplevel' -- gated before this resource\'s own onResourceStart ever fires; no restart of THIS resource alone can apply an override -- config.lua itself must be edited.
     FetchMechanic          = { tier = 'rawtoplevel' },
-    HandlerDownDefense     = { tier = 'rawtoplevel' },
-    Recall                 = { tier = 'rawtoplevel', note = 'This resource\'s one termination/escape-hatch path. If it shipped ON, it stays reachable all session regardless of this file\'s override -- toggling it here can only ever fail to silently turn it ON when it was off, never trap anyone who could already call their K9 off.' },
     PropAttachments        = { tier = 'rawtoplevel' },
     -- ADDED 2026-08-26 -- all six confirmed by direct read of a bare
     -- `if not Config.Features.X then return end` at that file's own raw
@@ -625,9 +618,6 @@ local FEATURE_TIERS = {
     K9DownDispatch         = { tier = 'rawtoplevel', note = 'server/integrations.lua opens with "if not Config.Features.K9DownDispatch then return end" -- the poll thread, the NewCooldown construction, and the playerDropped handler are never even reached when the flag is off at load time.' },
     K9Leaderboard          = { tier = 'rawtoplevel', note = 'server/leaderboard.lua opens with "if not (Config.Features and Config.Features.K9Leaderboard == true) then return end" before its own RegisterCommand(\'k9stats\', ...) -- the command is never registered at all when the flag is off at load time.' },
     PursuitSprint          = { tier = 'rawtoplevel', note = 'server/pursuitsprint.lua opens with "if not Config.Features.PursuitSprint then return end" before its own config asserts and RegisterNetEvent(\'qbx_k9unit:server:requestPursuitSprint\', ...) -- the net event is never registered at all when the flag is off at load time.' },
-    SARCalls               = { tier = 'rawtoplevel', note = 'server/sarcalls.lua opens with "if not Config.Features.SARCalls then return end" before its own asserts, cooldown construction, and callback/command registrations -- the entire file is inert while the flag is off.' },
-    ScentLineup            = { tier = 'rawtoplevel', note = 'server/scentlineup.lua opens with "if not Config.Features.ScentLineup then return end" before its own registrations -- the entire file is inert while the flag is off.' },
-    TrainingMode           = { tier = 'rawtoplevel', note = 'server/training.lua opens with "if not Config.Features.TrainingMode then return end" before its own registrations -- the entire file is inert while the flag is off.' },
     -- ADDED 2026-08-26 (coder-backend, DangerWarn handover items 1-4):
     -- confirmed by direct read of server/dangerwarn.lua's own first
     -- executable line, same verification standard as the six-entry batch
@@ -636,7 +626,6 @@ local FEATURE_TIERS = {
     -- file's "quote the exact opening line" convention) so a future reader
     -- does not have to go re-read server/dangerwarn.lua to confirm this
     -- classification themselves.
-    DangerWarn             = { tier = 'rawtoplevel', note = 'server/dangerwarn.lua opens with "if not Config.Features.DangerWarn then return end" before its own config-safety resolution, cooldown construction, and RegisterNetEvent(\'qbx_k9unit:server:requestDangerWarn\', ...) -- the net event is never registered at all when the flag is off at load time.' },
     -- ADDED 2026-08-27, alongside the Config.Features key itself, which had
     -- never existed (see that key's own comment in config.lua for why a
     -- fully-built, keybound, tested feature shipped with no switch anywhere).
@@ -650,7 +639,6 @@ local FEATURE_TIERS = {
     -- flip takes effect on the very next bite/takedown validation in either
     -- direction, no restart, exactly like BiteAndHold/NonLethalTakedown whose
     -- call site this gate rides on top of.
-    ApprehensionAnnouncement = { tier = 'live', note = 'server/announce.lua has NO file-level gate -- RegisterNetEvent(\'qbx_k9unit:server:announceApprehensionWarning\', ...) is registered unconditionally and checks "if not Config.Features.ApprehensionAnnouncement then return end" INSIDE its own callback body; IsApprehensionWarned() re-reads the flag on every single call. client/announce.lua likewise registers its command and M keybind unconditionally and checks the flag per-press.' },
     -- LOCKOUT-RISK (see "LOCKOUT-RISK FEATURES" below this table): turning
     -- this off, then actually following through with the config.lua edit +
     -- restart this tier already requires, removes the ONLY in-game surface
@@ -1265,14 +1253,6 @@ local TUNABLE_REGISTRY = {
     -- EXCLUDED -- this file's own CONFIG-SAFETY GUARD comment states outright
     -- those three "are read and validated by client/sarcalls.lua alone --
     -- this file never touches them."
-    ['SARCalls.minRadius']                      = { path = { 'SARCalls', 'minRadius' },                          min = 5.0,   max = 200.0,     integer = false },
-    ['SARCalls.maxRadius']                      = { path = { 'SARCalls', 'maxRadius' },                          min = 10.0,  max = 300.0,     integer = false },
-    ['SARCalls.arrivalRadius']                  = { path = { 'SARCalls', 'arrivalRadius' },                      min = 1.0,   max = 30.0,      integer = false },
-    ['SARCalls.burningDistance']                = { path = { 'SARCalls', 'burningDistance' },                    min = 1.0,   max = 50.0,      integer = false },
-    ['SARCalls.hotDistance']                    = { path = { 'SARCalls', 'hotDistance' },                        min = 1.0,   max = 100.0,     integer = false },
-    ['SARCalls.warmDistance']                   = { path = { 'SARCalls', 'warmDistance' },                       min = 1.0,   max = 150.0,     integer = false },
-    ['SARCalls.pollIntervalMs']                 = { path = { 'SARCalls', 'pollIntervalMs' },                     min = 500,   max = 30000,     integer = true },
-    ['SARCalls.maxCallDurationMs']              = { path = { 'SARCalls', 'maxCallDurationMs' },                  min = 30000, max = 1800000,   integer = true },
 
     -- server/combat.lua (Config.Features.BiteAndHold / NonLethalTakedown /
     -- PropDragging, all `live`). Every entry below is read straight off
@@ -1324,9 +1304,6 @@ local TUNABLE_REGISTRY = {
     -- attackerReportCooldownMs are EXCLUDED (each baked into its own
     -- NewCooldown constructor). promptTtlMs/confirmKey are EXCLUDED -- never
     -- read server-side at all (that value is a client-local clock/keybind).
-    ['Combat.HandlerDownDefense.handlerHealthThreshold'] = { path = { 'Combat', 'HandlerDownDefense', 'handlerHealthThreshold' }, min = 1, max = 200, integer = true },
-    ['Combat.HandlerDownDefense.triggerRadius'] = { path = { 'Combat', 'HandlerDownDefense', 'triggerRadius' },  min = 1.0,   max = 50.0,      integer = false },
-    ['Combat.HandlerDownDefense.hostileLookbackSeconds'] = { path = { 'Combat', 'HandlerDownDefense', 'hostileLookbackSeconds' }, min = 1, max = 300, integer = true },
 
     -- server/partnership.lua (Config.Features.HandlerPartnership, live).
     -- ProximityMeters is read inline at the confirm step; RequestTTLMs is

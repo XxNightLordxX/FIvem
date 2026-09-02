@@ -2342,9 +2342,6 @@
         { key: 'vision', labelKey: 'cmdref_category_vision' },
         { key: 'field_gear', labelKey: 'cmdref_category_field_gear' },
         { key: 'calling_off', labelKey: 'cmdref_category_calling_off' },
-        { key: 'scent_games', labelKey: 'cmdref_category_scent_games' },
-        { key: 'search_rescue', labelKey: 'cmdref_category_search_rescue' },
-        { key: 'training', labelKey: 'cmdref_category_training' },
         { key: 'records', labelKey: 'cmdref_category_records' },
         { key: 'certification', labelKey: 'cmdref_category_certification' },
         { key: 'xp', labelKey: 'cmdref_category_xp' },
@@ -2390,13 +2387,6 @@
         // across every resource a server loads, unlike a chat-only command.
         { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
         { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
-        { command: 'k9announce', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9announce_usage', doesKey: 'cmdref_k9announce_does', needsKey: 'cmdref_k9announce_needs', gate: { kind: 'access', featureKey: 'ApprehensionAnnouncement' }, defaultKeybind: 'M', defaultKeybindConfigurable: true },
-        // defaultKeybind CORRECTED, this pass: was 'N', now stale --
-        // Config.DangerWarn.keybind was changed to 'P' (config.lua's own
-        // comment on that field: 'N' collided with
-        // client/pursuitsprint.lua's own hardcoded default the moment
-        // DangerWarn was ever switched on). Read directly from config.lua's
-        // current value, not assumed from this entry's own prior text.
         { command: 'qbx_k9unit:dangerWarnAlert', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_alert_usage', doesKey: 'cmdref_danger_warn_alert_does', needsKey: 'cmdref_danger_warn_alert_needs', gate: { kind: 'access', featureKey: 'DangerWarn' }, defaultKeybind: 'P', defaultKeybindConfigurable: true },
         // qbx_k9unit:dangerWarnThreat -- menu-parity pass: its sibling Alert
         // (immediately above) already had a command/keybind; Threat had
@@ -2526,36 +2516,12 @@
         { command: 'k9drink', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9drink_usage', doesKey: 'cmdref_k9drink_does', needsKey: 'cmdref_k9drink_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
 
         // ---- Calling Your K9 Off ----
-        { command: 'k9recall', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9recall_usage', doesKey: 'cmdref_k9recall_does', needsKey: 'cmdref_k9recall_needs', gate: { kind: 'open', featureKey: 'Recall' }, defaultKeybind: 'U' },
         { command: 'k9calmdown', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9calmdown_usage', doesKey: 'cmdref_k9calmdown_does', needsKey: 'cmdref_k9calmdown_needs', gate: { kind: 'access', featureKey: 'FearStressSystem' } },
         { command: 'k9meatbait', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9meatbait_usage', doesKey: 'cmdref_k9meatbait_does', needsKey: 'cmdref_k9meatbait_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
         { command: 'k9whistle', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9whistle_usage', doesKey: 'cmdref_k9whistle_does', needsKey: 'cmdref_k9whistle_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
 
         // ---- Scent Games ----
-        { command: 'k9lineup', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineup_usage', doesKey: 'cmdref_k9lineup_does', needsKey: 'cmdref_k9lineup_needs', gate: { kind: 'access', featureKey: 'ScentLineup' } },
-        { command: 'k9lineuppick', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineuppick_usage', doesKey: 'cmdref_k9lineuppick_does', needsKey: 'cmdref_k9lineuppick_needs', gate: { kind: 'open' } },
-        { command: 'k9lineupcancel', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineupcancel_usage', doesKey: 'cmdref_k9lineupcancel_does', needsKey: 'cmdref_k9lineupcancel_needs', gate: { kind: 'open' } },
-        { command: 'k9track', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9track_usage', doesKey: 'cmdref_k9track_does', needsKey: 'cmdref_k9track_needs', gate: { kind: 'access', featureKey: 'ScentTracking' } },
-        { command: 'k9nosehunt', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9nosehunt_usage', doesKey: 'cmdref_k9nosehunt_does', needsKey: 'cmdref_k9nosehunt_needs', gate: { kind: 'access', featureKey: 'ScentTrailHunt' } },
-
-        // ---- Search & Rescue ----
-        { command: 'k9sarcall', category: 'search_rescue', adminOnly: false, usageKey: 'cmdref_k9sarcall_usage', doesKey: 'cmdref_k9sarcall_does', needsKey: 'cmdref_k9sarcall_needs', gate: { kind: 'access', featureKey: 'SARCalls' } },
-
-        // ---- Training ----
-        { command: 'k9training', category: 'training', adminOnly: false, usageKey: 'cmdref_k9training_usage', doesKey: 'cmdref_k9training_does', needsKey: 'cmdref_k9training_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
-        { command: 'k9trainsearch', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainsearch_usage', doesKey: 'cmdref_k9trainsearch_does', needsKey: 'cmdref_k9trainsearch_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
-        { command: 'k9trainbite', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainbite_usage', doesKey: 'cmdref_k9trainbite_does', needsKey: 'cmdref_k9trainbite_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
-        // k9train -- COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point
-        // (client/training.lua) -- reported as PENDING_NEW_CANONICAL_COMMANDS
-        // while html/tablet.js was a hot file; added here now that it is
-        // not. Bare form is a deterministic on/off toggle (gate mirrors
-        // k9training's own start-half access gate; turning off stays
-        // ungated the same way every other release path in this catalog
-        // does); 'search'/'bite' stay explicit words, same underlying
-        // globals as k9trainsearch/k9trainbite above.
-        { command: 'k9train', category: 'training', adminOnly: false, usageKey: 'cmdref_k9train_usage', doesKey: 'cmdref_k9train_does', needsKey: 'cmdref_k9train_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
-
-        // ---- Records & Progress ----
+        { command: 'k9track', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9track_usage', doesKey: 'cmdref_k9track_does', needsKey: 'cmdref_k9track_needs', gate: { kind: 'access', featureKey: 'ScentTracking' } },
         { command: 'k9stats', category: 'records', adminOnly: false, usageKey: 'cmdref_k9stats_usage', doesKey: 'cmdref_k9stats_does', needsKey: 'cmdref_k9stats_needs', gate: { kind: 'access', featureKey: 'K9Leaderboard' } },
 
         // ---- Certification Management (admin) ----

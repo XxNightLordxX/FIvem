@@ -149,10 +149,6 @@ local lastStats = {
     distractedUntil = 0,
     hesitatingUntil = 0,
 }
-local wasDistracted = false
-local wasHesitating = false
-local wasHungry = false
-local wasThirsty = false
 
 -- ======================================================================
 -- LIVE FEATURE FLAGS -- closes a real, confirmed gap: every check below
@@ -265,11 +261,6 @@ local LiveFeatureFlags = {
 local LiveWellbeingTunables = {
     fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
     fatigueSpeedPenaltyMultiplier    = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
-    moodPerformancePenaltyThreshold  = Config.Wellbeing.Mood.performancePenaltyThreshold,
-    moodPerformancePenaltyMultiplier = Config.Wellbeing.Mood.performancePenaltyMultiplier,
-    injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
-    injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
-    injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
     -- NATIVE SPRINT STAMINA ASSIST -- see the "NATIVE SPRINT STAMINA ASSIST"
     -- section further below (right after the Injury sprint/jump block) for
     -- the consumer of this field. Same ingest/default-value rules as the
@@ -286,10 +277,6 @@ local LiveWellbeingTunables = {
     -- simply seeds these two at a safe default instead of erroring out of
     -- this entire file's load (which would take every OTHER wellbeing
     -- feature's client-side half down with it).
-    hungerSpeedPenaltyThreshold  = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.lowThreshold or 30,
-    hungerSpeedPenaltyMultiplier = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.speedPenaltyMultiplier or 0.95,
-    thirstSpeedPenaltyThreshold  = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.lowThreshold or 30,
-    thirstSpeedPenaltyMultiplier = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.speedPenaltyMultiplier or 0.95,
 }
 
 --- Recomputes this file's three owned `K9MoveRateModifiers` slots from
@@ -322,55 +309,8 @@ local function ApplyMoveRateModifiers()
         K9MoveRateModifiers.fatigue = 1.0
     end
 
-    if LiveFeatureFlags.InjuryLimping then
-        local injuryPenaltyThreshold = math.max(LiveWellbeingTunables.injurySprintBlockThreshold, LiveWellbeingTunables.injuryJumpBlockThreshold)
-        if lastStats.injury < injuryPenaltyThreshold then
-            K9MoveRateModifiers.injury = LiveWellbeingTunables.injurySpeedPenaltyMultiplier
-        else
-            K9MoveRateModifiers.injury = 1.0
-        end
-    else
-        K9MoveRateModifiers.injury = 1.0
-    end
 
-    if LiveFeatureFlags.MoodSystem then
-        if lastStats.mood < LiveWellbeingTunables.moodPerformancePenaltyThreshold then
-            K9MoveRateModifiers.mood = LiveWellbeingTunables.moodPerformancePenaltyMultiplier
-        else
-            K9MoveRateModifiers.mood = 1.0
-        end
-    else
-        K9MoveRateModifiers.mood = 1.0
-    end
 
-    -- HUNGER/THIRST (this pass, coder-backend). Two NEW named entries on the
-    -- SAME shared K9MoveRateModifiers table -- client/movement.lua's own
-    -- RecomputeK9MoveRate composer is a generic `for _, modifier in
-    -- pairs(K9MoveRateModifiers) do effective = effective * modifier end`
-    -- (confirmed by reading that function directly before adding these two
-    -- lines), so no change is needed there at all. DELIBERATELY MILD and
-    -- DELIBERATELY NOT a hard input block (unlike Injury's sprint/jump
-    -- block below) -- see server/wellbeing.lua's header for the full
-    -- "consequences must stay mild, never cannot-work-at-all" reasoning.
-    -- Same "reset to 1.0 in the else branch, never merely left untouched"
-    -- discipline as every modifier above, for the identical "flag switched
-    -- off mid-effect must remove the effect" reason.
-    if LiveFeatureFlags.HungerThirstSystem then
-        if lastStats.hunger < LiveWellbeingTunables.hungerSpeedPenaltyThreshold then
-            K9MoveRateModifiers.hunger = LiveWellbeingTunables.hungerSpeedPenaltyMultiplier
-        else
-            K9MoveRateModifiers.hunger = 1.0
-        end
-
-        if lastStats.thirst < LiveWellbeingTunables.thirstSpeedPenaltyThreshold then
-            K9MoveRateModifiers.thirst = LiveWellbeingTunables.thirstSpeedPenaltyMultiplier
-        else
-            K9MoveRateModifiers.thirst = 1.0
-        end
-    else
-        K9MoveRateModifiers.hunger = 1.0
-        K9MoveRateModifiers.thirst = 1.0
-    end
 
     RecomputeK9MoveRate()
 end
@@ -432,50 +372,8 @@ local function ApplyWellbeingSnapshot(stats)
 
     ApplyMoveRateModifiers()
 
-    -- HUNGER/THIRST -- cosmetic, one-shot notifications on a threshold
-    -- CROSSING only (never spammed every tick), same shape as the
-    -- Distraction/FearStress transition notifies below. Uses the SAME
-    -- threshold this tick's ApplyMoveRateModifiers() call just judged the
-    -- move-rate penalty against, so the notification and the actual
-    -- gameplay effect can never disagree about when the K9 became "hungry"/
-    -- "thirsty".
-    if LiveFeatureFlags.HungerThirstSystem then
-        local isHungryNow = lastStats.hunger < LiveWellbeingTunables.hungerSpeedPenaltyThreshold
-        if isHungryNow and not wasHungry then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hunger_low'), type = 'error' })
-        elseif wasHungry and not isHungryNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hunger_satisfied'), type = 'info' })
-        end
-        wasHungry = isHungryNow
 
-        local isThirstyNow = lastStats.thirst < LiveWellbeingTunables.thirstSpeedPenaltyThreshold
-        if isThirstyNow and not wasThirsty then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.thirst_low'), type = 'error' })
-        elseif wasThirsty and not isThirstyNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.thirst_satisfied'), type = 'info' })
-        end
-        wasThirsty = isThirstyNow
-    end
 
-    if LiveFeatureFlags.DistractionSystem then
-        local isDistractedNow = lastStats.distractedUntil > GetGameTimer()
-        if isDistractedNow and not wasDistracted then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.distracted'), type = 'error' })
-        elseif wasDistracted and not isDistractedNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.refocused'), type = 'info' })
-        end
-        wasDistracted = isDistractedNow
-    end
-
-    if LiveFeatureFlags.FearStressSystem then
-        local isHesitatingNow = lastStats.hesitatingUntil > GetGameTimer()
-        if isHesitatingNow and not wasHesitating then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hesitating'), type = 'error' })
-        elseif wasHesitating and not isHesitatingNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.settled'), type = 'info' })
-        end
-        wasHesitating = isHesitatingNow
-    end
 end
 
 --- DEVELOPER_REFERENCE.md §13.4.3.1. Pure tick-driven consumer — server/wellbeing.lua's
@@ -527,151 +425,6 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
             end
             wasK9 = isK9
             Wait(2000)
-        end
-    end)
-end
-
--- ======================================================================
--- INJURY — client-local sprint/jump input blocks. DEVELOPER_REFERENCE.md
--- §13.4.3.5's own disclosed limitation: self-applied, not a security
--- boundary, same category as the speed-penalty modifier above (§13.0
--- Decision 3).
---
--- ALWAYS STARTS, regardless of Config.Features.InjuryLimping's boot-time
--- value: gating thread creation on that static copy would create the SAME
--- "unbounded trap" class of bug this file's header "LIVE FEATURE FLAGS"
--- section describes, in BOTH directions --
---   (a) OFF while active: a client that booted with InjuryLimping=true
---       (so this thread started) would keep calling DisableControlAction
---       forever against a `lastStats.injury` value server/wellbeing.lua
---       PERMANENTLY FREEZES the instant the server-side flag goes false (no
---       more decay, no more regen for that stat) -- an already-blocked K9
---       would stay sprint/jump-blocked forever, with no server push and no
---       code path left anywhere that would ever clear it.
---   (b) ON while never started: a client that booted with
---       InjuryLimping=false would never start this thread at all -- a
---       later runtime toggle-ON would have nothing left running
---       client-side to ever begin enforcing the block, for the rest of
---       that client's session.
--- Fixed the same way client/movement.lua's own MOVE-RATE WATCHDOG closes
--- the identical class of gap (see that file's header for the general
--- pattern this mirrors): the thread always exists, and checks the CHEAP,
--- purely-local `LiveFeatureFlags.InjuryLimping` boolean FIRST, every
--- iteration, before paying for a single native call
--- (IsEntityModelK9/IsEntityDead) -- idling at the same coarse 1000ms this
--- section already uses for its "not currently K9"/"dead" branches whenever
--- the live flag is false. Calling DisableControlAction has no state that
--- outlives the current frame it was called in, so simply not calling it
--- starting the very next iteration IS the removal this file's header
--- requires -- no separate "undo" step is needed the way a persisted
--- SetPedMoveRateOverride value needs an explicit reset back to 1.0 (see
--- ApplyMoveRateModifiers above).
---
--- Control indices reuse client/movement.lua's own AgilityBasicJump
--- constants (HIGH confidence, standard/well-established GTA V control
--- mapping): 22 = INPUT_JUMP. INPUT_SPRINT = 21 is the standard,
--- widely-documented FiveM/GTA V control id for the sprint action — HIGH
--- confidence per common ecosystem knowledge, not independently re-verified
--- against a live client.
--- ======================================================================
-do
-    local INPUT_SPRINT = 21
-    local INPUT_JUMP = 22
-
-    CreateThread(function()
-        while true do
-            -- OWN-DEATH GUARD: mirrors this codebase's own established
-            -- "own ped death forces an active perception/effect feature to
-            -- end" precedent (client/vision.lua's maintenance thread,
-            -- client/propattachment.lua's "OWN-DEATH AUTO-DETACH",
-            -- client/tracking.lua's own equivalent guard on its
-            -- state/compute thread). A dead ped can neither sprint nor
-            -- jump anyway, so spinning at Wait(0) and re-issuing
-            -- DisableControlAction every single frame while the K9 lay dead
-            -- was pure wasted per-frame native-call cost with zero gameplay
-            -- effect. Idles at the same 1000ms as the "not currently K9"
-            -- branch below while dead, and resumes real per-frame checking
-            -- the instant the ped is alive again (no separate respawn hook
-            -- needed — IsEntityDead() is polled fresh every loop iteration
-            -- here).
-            --
-            -- IDLE-SPIN FIX: the branch below used to take Wait(0) for the
-            -- ENTIRE "alive and K9-modeled" case unconditionally, regardless
-            -- of whether either threshold was actually crossed. With the
-            -- shipped defaults (sprintBlockThreshold=30,
-            -- jumpBlockThreshold=20 out of Injury.max=100), a HEALTHY K9 —
-            -- injury anywhere in (30, 100], the overwhelmingly common case
-            -- for the entire time InjuryLimping has anything to do — spun
-            -- this thread at full per-frame rate forever, calling
-            -- PlayerPedId/IsOwnModelK9 (-> GetEntityModel)/IsEntityDead
-            -- roughly 180 times/second per K9 player, for the rest of that
-            -- session, for zero gameplay effect: this is the DEFAULT case,
-            -- not an edge case, unlike the dead-ped guard above (which
-            -- correctly idles only the much rarer "currently dead" state).
-            -- Fixed the same way that guard already established: only take
-            -- Wait(0) — the cadence DisableControlAction's own contract
-            -- genuinely requires while actively re-asserting a block — when
-            -- at least one threshold is ACTUALLY crossed this tick; idle at
-            -- the same coarse 1000ms otherwise. A healthy-to-injured
-            -- transition can therefore take up to 1000ms to start being
-            -- enforced (the same latency the dead-ped guard above already
-            -- accepts for resuming enforcement after a respawn) —
-            -- negligible against Config.Wellbeing
-            -- .tickIntervalMs's own 5000ms default cadence for Injury to
-            -- change at all, and this was never a security boundary to
-            -- begin with (this section's own header, and DEVELOPER_REFERENCE.md
-            -- §13.0 Decision 3).
-            --
-            -- OWNER'S DECISION: MODEL, not role (K9 role/model decoupling)
-            -- -- same call and same reasoning as client/movement.lua's
-            -- jump/crouch suppression. IsEntityModelK9(PlayerPedId()) below
-            -- is a RESTRICTION gate, not an access grant -- it TAKES
-            -- sprint/jump AWAY from whoever it applies to. The injury
-            -- sprint/jump block restricts quadruped locomotion; a
-            -- role-holder on a human body never had that locomotion to
-            -- restrict, so this deliberately checks the model alone, not
-            -- IsOwnModelK9() (which would also match a role-holder on a
-            -- human body). Do not "fix" this to IsOwnModelK9() in a future
-            -- any-ped sweep.
-            -- LIVE FLAG GATE, CHECKED FIRST (see this section's own header,
-            -- "ALWAYS STARTS"): a plain local boolean read, zero
-            -- native-call cost, ahead of
-            -- IsEntityModelK9()/IsEntityDead() below -- exactly the
-            -- "cheap local flag first, real work only while there is
-            -- something to do" shape client/movement.lua's own MOVE-RATE
-            -- WATCHDOG already established. While the live flag is false,
-            -- NOTHING below it ever runs -- no native calls, no
-            -- DisableControlAction -- which is also what makes turning this
-            -- OFF mid-block an immediate, real removal: the block has no
-            -- state beyond "was DisableControlAction called this frame",
-            -- so simply not calling it starting next iteration undoes it
-            -- completely, not merely "stops it from getting worse".
-            if not LiveFeatureFlags.InjuryLimping then
-                Wait(1000)
-            elseif IsEntityModelK9(PlayerPedId()) and not IsEntityDead(PlayerPedId()) then
-                -- LIVE TUNABLE READ (see this file's header "LIVE
-                -- WELLBEING TUNABLES"): reads the server's CURRENT
-                -- threshold, not this client's static config copy, so a
-                -- tablet edit that raises a threshold lifts an existing
-                -- block on this very next 1000ms-or-sooner iteration, never
-                -- stranding a K9 at a stale value for the rest of the
-                -- session.
-                local sprintBlocked = lastStats.injury < LiveWellbeingTunables.injurySprintBlockThreshold
-                local jumpBlocked = lastStats.injury < LiveWellbeingTunables.injuryJumpBlockThreshold
-                if sprintBlocked or jumpBlocked then
-                    if sprintBlocked then
-                        DisableControlAction(0, INPUT_SPRINT, true)
-                    end
-                    if jumpBlocked then
-                        DisableControlAction(0, INPUT_JUMP, true)
-                    end
-                    Wait(0) -- must disable every frame while ACTUALLY blocking something this tick, per DisableControlAction's own contract
-                else
-                    Wait(1000) -- healthy (injury at/above BOTH thresholds) -- nothing to disable this tick; idle coarsely instead of spinning at full frame rate for zero effect, same cadence as the dead/non-K9 branch below
-                end
-            else
-                Wait(1000)
-            end
         end
     end)
 end
@@ -1231,72 +984,3 @@ RegisterCommand('k9drink', function()
     end
     TriggerServerEvent('qbx_k9unit:server:giveK9Water')
 end, false)
-
--- ======================================================================
--- THIRST — "Drink from Bowl" world-object ox_target option. Targets
--- Config.Wellbeing.Thirst.bowlSources by MODEL, the same
--- K9Compat.Get('target').AddModel primitive client/fetch.lua's own
--- "Pick Up Ball" option and client/kennel.lua already use to target a
--- world prop by model rather than a specific spawned instance -- confirmed
--- against the SAME ox_target addModel API those two files already
--- established, not re-derived here.
---
--- DEGRADES GRACEFULLY if `bowlSources` never resolves to a real model in
--- this world (see server/wellbeing.lua's header "WATER BOWL MODEL RISK"):
--- AddModel simply never matches any entity, so this option never appears
--- for anyone -- Thirst still fully works via `/k9drink` above, which has no
--- model dependency at all.
---
--- ALWAYS REGISTERS, regardless of Config.Features.HungerThirstSystem's
--- boot-time value -- same "registration always happens, LiveFeatureFlags
--- gates canInteract" rule as every other ox_target option in this file
--- (see the MOOD section's own header above for the full reasoning), and the
--- SAME onResourceStart/target-resource-restart re-registration fix that
--- section's own RegisterMoodOxTargetOptions() already established (a
--- restart of whichever resource actually backs ox_target/qb-target/etc.
--- would otherwise silently drop this option forever without it).
--- ======================================================================
-do
-    local function RegisterBowlOxTargetOptions()
-        local bowlSources = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.bowlSources or nil
-        if type(bowlSources) ~= 'table' or #bowlSources == 0 then return end
-
-        local models = {}
-        for _, modelName in ipairs(bowlSources) do
-            if type(modelName) == 'string' and modelName ~= '' then
-                models[#models + 1] = GetHashKey(modelName)
-            end
-        end
-        if #models == 0 then return end
-
-        K9Compat.Get('target').AddModel(models, {
-            {
-                name = 'qbx_k9unit:drinkFromBowl',
-                icon = 'fas fa-dog',
-                label = locale('wellbeing.bowl_target_label'),
-                distance = 2.0,
-                canInteract = function()
-                    if not LiveFeatureFlags.HungerThirstSystem then return false end
-                    return CanShowK9UI()
-                end,
-                onSelect = function(data)
-                    if not data or not data.entity or not DoesEntityExist(data.entity) then return end
-                    local netId = NetworkGetNetworkIdFromEntity(data.entity)
-                    TriggerServerEvent('qbx_k9unit:server:drinkFromBowl', netId)
-                end,
-            },
-        })
-    end
-
-    AddEventHandler('onResourceStart', function(resourceName)
-        if resourceName == GetCurrentResourceName() then
-            RegisterBowlOxTargetOptions()
-            return
-        end
-
-        K9Compat.Redetect()
-        if resourceName == K9Compat.Which('target') then
-            RegisterBowlOxTargetOptions()
-        end
-    end)
-end

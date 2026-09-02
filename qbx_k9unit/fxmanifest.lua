@@ -182,10 +182,7 @@ client_scripts {
     'client/tablet.lua',
     'client/vehicle.lua',
     'client/tracking.lua',
-    'client/scenttrail.lua', -- PROJECT_HISTORY.md §2 "follow your nose" (ScentTrailHunt), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound are all reached behind type() guards.
     'client/pursuitsprint.lua', -- PROJECT_HISTORY.md §5 (PursuitSprint), client half. No load-order dependency.
-    'client/scentlineup.lua', -- PROJECT_HISTORY.md §4 (ScentLineup), client half -- the invite consent dialog only. Calls no other client file's globals, so no load-order dependency at all.
-    'client/sarcalls.lua', -- PROJECT_HISTORY.md §3 (SARCalls), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound all go through runtime existence guards. Owns the cosmetic 'found them' reveal, which is non-networked and cleaned up by the same client that made it.
     'client/search.lua',
     'client/findalert.lua', -- PROJECT_HISTORY.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',
@@ -197,7 +194,6 @@ client_scripts {
     'client/progression.lua', -- XPProgression, DEVELOPER_REFERENCE.md §13.4.1
     'client/combat.lua', -- BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/§12.5.2 -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
     'client/partnership.lua', -- HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7/§12.3 -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
-    'client/defense.lua', -- HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
     -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
     -- immediately above: a K9's own player, not an automatic detector,
     -- deliberately warning their partnered handler. See
@@ -207,7 +203,6 @@ client_scripts {
     -- are both reached only at CALL time, never at file-load time. Placed
     -- here purely for topical grouping with client/defense.lua, the other
     -- half of this pair.
-    'client/dangerwarn.lua',
     'client/propattachment.lua', -- R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/leashvisual.lua',    -- Makes the leash mechanic (client/movement.lua, server/main.lua) actually visible: a rendered rope between handler and K9 for the whole leash duration, plus a leash-handle prop on the handler's own hand. Loaded AFTER client/propattachment.lua deliberately, same "reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy" reasoning as client/fetch.lua's own placement note directly below -- no hard load-order requirement either (global-function resolution is at CALL time, not load time, per every other file's note in this list), kept here purely for consistency with that established convention. Adds no new event to client/movement.lua's or server/main.lua's contract -- it registers its OWN second handler for the SAME 'qbx_k9unit:client:leashAttached'/'qbx_k9unit:client:leashDetached' events client/movement.lua already handles (RegisterNetEvent supports multiple independent handlers per event name), and introduces this resource's first entity-scoped statebag (read: client/leashvisual.lua's own header "BYSTANDER VISIBILITY" section) so a rope is visible to nearby bystanders too, not just the two leash participants -- entirely self-contained; neither movement.lua nor server/main.lua was touched.
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
@@ -215,7 +210,6 @@ client_scripts {
     'client/screenfx.lua', -- ContrabandScreenFX. Held out of this manifest until its two timecycle natives were verified against primary source (no native is allowlisted here on an unverified assertion); both are now confirmed client-only. Registers its OWN handler for qbx_k9unit:client:applyContrabandScreenFx rather than extending client/search.lua -- an additional consumer, the same pattern server/wellbeing.lua and server/tracking.lua use for relayDamageEvent. No load-order dependency.
     'client/audio.lua', -- The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and all five sound keys this bridge can request now ship and are listed in this manifest's files{} block (see html/sounds/CREDITS.md for provenance and licensing). A key with no file degrades to a silent no-op end to end, which looks exactly like the feature being off -- so keep that list complete.
     'client/proximityaudio.lua', -- ProximityAudioFX. Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- confirmed the forged-event class does not apply. Its sound, growl_ambient.ogg, now ships (Config.ProximityAudioFX.soundName -> ToAudioFileKey's lowercase fallback, not the SOUND_NAME_TO_FILE_KEY map).
-    'client/recall.lua', -- Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
     -- Owner-directed "combat should be keybinds, not third-eye" feature.
     -- Adds RegisterCommand+RegisterKeyMapping pairs for the fast,
     -- in-the-moment K9 actions that previously had NEITHER
@@ -242,8 +236,6 @@ client_scripts {
     -- load-order requirement -- placed here purely for topical grouping
     -- with client/keybinds.lua, the other "keybind for a fast K9 action"
     -- file.
-    'client/announce.lua',
-    'client/training.lua', -- Training Mode (DEVELOPER_REFERENCE.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
     'client/equipmentshop.lua', -- K9 Supply shop walk-up (DEVELOPER_REFERENCE.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
     'client/commandsuggestions.lua', -- NEW FILE -- chat:addSuggestion for every RegisterCommand this resource registers (fresh-install finding: zero chat:addSuggestion calls existed anywhere in this resource before this file). No load-order dependency at all: reads only Config (already loaded via shared_scripts) and fires a purely local TriggerEvent at its own onResourceStart, calling no other client file's globals. Placed last purely because it has nothing to be ordered against, same reasoning as client/exports.lua immediately above it.
@@ -463,7 +455,6 @@ server_scripts {
     -- HandlerDownDefense (DEVELOPER_REFERENCE.md §12.5.3) -- hard dependency on
     -- cooldowns.lua (NewCooldown at file-load time); reads partnership state via
     -- GetActivePartnerCitizenId, server-side only, never a client claim.
-    'server/defense.lua',
     -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
     -- immediately above. HARD load-order dependency on server/cooldowns.lua
     -- (NewCooldown at this file's own file-load time -- already satisfied
@@ -478,12 +469,8 @@ server_scripts {
     -- other half of this pair. Never sends an exact coordinate, entity, or
     -- identity of any third party to any client -- see that file's own
     -- header "THE ONE PIECE OF INFORMATION THIS FILE ACTUALLY SENDS".
-    'server/dangerwarn.lua',
     'server/tracking.lua',
-    'server/scenttrail.lua', -- PROJECT_HISTORY.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
     'server/pursuitsprint.lua', -- PROJECT_HISTORY.md §5 (PursuitSprint), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time). Also holds the only correct implementation of the four-step per-person FeatureControl resolution -- read it before writing a second one anywhere else.
-    'server/scentlineup.lua', -- PROJECT_HISTORY.md §4 (ScentLineup), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time); NotifyPlayer/HasK9Access/HasPermission/K9Compat.Get are runtime-only. Holds the secret match and never sends it to any client until a pick is committed.
-    'server/sarcalls.lua', -- PROJECT_HISTORY.md §3 (SARCalls), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time) and after server/certifications.lua for HasK9Access. AwardXP is behind a runtime guard, so no ordering against progression.lua. Holds the hidden target coordinate and never sends it to a client.
     'server/search.lua',
     'server/findalert.lua', -- PROJECT_HISTORY.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
     'server/inventory.lua', -- K9Inventory, DEVELOPER_REFERENCE.md §13.4.2
@@ -566,7 +553,6 @@ server_scripts {
     -- placed immediately after it purely for topical grouping, same
     -- reasoning server/recall.lua's own placement note (below) already
     -- gives for itself.
-    'server/announce.lua',
     -- Recall (server half) -- the handler's escape hatch, ending
     -- whatever active effect their partnered K9 holds. Loaded after
     -- cooldowns.lua (NewCooldown at file-load time -- a hard requirement);
@@ -596,7 +582,6 @@ server_scripts {
     -- tracked ball. Every ball carries an absolute lifetime ceiling
     -- independent of any activity path, so none can outlive its cycle.
     'server/fetch.lua',
-    'server/recall.lua',
     -- Partnership-tenure milestone XP bonus (Config.Features.PartnershipTenureBonus,
     -- DEVELOPER_REFERENCE.md Part B item 7) -- the first gameplay consequence
     -- wired to the HandlerPartnership registry, which landed as a
@@ -623,7 +608,6 @@ server_scripts {
     -- must stay that way -- a training dummy has less friction than any of
     -- the four real mechanics, so any award here would be reachable faster
     -- than the compound farm server/progression.lua's mint budget closed.
-    'server/training.lua',
     -- /k9stats leaderboard (Config.Features.K9Leaderboard). Load-order:
     -- after server/cooldowns.lua, a HARD requirement whenever the feature
     -- flag is on -- it calls NewCooldown() at this file's own file-load

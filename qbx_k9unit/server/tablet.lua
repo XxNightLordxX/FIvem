@@ -1256,7 +1256,6 @@ local CLIENT_ENFORCED_FEATURES = {
 --- effect at all, rather than implying either that it works ('enforced')
 --- or that it merely hasn't been wired up yet ('not_yet_enforced').
 local NOT_ENFORCEABLE_FEATURES = {
-    Recall = true,
     ResourceAutoDetect = true,
     HighCommand = true,
     PermissionGrants = true,
@@ -1437,7 +1436,6 @@ local FEATURE_DOMAINS = {
     ContrabandAlerts   = 'search',
     ContrabandScreenFX = 'search',
     FindAlerts         = 'search',
-    SARCalls           = 'search',
 
     -- 'vision' -- vision & sensory augmentation (sight AND the one
     -- proximity-audio cue that plays the same role for hearing).
@@ -1450,10 +1448,8 @@ local FEATURE_DOMAINS = {
     -- abilities that exist specifically for a dangerous encounter.
     BiteAndHold        = 'combat',
     NonLethalTakedown  = 'combat',
-    HandlerDownDefense = 'combat',
     PursuitSprint      = 'combat',
     PropDragging       = 'combat',
-    DangerWarn         = 'combat',
     -- PRE-WIRED, DELIBERATELY ORPHANED (same tolerated shape
     -- ScentTrailHunt's own entry below 'training' demonstrates in the
     -- opposite direction -- see tests/runtimefeaturetiers_spec.lua's own
@@ -1472,13 +1468,11 @@ local FEATURE_DOMAINS = {
     -- ListFeatureKeys' own doc comment), and saves the operator who
     -- eventually adds the flag one less piece of governance-stack wiring to
     -- remember.
-    ApprehensionAnnouncement = 'combat',
 
     -- 'movement' -- core K9 control and mobility: the basic actions of
     -- having and directing a dog (leash, recall, barking, agility,
     -- getting in/out of vehicles and through doors).
     LeashMechanics     = 'movement',
-    Recall             = 'movement',
     BasicBarkSounds    = 'movement',
     AdvancedBarkRadial = 'movement',
     AgilityBasicJump   = 'movement',
@@ -1488,14 +1482,9 @@ local FEATURE_DOMAINS = {
 
     -- 'wellbeing' -- the K9's own physical/mental state and the systems
     -- that surface or respond to it.
-    DistractionSystem  = 'wellbeing',
     FatigueSystem      = 'wellbeing',
-    FearStressSystem   = 'wellbeing',
-    MoodSystem         = 'wellbeing',
-    InjuryLimping      = 'wellbeing',
     HealthStaminaHUD   = 'wellbeing',
     K9DownDispatch     = 'wellbeing',
-    HungerThirstSystem = 'wellbeing',
 
     -- 'progression' -- XP, certification, and the handler/K9 partnership
     -- record that progression is tracked against.
@@ -1517,10 +1506,7 @@ local FEATURE_DOMAINS = {
     -- hide-and-seek hunt, fetch, and the training-mode switch that wraps
     -- all of them) -- distinct from 'scent'/'search' above, which are the
     -- real operational abilities these mechanics practice for.
-    TrainingMode       = 'training',
     FetchMechanic      = 'training',
-    ScentLineup        = 'training',
-    ScentTrailHunt     = 'training',
 
     -- 'admin' -- administrative/infrastructure switches with no
     -- per-citizenid ability behind them at all (the tablet itself, high

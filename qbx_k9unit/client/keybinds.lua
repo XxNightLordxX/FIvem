@@ -353,23 +353,6 @@ if Config.Features.BasicBarkSounds then
     RegisterKeyMapping('k9bark', locale('radial.bark_keybind_label'), 'keyboard', 'C')
 end
 
--- ======================================================================
--- RECALL -- the universal "call your K9 off NOW" panic button, generalizing
--- the owner's "release a hold" example to its most urgent case: it ends
--- WHATEVER engagement (bite/takedown/drag) the local player's partnered K9
--- currently has active, from either side of the partnership. NO NEW
--- COMMAND OR FUNCTION HERE -- client/recall.lua already registers
--- `k9recall` -> RequestRecall(), unconditionally available whenever
--- Config.Features.Recall is on (its own header: "TERMINATION MUST NEVER BE
--- GATED"). This file adds ONLY the missing RegisterKeyMapping half, gated
--- on the SAME Config.Features.Recall flag client/recall.lua's own
--- top-of-file gate already uses, so this file's registration and that
--- file's command registration can never disagree about whether `k9recall`
--- exists to bind a key to.
--- ======================================================================
-if Config.Features.Recall then
-    RegisterKeyMapping('k9recall', locale('recall.keybind_label'), 'keyboard', 'U')
-end
 
 -- ======================================================================
 -- SCENT VISION -- owner-directed pass: "make scent tracking... a keybind

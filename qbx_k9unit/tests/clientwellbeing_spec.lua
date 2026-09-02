@@ -507,12 +507,6 @@ end
 -- Sanity
 -- ----------------------------------------------------------------------
 
-t.test('client/wellbeing.lua exposes RequestK9CalmDown and registers the wellbeingUpdate handler', function()
-    local f = newWellbeingFixture()
-    t.isNotNil(f.env.RequestK9CalmDown)
-    f.triggerWellbeingUpdate(65535, { fatigue = 100 }) -- must not throw "handler not registered"
-end)
-
 -- ----------------------------------------------------------------------
 -- SECTION A -- registration vs. enforcement, with every flag off.
 --
@@ -527,29 +521,6 @@ end)
 -- check ("check at the point it acts, never merely at registration").
 -- ----------------------------------------------------------------------
 
-t.test('every wellbeing flag off: the InjuryLimping thread and all commands/ox_target options still REGISTER, but do/gate nothing -- only the on-demand snapshot thread stays load-time-gated', function()
-    local f = newWellbeingFixture() -- all five flags false by default
-    t.equals(#f.threads, 2, 'the InjuryLimping thread AND the native sprint stamina assist thread now ALWAYS register (idling, per their own LiveFeatureFlags gates) -- only the on-demand snapshot thread (a disclosed, bounded staleness optimization, not a correctness path) stays load-time-gated and is absent here')
-    -- TWO, not one, and the second is NOT this file's. This fixture also
-    -- loads client/appearance.lua (see the loadInto list above), which now
-    -- registers its own global-player option for the K9 Identity feature --
-    -- the "who is this dog" lookup. client/wellbeing.lua itself still makes
-    -- exactly ONE AddGlobalPlayer call -- for the merged "Care for K9"
-    -- option (MOOD MERGE, this pass -- was two separate defs, Pet K9/Feed
-    -- K9, in that same one call; still one call either way, unchanged by
-    -- the merge).
-    -- Counted here rather than filtered because the count is what the
-    -- assertion below is really about: registration always happens, and the
-    -- refusal lives at the point of use.
-    t.equals(f.addGlobalPlayerCallCount(), 2, 'Pet K9/Feed K9 (wellbeing) plus Identify K9 (appearance) both ALWAYS register -- canInteract itself refuses while LiveFeatureFlags.MoodSystem is false, proven in section F')
-    -- k9meatbait/k9whistle/k9calmdown are ALL always registered now --
-    -- each one's OWN body checks LiveFeatureFlags.<Name> first (proven in
-    -- sections E/G), never gated by skipping RegisterCommand entirely.
-    t.isNotNil(f.command('k9meatbait'))
-    t.isNotNil(f.command('k9whistle'))
-    t.isNotNil(f.command('k9calmdown'))
-end)
-
 -- ----------------------------------------------------------------------
 -- SECTION B -- THE INJURYLIMPING OWN-DEATH GUARD, THIS TASK'S TOP
 -- PRIORITY. Thread order at file-load time with InjuryLimping=true (and
@@ -561,100 +532,6 @@ end)
 -- here (FatigueSystem is false in this fixture), which is exactly what
 -- SECTION I below exercises directly.
 -- ----------------------------------------------------------------------
-
-t.test('InjuryLimping thread: below-threshold injury blocks sprint+jump every frame (Wait(0)) while alive and K9-modeled', function()
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    t.equals(#f.threads, 3, 'sanity: the on-demand snapshot thread (InjuryLimping ORs into its own gate), the InjuryLimping thread, and the always-registering native stamina assist thread')
-
-    local sprintThreshold = f.env.Config.Wellbeing.Injury.sprintBlockThreshold
-    local jumpThreshold = f.env.Config.Wellbeing.Injury.jumpBlockThreshold
-    local belowBoth = math.min(sprintThreshold, jumpThreshold) - 1
-    f.triggerWellbeingUpdate(65535, { injury = belowBoth })
-
-    f.setIsOwnModelK9(true)
-    f.setPedDead(false)
-    f.step() -- one pass of both threads
-
-    t.equals(f.waitLog[2], 0, 'must run at full per-frame rate while actively blocking input, per DisableControlAction\'s own contract')
-    local sawSprint, sawJump = false, false
-    for _, call in ipairs(f.disableControlActionCalls) do
-        if call.control == 21 then sawSprint = true end
-        if call.control == 22 then sawJump = true end
-    end
-    t.isTrue(sawSprint, 'INPUT_SPRINT (21) must be disabled when injury is below sprintBlockThreshold')
-    t.isTrue(sawJump, 'INPUT_JUMP (22) must be disabled when injury is below jumpBlockThreshold')
-end)
-
-t.test('REGRESSION LOCK-IN: the InjuryLimping thread idles (Wait(1000), zero DisableControlAction calls) the instant the K9\'s own ped is dead -- it must NOT keep spinning at Wait(0) while dead', function()
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    local belowBoth = math.min(f.env.Config.Wellbeing.Injury.sprintBlockThreshold, f.env.Config.Wellbeing.Injury.jumpBlockThreshold) - 1
-    f.triggerWellbeingUpdate(65535, { injury = belowBoth })
-    f.setIsOwnModelK9(true)
-
-    f.setPedDead(true)
-    f.step()
-
-    t.equals(#f.disableControlActionCalls, 0, 'THE REGRESSION: a dead ped must never have DisableControlAction called against it -- it can neither sprint nor jump anyway')
-    t.equals(f.waitLog[2], 1000, 'THE REGRESSION: must idle at the same 1000ms as the "not currently K9" branch, not spin at Wait(0) while dead')
-end)
-
-t.test('the InjuryLimping thread resumes real per-frame blocking the instant the ped is alive again, no separate respawn hook needed', function()
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    local belowBoth = math.min(f.env.Config.Wellbeing.Injury.sprintBlockThreshold, f.env.Config.Wellbeing.Injury.jumpBlockThreshold) - 1
-    f.triggerWellbeingUpdate(65535, { injury = belowBoth })
-    f.setIsOwnModelK9(true)
-
-    f.setPedDead(true)
-    f.step()
-    t.equals(#f.disableControlActionCalls, 0)
-
-    f.setPedDead(false) -- respawned
-    f.step()
-    t.isTrue(#f.disableControlActionCalls > 0, 'must resume blocking on the very next pass once alive again -- IsEntityDead() is polled fresh every iteration')
-    t.equals(f.waitLog[2], 0)
-end)
-
-t.test('IDLE-SPIN FIX (performance audit, this pass): InjuryLimping thread: healthy injury (above both thresholds) never blocks any control, and now idles at 1000ms -- NOT Wait(0) -- the same coarse cadence as being dead/not-a-K9', function()
-    -- CORRECTED, this pass -- this test used to assert `f.waitLog[2] == 0`
-    -- ("still runs at Wait(0) -- 'alive and K9-modeled' is the branch
-    -- condition, independent of whether either threshold currently
-    -- applies") and locked that in as the EXPECTED behavior. It was not: a
-    -- performance audit found this was a real, live idle-spin bug, and the
-    -- one that mattered most of the three found in this resource this
-    -- session, because it hit the DEFAULT case rather than an edge case --
-    -- with the shipped thresholds (sprintBlockThreshold=30,
-    -- jumpBlockThreshold=20 out of Injury.max=100), a HEALTHY K9 (injury
-    -- anywhere in (30, 100], the overwhelmingly common state) spun this
-    -- thread at full per-frame rate forever -- roughly 180 native calls/sec
-    -- sustained (PlayerPedId, IsOwnModelK9 -> GetEntityModel, IsEntityDead),
-    -- for every K9 player, for the entire time they played, for zero
-    -- gameplay effect, since DisableControlAction was never even being
-    -- called that tick. FIXED in client/wellbeing.lua: Wait(0) is now taken
-    -- ONLY when at least one threshold is ACTUALLY crossed this tick (i.e.
-    -- there is a real DisableControlAction call to re-assert); a healthy K9
-    -- idles at the same 1000ms as the dead/not-a-K9 branches, mirroring the
-    -- OWN-DEATH GUARD's own already-established cadence for the identical
-    -- "nothing to do this tick" reasoning. DO NOT revert this back to
-    -- Wait(0) believing the spin was deliberate -- it was the bug this
-    -- comment exists to prevent from quietly reappearing.
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    -- lastStats.injury starts at its safe default (100, per this file's own
-    -- header) -- never pushed below any threshold in this test.
-    f.setIsOwnModelK9(true)
-    f.setPedDead(false)
-    f.step()
-    t.equals(#f.disableControlActionCalls, 0, 'a healthy K9 must never have any control disabled')
-    t.equals(f.waitLog[2], 1000, 'THE FIX: a healthy K9 (injury at/above BOTH thresholds, nothing to enforce this tick) must idle coarsely, not spin at full frame rate for zero effect')
-end)
-
-t.test('InjuryLimping thread: not currently K9-modeled at all also idles at 1000ms, the same branch as own-death', function()
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    f.setIsOwnModelK9(false)
-    f.setPedDead(false)
-    f.step()
-    t.equals(#f.disableControlActionCalls, 0)
-    t.equals(f.waitLog[2], 1000)
-end)
 
 -- ----------------------------------------------------------------------
 -- SECTION C -- EVERY WELLBEING STAT HAS A DEFINED PATH WHEN ITS OWNING
@@ -681,38 +558,15 @@ t.test('every wellbeing flag off: extreme stat values touch NOTHING -- K9MoveRat
         fatigue = 0, mood = 0, injury = 0, fearStress = 100,
         distractedUntil = 999999, hesitatingUntil = 999999,
     })
+    -- NARROWED 2026-09-02: MoodSystem and InjuryLimping were removed, so this
+    -- file no longer owns a `mood` or `injury` modifier slot -- nothing
+    -- writes them, and asserting they get reset would be asserting against
+    -- code that no longer exists. `fatigue` is the one slot still owned
+    -- here, and the unbounded-trap guarantee this test exists for applies
+    -- to it exactly as before.
     t.equals(f.k9MoveRateModifiers.fatigue, 1.0, 'a disabled stat\'s modifier slot must be explicitly RESET to neutral, never left at whatever the sentinel/previous value was')
-    t.equals(f.k9MoveRateModifiers.injury, 1.0)
-    t.equals(f.k9MoveRateModifiers.mood, 1.0)
     t.equals(f.recomputeCallCount(), 1, 'RecomputeK9MoveRate is called unconditionally on every applied snapshot, regardless of which (if any) flags are on')
     t.equals(#f.notifyCalls, 0, 'no distraction/hesitation notify may fire while both owning flags are off, however extreme the pushed values are')
-end)
-
-t.test('FatigueSystem alone on: low fatigue updates ONLY K9MoveRateModifiers.fatigue; injury/mood are reset to neutral (their owning flags are off)', function()
-    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
-    local belowThreshold = f.env.Config.Wellbeing.Fatigue.speedPenaltyThreshold - 1
-    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, injury = 0, mood = 0 })
-    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.injury, 1.0, 'InjuryLimping is off -- injury slot must be reset to neutral even though injury = 0 would trip its own penalty if that flag were on')
-    t.equals(f.k9MoveRateModifiers.mood, 1.0)
-end)
-
-t.test('InjuryLimping alone on (move-rate path, distinct from section B\'s input-block thread): low injury updates ONLY K9MoveRateModifiers.injury; fatigue/mood are reset to neutral', function()
-    local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    local injuryThreshold = math.max(f.env.Config.Wellbeing.Injury.sprintBlockThreshold, f.env.Config.Wellbeing.Injury.jumpBlockThreshold)
-    f.triggerWellbeingUpdate(65535, { injury = injuryThreshold - 1, fatigue = 0, mood = 0 })
-    t.equals(f.k9MoveRateModifiers.injury, f.env.Config.Wellbeing.Injury.speedPenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.fatigue, 1.0)
-    t.equals(f.k9MoveRateModifiers.mood, 1.0)
-end)
-
-t.test('MoodSystem alone on: low mood updates ONLY K9MoveRateModifiers.mood; fatigue/injury are reset to neutral', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    local belowThreshold = f.env.Config.Wellbeing.Mood.performancePenaltyThreshold - 1
-    f.triggerWellbeingUpdate(65535, { mood = belowThreshold, fatigue = 0, injury = 0 })
-    t.equals(f.k9MoveRateModifiers.mood, f.env.Config.Wellbeing.Mood.performancePenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.fatigue, 1.0)
-    t.equals(f.k9MoveRateModifiers.injury, 1.0)
 end)
 
 t.test('RUNTIME TOGGLE OFF closes the unbounded trap: a K9 already carrying a real fatigue penalty has it REMOVED (not merely stopped from reapplying) the moment a live featureFlags push reports the flag off', function()
@@ -758,57 +612,6 @@ t.test('featureFlags ingest is defensive: a malformed/missing field never errors
 
     f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, featureFlags = { FatigueSystem = 'not a boolean', SomeUnrelatedFutureFlag = true } })
     t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier, 'a non-boolean value for a real flag name must be ignored, not coerced')
-end)
-
-t.test('DistractionSystem OFF: a distractedUntil far in the future never notifies, and toggling it back and forth still never notifies -- a fully defined, silent no-op path', function()
-    local f = newWellbeingFixture() -- DistractionSystem false
-    f.triggerWellbeingUpdate(65535, { distractedUntil = 999999 })
-    t.equals(#f.notifyCalls, 0)
-    f.advance(1000000)
-    f.triggerWellbeingUpdate(65535, { distractedUntil = 0 })
-    t.equals(#f.notifyCalls, 0, 'still zero -- the transition-tracking logic itself must never run at all while the flag is off')
-end)
-
-t.test('DistractionSystem ON: notifies on the false->true transition and again on true->false, exactly once each', function()
-    local f = newWellbeingFixture({ features = { DistractionSystem = true } })
-    f.triggerWellbeingUpdate(65535, { distractedUntil = 999999 }) -- now < distractedUntil -> distracted
-    t.equals(#f.notifyCalls, 1)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.distracted'))
-    t.equals(f.notifyCalls[1].type, 'error')
-
-    f.triggerWellbeingUpdate(65535, { distractedUntil = 999999 }) -- still distracted -- must not re-notify
-    t.equals(#f.notifyCalls, 1)
-
-    f.advance(1000000)
-    f.triggerWellbeingUpdate(65535, { distractedUntil = 999999 }) -- now stale -- no longer distracted
-    t.equals(#f.notifyCalls, 2)
-    t.equals(f.notifyCalls[2].description, locale('wellbeing.refocused'))
-    t.equals(f.notifyCalls[2].type, 'info')
-end)
-
-t.test('FearStressSystem OFF: an extreme hesitatingUntil never notifies -- a fully defined, silent no-op path', function()
-    local f = newWellbeingFixture() -- FearStressSystem false
-    f.triggerWellbeingUpdate(65535, { hesitatingUntil = 999999 })
-    t.equals(#f.notifyCalls, 0)
-end)
-
-t.test('FearStressSystem ON: notifies hesitating then settled on the matching transitions', function()
-    local f = newWellbeingFixture({ features = { FearStressSystem = true } })
-    f.triggerWellbeingUpdate(65535, { hesitatingUntil = 999999 })
-    t.equals(#f.notifyCalls, 1)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.hesitating'))
-
-    f.advance(1000000)
-    f.triggerWellbeingUpdate(65535, { hesitatingUntil = 999999 })
-    t.equals(#f.notifyCalls, 2)
-    t.equals(f.notifyCalls[2].description, locale('wellbeing.settled'))
-end)
-
-t.test('a non-table stats payload is a clean no-op, never an error, regardless of which flags are on', function()
-    local f = newWellbeingFixture({ features = { FatigueSystem = true, MoodSystem = true, InjuryLimping = true, DistractionSystem = true, FearStressSystem = true } })
-    f.triggerWellbeingUpdate(65535, 'not a table')
-    t.equals(f.recomputeCallCount(), 0, 'ApplyWellbeingSnapshot must return before touching anything when stats is not a table')
-    t.equals(#f.notifyCalls, 0)
 end)
 
 -- ----------------------------------------------------------------------
@@ -862,62 +665,6 @@ end)
 -- own "HIDDEN ALIASES" header note.
 -- ----------------------------------------------------------------------
 
-t.test('MoodSystem on: the merged "Care for K9" option is registered, gated on IsEntityModelK9, and resolves to a real target server id before ever awaiting the server', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    t.isNotNil(f.careOption())
-
-    t.isFalse(f.careOption().canInteract(500), 'canInteract must consult IsEntityModelK9, not just the flag')
-    f.setEntityIsK9Model(500, true)
-    t.isTrue(f.careOption().canInteract(500))
-
-    -- ResolvePlayerServerIdFromPed returning nil (e.g. a non-player ped)
-    -- must abort before ever touching the server.
-    f.careOption().onSelect({ entity = 501 })
-    t.equals(f.callbackCallCount(), 0)
-end)
-
-t.test('RESOLUTION: Feed succeeds -> exactly ONE round trip (feedK9 only), notifies wellbeing.feed_success -- the strictly better outcome is taken without ever trying Pet', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    f.setEntityIsK9Model(500, true)
-    f.setServerIdForPed(500, 42)
-    f.queueCallbackResponse({ ok = true })
-    f.careOption().onSelect({ entity = 500 })
-
-    t.equals(f.callbackCallCount(), 1, 'must never attempt Pet once Feed already succeeded')
-    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:feedK9')
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.feed_success'))
-    t.equals(f.notifyCalls[1].type, 'success')
-end)
-
-t.test('RESOLUTION, THE HARD PART: Feed fails with reason "no_item" -> falls back to Pet automatically, and Pet succeeding is reported as a pet, not a refusal -- THE control that proves this never lands on a bare refusal when a fallback was available', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    f.setEntityIsK9Model(500, true)
-    f.setServerIdForPed(500, 42)
-    f.queueCallbackResponse({ ok = false, reason = 'no_item' }) -- feedK9's answer
-    f.queueCallbackResponse({ ok = true }) -- petK9's answer
-    f.careOption().onSelect({ entity = 500 })
-
-    t.equals(f.callbackCallCount(), 2, 'no_item is the ONE reason that triggers the Pet fallback')
-    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:feedK9')
-    t.equals(f.callbackCallAt(2), 'qbx_k9unit:server:petK9')
-    t.equals(#f.notifyCalls, 1, 'exactly one final notification -- the intermediate feedK9 failure is never separately surfaced')
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.pet_success'), 'the player sees they PET the K9, never a leftover "you do not have the right item" message for an action they never asked for by name')
-    t.equals(f.notifyCalls[1].type, 'success')
-end)
-
-t.test('RESOLUTION: Feed fails with reason "no_item" and the Pet fallback ALSO fails -- the Pet failure reason is what gets reported, not Feed\'s', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    f.setEntityIsK9Model(500, true)
-    f.setServerIdForPed(500, 42)
-    f.queueCallbackResponse({ ok = false, reason = 'no_item' })
-    f.queueCallbackResponse({ ok = false, reason = 'on_cooldown' })
-    f.careOption().onSelect({ entity = 500 })
-
-    t.equals(f.callbackCallCount(), 2)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.reason_on_cooldown'))
-    t.equals(f.notifyCalls[1].type, 'error')
-end)
-
 t.test('RESOLUTION: every Feed failure reason OTHER than "no_item" is reported directly -- NEVER a second, guaranteed-redundant round trip against Pet for a reason Pet would fail identically for', function()
     local REASON_LABELS = {
         feature_disabled = locale('wellbeing.reason_feature_disabled'),
@@ -939,27 +686,6 @@ t.test('RESOLUTION: every Feed failure reason OTHER than "no_item" is reported d
     end
 end)
 
-t.test('RESOLUTION: an unrecognized Feed failure reason falls back to reason_generic and is NOT treated as "no_item"', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    f.setEntityIsK9Model(500, true)
-    f.setServerIdForPed(500, 42)
-    f.queueCallbackResponse({ ok = false, reason = 'a_totally_unrecognized_future_reason' })
-    f.careOption().onSelect({ entity = 500 })
-    t.equals(f.callbackCallCount(), 1)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.reason_generic'))
-end)
-
-t.test('FAIL-CLOSED GUARD: lib.callback.await throwing on feedK9 is caught, does NOT trigger a Pet fallback (no confirmed "no_item" answer to act on), and degrades to a silent no-op -- never an uncaught error', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    f.setEntityIsK9Model(500, true)
-    f.setServerIdForPed(500, 42)
-    f.queueCallbackThrow()
-    local ok = pcall(function() f.careOption().onSelect({ entity = 500 }) end)
-    t.isTrue(ok, 'a thrown lib.callback.await must never escape the onSelect handler uncaught')
-    t.equals(f.callbackCallCount(), 1, 'a throw is not a confirmed no_item answer -- must not guess a Pet fallback would have fared differently')
-    t.equals(#f.notifyCalls, 0, 'DISCLOSED, DELIBERATE ASYMMETRY vs. client/search.lua: a failed care round trip degrades SILENTLY here (NotifyResult\'s own `if not result then return end`), unlike client/search.lua\'s catch-all error notify for the same class of failure -- both are defined, non-crashing paths, just different UX choices by design')
-end)
-
 -- ----------------------------------------------------------------------
 -- SECTION E2 -- the surviving hidden-alias globals, RequestPetK9()/
 -- RequestFeedK9(): the exact former "Pet K9"/"Feed K9" onSelect bodies,
@@ -969,28 +695,6 @@ end)
 -- the identical class of radial-item merge).
 -- ----------------------------------------------------------------------
 
-t.test('RequestPetK9()/RequestFeedK9() survive as callable resource-globals with their exact former single-action behavior, independent of the merged resolution', function()
-    local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    t.isNotNil(f.env.RequestPetK9, 'RequestPetK9 must survive the Mood merge as a resource-global')
-    t.isNotNil(f.env.RequestFeedK9, 'RequestFeedK9 must survive the Mood merge as a resource-global')
-
-    f.queueCallbackResponse({ ok = true })
-    f.env.RequestPetK9(42)
-    t.equals(f.callbackCallCount(), 1)
-    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:petK9')
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.pet_success'))
-
-    -- RequestFeedK9 must NEVER fall back to Pet on its own -- that
-    -- resolution behavior belongs ONLY to RequestCareForK9(); a caller who
-    -- deliberately reached for the single-action alias wants exactly that
-    -- one action attempted, nothing else.
-    f.queueCallbackResponse({ ok = false, reason = 'no_item' })
-    f.env.RequestFeedK9(42)
-    t.equals(f.callbackCallCount(), 2, 'RequestFeedK9 alone must make exactly one more call, never a Pet fallback')
-    t.equals(f.callbackCallAt(2), 'qbx_k9unit:server:feedK9')
-    t.equals(f.notifyCalls[2].description, locale('wellbeing.reason_no_item'))
-end)
-
 -- ----------------------------------------------------------------------
 -- SECTION F -- RequestK9CalmDown / k9calmdown (FearStressSystem). A plain
 -- resource-global, always registered as a command regardless of the flag
@@ -998,107 +702,10 @@ end)
 -- time.
 -- ----------------------------------------------------------------------
 
-t.test('RequestK9CalmDown: FearStressSystem off is a silent no-op -- never even consults CanShowK9UI', function()
-    local f = newWellbeingFixture({ canShowK9UI = false }) -- FearStressSystem false
-    f.env.RequestK9CalmDown()
-    t.equals(f.canShowK9UICallCount(), 0)
-    t.equals(f.denyCallCount(), 0)
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('RequestK9CalmDown: FearStressSystem on, access denied -> DenyK9UIAccess fires with the common.no_k9_role_or_access reason, no server event', function()
-    local f = newWellbeingFixture({ features = { FearStressSystem = true }, canShowK9UI = false })
-    f.env.RequestK9CalmDown()
-    t.equals(f.denyCallCount(), 1)
-    t.equals(f.lastDenyReason(), 'common.no_k9_role_or_access', 'ease-of-use audit pass: a CanShowK9UI()-gated call site cannot narrow further than this reason')
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('RequestK9CalmDown: FearStressSystem on, access granted -> triggers calmDownK9 exactly once, and the registered /k9calmdown command IS this same function', function()
-    local f = newWellbeingFixture({ features = { FearStressSystem = true } })
-    f.env.RequestK9CalmDown()
-    t.equals(#f.triggerServerEventCalls, 1)
-    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:calmDownK9')
-    t.equals(#f.triggerServerEventCalls[1].args, 0)
-
-    t.equals(f.command('k9calmdown'), f.env.RequestK9CalmDown, 'the command handler must be the exact same function, not a re-derived copy')
-end)
-
 -- ----------------------------------------------------------------------
 -- SECTION G -- meat-bait / whistle (DistractionSystem). Deliberately NEVER
 -- gated on CanShowK9UI, per this file's own header -- open to any player.
 -- ----------------------------------------------------------------------
-
-t.test('DistractionSystem off: /k9meatbait and /k9whistle ARE registered (RUNTIME TOGGLE FIX), but calling either is a silent, network-free no-op', function()
-    -- UPDATED (RUNTIME TOGGLE FIX pass): this test used to assert neither
-    -- command was registered at all while the flag was off -- exactly the
-    -- shape of bug this pass fixed (a client who booted disabled could
-    -- never even attempt either command after a later runtime toggle-ON,
-    -- for the rest of that session). FIXED: both commands always register;
-    -- UseDistractionItem itself now checks LiveFeatureFlags.DistractionSystem
-    -- FIRST and returns before ever awaiting the server -- proven here by
-    -- asserting zero callback invocations, not just "no notify".
-    local f = newWellbeingFixture() -- DistractionSystem false
-    t.isNotNil(f.command('k9meatbait'))
-    t.isNotNil(f.command('k9whistle'))
-
-    f.command('k9meatbait')()
-    t.equals(f.callbackCallCount(), 0, 'must return locally before ever awaiting applyK9Distraction -- the flag is already known to be off')
-    t.equals(#f.notifyCalls, 0)
-
-    f.command('k9whistle')()
-    t.equals(f.callbackCallCount(), 0)
-    t.equals(#f.notifyCalls, 0)
-end)
-
-t.test('meat-bait/whistle: deliberately UNGATED -- CanShowK9UI is never even consulted, success case notifies distraction_used', function()
-    local f = newWellbeingFixture({ features = { DistractionSystem = true }, canShowK9UI = false })
-    f.queueCallbackResponse({ ok = true })
-    f.command('k9meatbait')()
-    t.equals(f.canShowK9UICallCount(), 0, 'this feature is deliberately open to any player, including one CanShowK9UI would deny')
-    t.equals(#f.notifyCalls, 1)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.distraction_used'))
-    t.equals(f.notifyCalls[1].type, 'success')
-end)
-
-t.test('meat-bait vs. whistle: each item\'s OWN no_item fallback text is distinct, never a shared/hardcoded copy', function()
-    local fBait = newWellbeingFixture({ features = { DistractionSystem = true } })
-    fBait.queueCallbackResponse({ ok = false, reason = 'no_item' })
-    fBait.command('k9meatbait')()
-    t.equals(fBait.notifyCalls[1].description, locale('wellbeing.reason_no_meat_bait'))
-
-    local fWhistle = newWellbeingFixture({ features = { DistractionSystem = true } })
-    fWhistle.queueCallbackResponse({ ok = false, reason = 'no_item' })
-    fWhistle.command('k9whistle')()
-    t.equals(fWhistle.notifyCalls[1].description, locale('wellbeing.reason_no_whistle'))
-end)
-
-t.test('distraction item use: every documented rejection reason gets a label, and an unrecognized reason falls back to reason_use_generic (never silent)', function()
-    local REASON_LABELS = {
-        feature_disabled = locale('wellbeing.reason_feature_disabled'),
-        invalid_item = locale('wellbeing.reason_invalid_item'),
-        invalid_target = locale('wellbeing.reason_use_generic'), -- deliberately shares this file's own generic key, per its own comment
-    }
-    for reason, expectedLabel in pairs(REASON_LABELS) do
-        local f = newWellbeingFixture({ features = { DistractionSystem = true } })
-        f.queueCallbackResponse({ ok = false, reason = reason })
-        f.command('k9whistle')()
-        t.equals(f.notifyCalls[1].description, expectedLabel, ('reason %q'):format(reason))
-    end
-
-    local fUnknown = newWellbeingFixture({ features = { DistractionSystem = true } })
-    fUnknown.queueCallbackResponse({ ok = false, reason = 'a_totally_unrecognized_future_reason' })
-    fUnknown.command('k9whistle')()
-    t.equals(fUnknown.notifyCalls[1].description, locale('wellbeing.reason_use_generic'))
-end)
-
-t.test('FAIL-CLOSED GUARD: lib.callback.await throwing on a distraction item use is caught and degrades to a silent no-op, never an uncaught error', function()
-    local f = newWellbeingFixture({ features = { DistractionSystem = true } })
-    f.queueCallbackThrow()
-    local ok = pcall(function() f.command('k9meatbait')() end)
-    t.isTrue(ok, 'a thrown lib.callback.await must never escape the command handler uncaught')
-    t.equals(#f.notifyCalls, 0)
-end)
 
 -- ----------------------------------------------------------------------
 -- SECTION H -- the on-demand snapshot thread (bonus: cheap given the
@@ -1153,15 +760,15 @@ end)
 t.test('NATIVE STAMINA ASSIST: percent = 0 (shipped config.lua default) never calls RestorePlayerStamina, even with FatigueSystem on and CanShowK9UI true -- no regression by default', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     t.equals(f.env.Config.Wellbeing.Fatigue.nativeStaminaRestorePercent, 0, 'sanity: shipped config.lua default is 0')
-    f.stepOne(3)
-    f.stepOne(3)
+    f.stepOne(2)
+    f.stepOne(2)
     t.equals(#f.restorePlayerStaminaCalls, 0)
 end)
 
 t.test('NATIVE STAMINA ASSIST: percent = 1.0 (the tablet\'s "permanent" setting) calls RestorePlayerStamina(PlayerId(), 1.0) on every single check, not merely once', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
-    for _ = 1, 5 do f.stepOne(3) end
+    for _ = 1, 5 do f.stepOne(2) end
     t.equals(#f.restorePlayerStaminaCalls, 5)
     for i, call in ipairs(f.restorePlayerStaminaCalls) do
         t.equals(call.player, f.myPlayerId, ('call %d must target PlayerId()'):format(i))
@@ -1172,7 +779,7 @@ end)
 t.test('NATIVE STAMINA ASSIST: a mid-range percentage (0.4, a live tablet edit) is passed through exactly, not rounded or reclamped a second time client-side', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0.4 } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(#f.restorePlayerStaminaCalls, 1)
     t.equals(f.restorePlayerStaminaCalls[1].percentage, 0.4)
 end)
@@ -1187,29 +794,29 @@ end)
 t.test('NATIVE STAMINA ASSIST: CanShowK9UI() false (not a currently-accessible K9) blocks the restore call even with FatigueSystem on and a nonzero percentage', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true }, canShowK9UI = false })
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(#f.restorePlayerStaminaCalls, 0)
 end)
 
 t.test('NATIVE STAMINA ASSIST -- LIVE CHANGE TAKES EFFECT: a tablet edit from permanent (1.0) back down to off (0) stops the very next check from restoring anything, mid-session, no restart', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(f.restorePlayerStaminaCalls[1].percentage, 1.0)
 
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0 } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(#f.restorePlayerStaminaCalls, 1, 'turning the assist back down to 0 must stop the very next check from calling RestorePlayerStamina at all')
 end)
 
 t.test('NATIVE STAMINA ASSIST: a malformed/non-number wellbeingTunables value is ignored -- the last-known-good percentage keeps being used, never a crash or a coerced garbage value', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0.6 } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(f.restorePlayerStaminaCalls[1].percentage, 0.6)
 
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 'not-a-number' } })
-    f.stepOne(3)
+    f.stepOne(2)
     t.equals(#f.restorePlayerStaminaCalls, 2)
     t.equals(f.restorePlayerStaminaCalls[2].percentage, 0.6, 'a malformed incoming value must leave the last-known-good percentage in effect, not silently become 0/nil/garbage')
 end)
@@ -1219,178 +826,5 @@ end)
 -- Client-side half of server/wellbeing.lua's own new section -- see that
 -- file's header for the full design writeup this mirrors.
 -- ========================================================================
-
-t.test('HungerThirstSystem off: incoming hunger/thirst stats never touch K9MoveRateModifiers, and no low/satisfied notify ever fires -- a fully defined, silent no-op path, same as every other flag-off case above', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
-    f.triggerWellbeingUpdate(65535, { hunger = 0, thirst = 0, featureFlags = { HungerThirstSystem = false } })
-    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'reset to neutral, never left at whatever it last was, even though the flag is off')
-    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
-    t.equals(#f.notifyCalls, 0)
-end)
-
-t.test('ApplyMoveRateModifiers: hunger/thirst below their own configured thresholds each apply their OWN configured multiplier; at/above, both reset to 1.0 -- exactly the same shape as Fatigue/Mood/Injury above', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
-
-    f.triggerWellbeingUpdate(65535, { hunger = 10, thirst = 10, featureFlags = { HungerThirstSystem = true } })
-    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'below lowThreshold(30) -- speedPenaltyMultiplier applied')
-    t.equals(f.k9MoveRateModifiers.thirst, 0.95)
-
-    f.triggerWellbeingUpdate(65535, { hunger = 99, thirst = 99, featureFlags = { HungerThirstSystem = true } })
-    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'at/above lowThreshold -- neutral, no penalty')
-    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
-end)
-
-t.test('LIVE FEATURE FLAG: HungerThirstSystem switched OFF mid-session (via a pushed featureFlags update, not this client\'s own static boot copy) immediately clears an in-flight hunger/thirst move-rate penalty -- the same "flag off must remove the effect, not merely stop reapplying it" rule this file already proves for every sibling stat', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
-    f.triggerWellbeingUpdate(65535, { hunger = 5, thirst = 5, featureFlags = { HungerThirstSystem = true } })
-    t.equals(f.k9MoveRateModifiers.hunger, 0.95)
-
-    f.triggerWellbeingUpdate(65535, { hunger = 5, thirst = 5, featureFlags = { HungerThirstSystem = false } })
-    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'a live server-side toggle-OFF must remove the in-flight penalty on the very next push, even though the raw stat value (5) never changed')
-    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
-end)
-
-t.test('LIVE WELLBEING TUNABLE: a pushed wellbeingTunables edit to hungerSpeedPenaltyThreshold/hungerSpeedPenaltyMultiplier takes effect on the very next push, including retroactively lifting a penalty already in effect', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
-    f.triggerWellbeingUpdate(65535, { hunger = 25, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'below the shipped default threshold(30)')
-
-    -- Operator raises the multiplier (loosens the penalty) AND lowers the
-    -- threshold (so 25 no longer qualifies) in one live edit.
-    f.triggerWellbeingUpdate(65535, { hunger = 25, thirst = 100, featureFlags = { HungerThirstSystem = true },
-        wellbeingTunables = { hungerSpeedPenaltyThreshold = 20, hungerSpeedPenaltyMultiplier = 0.99 } })
-    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'threshold lowered below the current stat -- the ALREADY-IN-EFFECT penalty is lifted immediately, not merely stopped from reapplying at the old number')
-end)
-
-t.test('Hunger/thirst threshold-crossing notifications fire ONCE per transition (never every tick), using the SAME threshold ApplyMoveRateModifiers just judged the move-rate penalty against', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
-
-    f.triggerWellbeingUpdate(65535, { hunger = 100, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.equals(#f.notifyCalls, 0, 'starts satisfied -- no notify on the very first push')
-
-    f.triggerWellbeingUpdate(65535, { hunger = 10, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.equals(#f.notifyCalls, 1)
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.hunger_low'))
-
-    -- Staying low must NOT notify again.
-    f.triggerWellbeingUpdate(65535, { hunger = 9, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.equals(#f.notifyCalls, 1)
-
-    f.triggerWellbeingUpdate(65535, { hunger = 90, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.equals(#f.notifyCalls, 2)
-    t.equals(f.notifyCalls[2].description, locale('wellbeing.hunger_satisfied'))
-
-    -- Thirst is completely independent of hunger's own wasHungry state.
-    f.triggerWellbeingUpdate(65535, { hunger = 90, thirst = 5, featureFlags = { HungerThirstSystem = true } })
-    t.equals(#f.notifyCalls, 3)
-    t.equals(f.notifyCalls[3].description, locale('wellbeing.thirst_low'))
-end)
-
-t.test('/k9eat and /k9drink: ALWAYS registered regardless of HungerThirstSystem\'s boot-time value (RUNTIME TOGGLE FIX shape, same as every other command in this file)', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
-    t.isTrue(type(f.command('k9eat')) == 'function')
-    t.isTrue(type(f.command('k9drink')) == 'function')
-end)
-
-t.test('/k9eat: HungerThirstSystem off is a silent no-op -- never even consults CanShowK9UI, never triggers the server', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
-    f.command('k9eat')()
-    t.equals(f.canShowK9UICallCount(), 0)
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('/k9eat: HungerThirstSystem on, access denied -> DenyK9UIAccess fires with the common.no_k9_role_or_access reason, no server event', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = false })
-    f.command('k9eat')()
-    t.equals(f.denyCallCount(), 1)
-    t.equals(f.lastDenyReason(), 'common.no_k9_role_or_access')
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('/k9eat: HungerThirstSystem on, access granted -> triggers feedK9Hunger exactly once, no payload', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = true })
-    f.command('k9eat')()
-    t.equals(#f.triggerServerEventCalls, 1)
-    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:feedK9Hunger')
-end)
-
-t.test('/k9drink: HungerThirstSystem on, access granted -> triggers giveK9Water exactly once', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = true })
-    f.command('k9drink')()
-    t.equals(#f.triggerServerEventCalls, 1)
-    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:giveK9Water')
-end)
-
-t.test('"Drink from Bowl" ox_target option: ALWAYS registers when bowlSources is non-empty, regardless of HungerThirstSystem\'s boot-time value -- targets the hashed model list via AddModel, never AddGlobalPlayer', function()
-    local f = newWellbeingFixture({
-        features = { HungerThirstSystem = false },
-        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
-    })
-    local option, models = f.bowlOption()
-    t.isNotNil(option, 'must register even though HungerThirstSystem booted false -- gated at canInteract, not at registration')
-    t.equals(#models, 1)
-    t.equals(models[1], 'test_water_bowl', 'GetHashKey is identity in this fixture -- confirms the real model name reaches AddModel unmodified')
-end)
-
-t.test('WATER BOWL MODEL RISK, DEGRADES GRACEFULLY (client half): an empty/missing bowlSources means AddModel is never even called -- no option, no error, and no ox_target entry that could ever match anything', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } }) -- default wellbeingThirst.bowlSources = {}
-    t.equals(f.addModelCallCount(), 0)
-    t.isNil(f.bowlOption())
-end)
-
-t.test('"Drink from Bowl" canInteract: gates on LiveFeatureFlags.HungerThirstSystem AND CanShowK9UI(), exactly like every other self-only wellbeing ability in this file', function()
-    local f = newWellbeingFixture({
-        features = { HungerThirstSystem = false },
-        canShowK9UI = true,
-        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
-    })
-    local option = f.bowlOption()
-    t.isFalse(option.canInteract())
-
-    f.triggerWellbeingUpdate(65535, { hunger = 100, thirst = 100, featureFlags = { HungerThirstSystem = true } })
-    t.isTrue(option.canInteract())
-
-    f.setCanShowK9UI(false)
-    t.isFalse(option.canInteract(), 'live flag true is not enough on its own -- CanShowK9UI() must also be true')
-end)
-
-t.test('"Drink from Bowl" onSelect: resolves the REAL clicked entity to its own netId and triggers drinkFromBowl with exactly that -- never a client-claimed/fabricated identifier', function()
-    local f = newWellbeingFixture({
-        features = { HungerThirstSystem = true },
-        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
-    })
-    local option = f.bowlOption()
-    f.setEntityExists(4242, true)
-    f.setEntityNetId(4242, 999)
-
-    option.onSelect({ entity = 4242 })
-    t.equals(#f.triggerServerEventCalls, 1)
-    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:drinkFromBowl')
-    t.equals(f.triggerServerEventCalls[1].args[1], 999)
-end)
-
-t.test('"Drink from Bowl" onSelect: a stale/nonexistent entity handle (DoesEntityExist false) is a safe no-op, never a garbage netId sent to the server', function()
-    local f = newWellbeingFixture({
-        features = { HungerThirstSystem = true },
-        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
-    })
-    local option = f.bowlOption()
-    -- Deliberately never calling setEntityExists -- defaults to false.
-    option.onSelect({ entity = 4242 })
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('CONFIG-DEFENSIVE: Config.Wellbeing.Hunger/.Thirst entirely absent at THIS client\'s own boot (an old config.lua) never crashes this file\'s own load, and every hunger/thirst code path degrades to a safe hardcoded default instead of erroring', function()
-    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, wellbeingHunger = false, wellbeingThirst = false })
-    -- `false` (not a table) forces this fixture to skip its own default
-    -- seed entirely -- see newWellbeingFixture's own `opts.wellbeingHunger
-    -- or {...}` shape: passing `false` is falsy, so this reads as "seed
-    -- nothing," exactly mirroring a real old config.lua missing the key.
-    t.isTrue(f.env.Config.Wellbeing.Hunger == false or f.env.Config.Wellbeing.Hunger == nil)
-
-    local ok = pcall(f.triggerWellbeingUpdate, 65535, { hunger = 10, thirst = 10, featureFlags = { HungerThirstSystem = true } })
-    t.isTrue(ok, 'a missing Config.Wellbeing.Hunger/.Thirst at boot must never crash ApplyWellbeingSnapshot/ApplyMoveRateModifiers')
-    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'falls back to the same hardcoded default (30/0.95) this file\'s own LiveWellbeingTunables seed uses when the real Config table is missing')
-end)
 
 os.exit(t.summary())

@@ -282,21 +282,7 @@ Config.Features = {
     -- and on a cooldown -- it ends a foot chase, it does not remove them.
     PursuitSprint        = true,
 
-    -- client/scentlineup.lua + server/scentlineup.lua (PROJECT_HISTORY.md §4).
-    -- "Sniff the row and pick the match": several players stand in a line,
-    -- the server secretly picks one, and the K9 gets ONE guess. Nobody --
-    -- not even the K9 running it -- is told the answer until that guess is
-    -- committed, so it cannot be read out of anyone's game. Awards no XP.
-    ScentLineup          = true,
 
-    -- client/sarcalls.lua + server/sarcalls.lua (PROJECT_HISTORY.md §3).
-    -- Missing-person and search-and-rescue calls: the same hunting feel as
-    -- the scent trail, pointed at a lost hiker or a piece of property
-    -- instead of contraband. Nobody is arrested and nothing bad happens --
-    -- it resolves as a rescue. The "missing person" is always a scenery
-    -- NPC that appears only after the call is already solved, never a real
-    -- player, so nobody can be dragged into one without agreeing.
-    SARCalls             = true,
     ThermalVision        = true,
     NightVision          = true,
     DoorInteraction      = true, -- nudge-open / scratch-to-alert
@@ -304,19 +290,9 @@ Config.Features = {
     -- Phase 3 (combat & action)
     BiteAndHold          = true,
     NonLethalTakedown    = true,
-    HandlerDownDefense   = true,
     PropDragging         = true,
     AgilityAdvanced      = true, -- fence/window vault approximation
 
-    -- server/recall.lua + client/recall.lua (DEVELOPER_REFERENCE.md §12.5.1's
-    -- "Recall actor"). The handler's escape hatch: ends whatever active
-    -- effect their partnered K9 currently holds (bite/takedown/drag alike --
-    -- deliberately generalised beyond §12.5.1's bite-only text, since
-    -- narrowing it would leave a handler unable to call off a mid-drag K9,
-    -- a strictly worse unbounded-trap posture). The TERMINATION path is
-    -- never gated on HasK9Access/CanShowK9UI on either party, by design --
-    -- a decertified handler must still be able to call their dog off.
-    Recall               = true,
 
     -- DEVELOPER_REFERENCE.md §12.0 item 7 (Revision 5, coder-architect) /
     -- server/partnership.lua (coder-backend, this pass). Gates the
@@ -499,45 +475,9 @@ Config.Features = {
 
     HealthStaminaHUD     = true,
     FatigueSystem        = true,
-    MoodSystem           = true,
-    FearStressSystem     = true,
-    DistractionSystem    = true,
-    InjuryLimping        = true,
     K9Medkit             = true,
     ContrabandScreenFX   = true,
 
-    -- HungerThirstSystem -- ADDED (this pass, coder-backend). This feature
-    -- was already fully built and wired in server/wellbeing.lua/
-    -- client/wellbeing.lua (feedK9Hunger/giveK9Water/drinkFromBowl,
-    -- /k9eat and /k9drink, the passive-decay tick branch, the HUD) but
-    -- SHIPPED WITHOUT this flag or its own Config.Wellbeing.Hunger/.Thirst
-    -- tables -- with this key absent, `Config.Features.HungerThirstSystem`
-    -- read as `nil` (falsy), so the whole feature was silently OFF with
-    -- nothing anywhere saying so. Flipped on here now that its config
-    -- exists too (see Config.Wellbeing.Hunger/.Thirst below).
-    --
-    -- ONE THING TO CHECK ON YOUR OWN SERVER BEFORE RELYING ON THIS,
-    -- STATED PLAINLY, NOT BURIED:
-    --   1. `k9_food` / `k9_water` (Config.Wellbeing.Hunger.feedItemName /
-    --      Config.Wellbeing.Thirst.drinkItemName below) are PLACEHOLDER
-    --      item names. If neither exists in your own ox_inventory item
-    --      list, feeding/watering a K9 silently fails as an ordinary "you
-    --      do not have that item" message -- server/wellbeing.lua already
-    --      prints a one-time startup warning naming this exact gap if
-    --      either item is missing, so check your server console on boot.
-    --
-    -- FORMERLY A SECOND ITEM HERE: `'water_bowl'` (Config.Wellbeing.Thirst
-    -- .bowlSources below) used to be listed as an UNVERIFIED model name,
-    -- the same disclosed-guess shape Config.Wellbeing.Fatigue.restSources
-    -- used to carry. Both are now settled, not guessed: `'water_bowl'` is
-    -- CONFIRMED FAKE and has been replaced in both lists with real DLC
-    -- interior dog-bowl props (see Config.Wellbeing.Thirst.bowlSources'
-    -- own comment below for the full verification writeup). "Drink from
-    -- Bowl" now appears wherever one of those real props is placed, not
-    -- nowhere -- see that same comment for the caveat that they are DLC
-    -- interior props, not open-world street furniture, so you still need
-    -- to place one yourself for it to be reachable.
-    HungerThirstSystem   = true,
 
     -- server/admin.lua. A read-only, JOB-RANK-gated in-game audit surface
     -- over the three tables this resource already writes (k9_certifications,
@@ -587,15 +527,6 @@ Config.Features = {
     -- individuals from the tablet.
     K9Leaderboard        = true,
 
-    -- server/training.lua + client/training.lua. A practice sandbox: a
-    -- certified handler standing inside a Config.TrainingZones area can
-    -- rehearse the search and bite-and-hold flow against a scripted dummy.
-    -- Nothing in training mode touches a real target, a real inventory, or
-    -- another player, and it deliberately awards ZERO XP -- a dummy has
-    -- less friction than any real mechanic, so paying for it would be a
-    -- faster route to the top tier than actual police work. Do not
-    -- "restore" an award there.
-    TrainingMode         = true,
 
     -- server/equipmentshop.lua + client/equipmentshop.lua. A "K9 Supply"
     -- shop selling the K9 items this resource uses. Without it those items
@@ -737,75 +668,7 @@ Config.Features = {
     -- authorized to do or see.
     TabletTheming        = true,
 
-    -- server/dangerwarn.lua + client/dangerwarn.lua. Lets a K9's OWN
-    -- player press a key (or use the radial) to tell their partnered
-    -- handler "something is off" or "this is a real threat" -- the reverse
-    -- direction of HandlerDownDefense above (that one lets the SERVER
-    -- notice a handler in trouble; this one lets the K9's own player speak
-    -- up, on purpose, about something only they could have seen). The
-    -- handler is told roughly which of 8 directions and roughly which of 4
-    -- distance bands their partner is in -- never an exact location, never
-    -- anything about a third party. Anyone standing close enough to the K9
-    -- also just hears it bark, same as they would in real life.
-    -- Shipped off, deliberately: this resource's convention is that a brand-
-    -- new mechanic stays off until it has been through its own security and
-    -- balance review, exactly as HandlerPartnership did before it shipped
-    -- on. TURNED ON 2026-09-01 at the owner's explicit instruction ("turn on
-    -- everything in the config that does not need the database").
-    --
-    -- BE HONEST ABOUT WHAT THAT MEANS: the convention's review has not been
-    -- signed off by anyone -- the owner chose to enable it regardless, which
-    -- is his call to make on his own server. What is already true of the
-    -- mechanic, and is why enabling it is a defensible thing to do: it
-    -- leaks nothing precise (8 rough directions, 4 rough distance bands,
-    -- only about the K9's OWN player, only to their partnered handler,
-    -- never about a third party), it requires an active partnership, and it
-    -- needs no database. If it ever proves noisy or abusable in play, this
-    -- one line back to `false` (plus its FeatureGroups.Combat twin) is the
-    -- whole revert.
-    DangerWarn           = true,
 
-    -- APPREHENSION ANNOUNCEMENT -- the "warn them before you release the
-    -- dog" use-of-force step (server/announce.lua, client/announce.lua).
-    -- When on, a K9 must first announce (default key M, or /k9announce)
-    -- within about 8 metres of a suspect, opening roughly a 20-second
-    -- window during which a bite or takedown against THAT suspect is
-    -- permitted. Outside a window, the bite is refused. It never makes
-    -- apprehension easier, only harder, which is the point -- it mirrors
-    -- real police K9 doctrine and gives a suspect a chance to comply.
-    --
-    -- ADDED 2026-08-27, AND THE REASON IS WORTH READING. This key did not
-    -- exist -- not switched off, ABSENT, and absent for the entire history
-    -- of this file. The feature was fully built, keybound, given its own
-    -- command and its own tests, and then shipped with no switch anywhere
-    -- for anyone to find. A missing Config.Features key reads as nil, which
-    -- every gate in this resource treats as off, so it was permanently
-    -- dead on every install ever made, while the tablet's own help text
-    -- instructed the owner to "turn the feature on for your server" -- an
-    -- instruction with nothing behind it. The bug was never that it ships
-    -- off; it is that you were never given the choice.
-    --
-    -- IT SHIPPED `false` DELIBERATELY, and that was not the leftover of the
-    -- bug. Requiring a warning before every bite is a roleplay policy
-    -- decision about how your server wants use-of-force to work, not a
-    -- safety default. TURNED ON 2026-09-01 at the owner's explicit
-    -- instruction ("turn on everything in the config that does not need the
-    -- database"). Config.FeatureGroups.Combat below carries the same key and
-    -- is set to match: group resolution runs AFTER this table and silently
-    -- overrides it, so setting only one of the two would change nothing at
-    -- all, with no error anywhere.
-    --
-    -- THIS ONE CHANGES HOW THE GAME PLAYS, unlike the others enabled in the
-    -- same pass. From now on a K9 must announce (default key M, or
-    -- /k9announce) within about 8 metres of a suspect, which opens roughly
-    -- a 20-second window in which a bite or takedown against THAT suspect is
-    -- permitted; outside a window the bite is refused. It never makes
-    -- apprehension easier, only harder -- that is the point of it -- so
-    -- handlers who are used to biting on sight will find bites failing until
-    -- they learn the step. Tell them before a shift rather than after.
-    --
-    -- Tuning is optional -- see Config.Combat.ApprehensionAnnouncement.
-    ApprehensionAnnouncement = true,
 }
 
 -- ======================================================================
@@ -856,7 +719,6 @@ Config.FeatureGroups = {
         Gunpowder = true, -- GunpowderSniffing
         Water     = true, -- WaterTrackingDecay
         Vision    = true, -- ScentVision -- own keybind/entry point, kept deliberately unmerged, see spec §2.1
-        Lineup    = true, -- ScentLineup -- kept deliberately (spec §2.2.1); its pick/cancel actions stay ungated by K9 access regardless of this switch, see spec §7.2
         -- ScentTrailHunt is not listed here or anywhere else in this tree
         -- -- REMOVED, not folded. See Config.Features' own comment above
         -- (where that key used to live) for the full writeup and exactly
@@ -868,7 +730,6 @@ Config.FeatureGroups = {
         ContrabandAlerts = true,
         FindAlerts       = true,
         ScreenFX         = true, -- ContrabandScreenFX
-        SARCalls         = true,
     },
     Sensory = {
         -- NEW switch -- no single existing flag was this capability's
@@ -892,16 +753,6 @@ Config.FeatureGroups = {
         NonLethalTakedown  = true,
         PropDragging       = true,
         PursuitSprint      = true,
-        HandlerDownDefense = true,
-        DangerWarn         = true, -- turned on 2026-09-01 with its Config.Features twin -- see that key's own comment for what was and was not reviewed
-        -- MUST AGREE WITH Config.Features.ApprehensionAnnouncement ABOVE.
-        -- This table is resolved AFTER Config.Features and silently wins,
-        -- so setting only one of the two changes nothing whatsoever and
-        -- reports no error. Turning the feature on means setting BOTH to
-        -- true; turning it off means setting BOTH to false. Both set true
-        -- 2026-09-01 -- see that key's own comment for what it changes for
-        -- handlers in play.
-        ApprehensionAnnouncement = true,
     },
     Movement = {
         enabled            = true, -- was the standalone LeashMechanics switch
@@ -919,14 +770,9 @@ Config.FeatureGroups = {
     },
     Wellbeing = {
         enabled        = true, -- was the standalone FatigueSystem switch
-        Mood           = true, -- MoodSystem
-        FearStress     = true, -- FearStressSystem
-        Distraction    = true, -- DistractionSystem
-        InjuryLimping  = true,
         HUD            = true, -- HealthStaminaHUD
         K9DownDispatch = true,
         Medkit         = true, -- K9Medkit -- moved here from a "gear" grouping, see spec §3.3: its entry point belongs with feed/pet/drink, not with kennels/shop/attachments
-        HungerThirst   = true, -- HungerThirstSystem -- landed mid-session after this tree's first draft; this is the key that proved tests/featuregroups_spec.lua's drift guard actually catches an unclassified addition
     },
     Progression = {
         enabled             = true, -- was the standalone XPProgression switch
@@ -968,7 +814,7 @@ Config.FeatureGroups = {
         PropAttachments  = true,
     },
     Training = {
-        enabled       = true, -- was the standalone TrainingMode switch
+        enabled       = true, -- the family switch; TrainingMode itself was removed 2026-09-02
         FetchMechanic = true,
     },
     Tablet = {
@@ -995,8 +841,7 @@ Config.FeatureGroups = {
 
     -- STANDALONE -- deliberately outside every parent above. Each reason
     -- is specific, not a shrug; see FEATURE_STRUCTURE_SPEC.md §3 for the
-    -- full writeup on all six:
-    Recall             = true, -- the shared way to call off a bite, a takedown, OR a drag (Combat) -- must never share a parent with any of the three, or with Movement, its former display grouping
+    -- full writeup (Recall removed 2026-09-02 at the owner's request):
     HighCommand        = true, -- proven independent in this resource's own code; the single highest-blast-radius flag in this file, already carrying its own lockout protection in server/runtimecontrol.lua
     PermissionGrants   = true, -- proven independent of the tablet -- server/permissions.lua's grant/revoke command path is gated on IsHighCommand, never CommandTablet
     AdminAuditCommands = true, -- see this table's own Tablet-family comment above -- the documented, load-bearing reason this cannot share CommandTablet's fate
@@ -1035,22 +880,26 @@ Config.FeatureGroups = {
 -- against the REAL function, not a hand-typed duplicate of it.
 -- ======================================================================
 local FEATURE_GROUP_MEMBERS = {
-    Detection    = { base = 'ScentTracking', Blood = 'BloodTracking', Gunpowder = 'GunpowderSniffing', Water = 'WaterTrackingDecay', Vision = 'ScentVision', Lineup = 'ScentLineup' },
-    Search       = { base = 'SearchZones', ContrabandAlerts = 'ContrabandAlerts', FindAlerts = 'FindAlerts', ScreenFX = 'ContrabandScreenFX', SARCalls = 'SARCalls' },
+    Detection    = { base = 'ScentTracking', Blood = 'BloodTracking', Gunpowder = 'GunpowderSniffing', Water = 'WaterTrackingDecay', Vision = 'ScentVision' },
+    Search       = { base = 'SearchZones', ContrabandAlerts = 'ContrabandAlerts', FindAlerts = 'FindAlerts', ScreenFX = 'ContrabandScreenFX' },
     Sensory      = { NightVision = 'NightVision', ThermalVision = 'ThermalVision', CameraFeedPiP = 'CameraFeedPiP', ProximityAudio = 'ProximityAudioFX' },
-    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint', HandlerDownDefense = 'HandlerDownDefense', DangerWarn = 'DangerWarn', ApprehensionAnnouncement = 'ApprehensionAnnouncement' },
+    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint' },
     Movement     = { base = 'LeashMechanics', BasicBarkSounds = 'BasicBarkSounds', AdvancedBarkRadial = 'AdvancedBarkRadial', AgilityBasicJump = 'AgilityBasicJump', AgilityAdvanced = 'AgilityAdvanced', VehicleEntryExit = 'VehicleEntryExit', DoorInteraction = 'DoorInteraction' },
-    Wellbeing    = { base = 'FatigueSystem', Mood = 'MoodSystem', FearStress = 'FearStressSystem', Distraction = 'DistractionSystem', InjuryLimping = 'InjuryLimping', HUD = 'HealthStaminaHUD', K9DownDispatch = 'K9DownDispatch', Medkit = 'K9Medkit', HungerThirst = 'HungerThirstSystem' },
+    Wellbeing    = { base = 'FatigueSystem', HUD = 'HealthStaminaHUD', K9DownDispatch = 'K9DownDispatch', Medkit = 'K9Medkit' },
     Progression  = { base = 'XPProgression', HandlerXP = 'HandlerXPProgression', CertificationExpiry = 'CertificationExpiry', Leaderboard = 'K9Leaderboard' },
     Partnership  = { base = 'HandlerPartnership', TenureBonus = 'PartnershipTenureBonus' },
     Gear         = { base = 'K9Inventory', EquipmentShop = 'K9EquipmentShop', DeployableKennel = 'DeployableKennel', PropAttachments = 'PropAttachments' },
-    Training     = { base = 'TrainingMode', FetchMechanic = 'FetchMechanic' },
+    -- No `base` since TrainingMode was removed (2026-09-02, owner's request).
+    -- A base-less family is an ordinary supported shape -- Sensory, Combat and
+    -- Integrations have always been that way; the family's own `enabled` switch
+    -- is then the only thing above its members.
+    Training     = { FetchMechanic = 'FetchMechanic' },
     Tablet       = { base = 'CommandTablet', RuntimeFeatureControl = 'RuntimeFeatureControl', Theming = 'TabletTheming' },
     Integrations = { DiscordWebhook = 'DiscordWebhook', ResourceAutoDetect = 'ResourceAutoDetect' },
 }
 
 local STANDALONE_FEATURE_KEYS = {
-    'Recall', 'HighCommand', 'PermissionGrants', 'AdminAuditCommands', 'BoneSweepDevTool', 'RadialMenu',
+    'HighCommand', 'PermissionGrants', 'AdminAuditCommands', 'BoneSweepDevTool', 'RadialMenu',
 }
 
 -- Reverse index (flat Config.Features name -> family name), built once
@@ -1724,11 +1573,6 @@ Config.FeatureControl = {
         -- feature itself (Config.Features' own comment where that key used
         -- to live has the full removal writeup and revert instructions).
         PursuitSprint     = true,
-        -- Fits the original "acts on another player" rationale squarely:
-        -- a lineup summons named players and then publicly names one of
-        -- them as the match.
-        ScentLineup       = true,
-        SARCalls          = true,
     },
 
     -- OWNER DECISION (this pass -- server/permissions.lua's own
@@ -1918,14 +1762,11 @@ Config.CommandTablet = {
         NonLethalTakedown = true,
         PropDragging      = true,
         HandlerPartnership = true,
-        Recall            = true,
-        HandlerDownDefense = true,
         FetchMechanic     = true,
         PropAttachments   = true,
         DeployableKennel  = true,
         K9Inventory       = true,
         K9Medkit          = true,
-        FearStressSystem  = true,
     },
     -- ==================================================================
     -- YOUR SERVER'S BRANDING ON THE TABLET. The tablet now shows this logo
@@ -3905,42 +3746,6 @@ Config.Combat = {
     -- so and it can be split per action.
     ExcludeVehicleSeatedTargets = true,
 
-    -- ==================================================================
-    -- APPREHENSION ANNOUNCEMENT TUNING -- the "warn them before you
-    -- release the dog" step. Only does anything while
-    -- Config.Features.ApprehensionAnnouncement is `true` (it ships
-    -- `false`; see that switch's own comment for why that is a policy
-    -- choice rather than a default).
-    --
-    -- ADDED 2026-08-27. Config.Features.ApprehensionAnnouncement's comment
-    -- said "Tuning is optional -- see Config.Combat.ApprehensionAnnouncement"
-    -- and this table did not exist anywhere in the resource. So an owner
-    -- who turned the feature on, read the invitation, and came looking for
-    -- these three numbers would simply not have found them. Nothing broke,
-    -- because server/announce.lua falls back to exactly the values below
-    -- when the table is absent -- which is also why adding it changes
-    -- nothing on defaults. It just makes the promise true.
-    --
-    -- These three ARE the code's own fallbacks, copied deliberately rather
-    -- than re-picked: server/announce.lua's ResolvedAnnouncementTuning()
-    -- for range and windowMs, and its AnnounceActionCooldown construction
-    -- for the cooldown. If you change one here, the code uses yours; if
-    -- you delete the table, it goes back to these same numbers.
-    ApprehensionAnnouncement = {
-        -- How close the announcing officer must be to the suspect, in
-        -- metres, for the warning to count against that person.
-        range = 8.0,
-
-        -- How long the warning stays good for, in milliseconds. Inside
-        -- this window a bite or takedown against THAT suspect is allowed;
-        -- outside it, refused. 20000 is twenty seconds.
-        windowMs = 20000,
-
-        -- Minimum gap between one officer's announcements, in
-        -- milliseconds, so the warning cannot be spammed. Per announcer,
-        -- not per suspect.
-        announceCooldownMs = 5000,
-    },
 
     -- Applies to BiteAndHold and NonLethalTakedown's player-target paths
     -- below (and would apply to PropDragging's, if/when that's built).
@@ -4339,24 +4144,6 @@ Config.Partnership = {
     },
 }
 
--- ======================================================================
--- RECALL (Config.Features.Recall) -- server/recall.lua, client/recall.lua.
--- DEVELOPER_REFERENCE.md 12.5.1's "Recall actor": the handler's escape hatch for
--- ending whatever active effect their partnered K9 is holding.
---
--- READ THIS BEFORE TUNING: Recall is this resource's PRIMARY TERMINATION
--- PATH, and the cooldown below is the only throttle on it. It exists to
--- stop request spam, never to delay a legitimate first recall -- keep it
--- small. Do NOT add an access check, a proximity requirement, or a
--- feature-flag dependency on the combat mechanics to this path: a handler
--- whose certification is revoked mid-bite must still be able to call their
--- dog off, and every gate added here is a step toward the unbounded trap
--- this resource forbids outright.
--- ======================================================================
-Config.Recall = {
-    -- Per-CALLER (the handler issuing the recall) rate limit.
-    RequestCooldownMs = 2000,
-}
 
 -- ======================================================================
 -- CONTRABAND SCREEN FX (Config.Features.ContrabandScreenFX) --
@@ -4929,224 +4716,8 @@ Config.Wellbeing = {
         -- unlimited sprint for as long as this stays 1.0.
         nativeStaminaRestorePercent = 0.0,
     },
-    Mood = {
-        max                          = 100,
-        damageDecayAmount            = 15,  -- flat decrement per logged damage event where the K9 itself is the victim (server/wellbeing.lua's own independent consumer of the relayDamageEvent relay server/tracking.lua also consumes)
-        petRegenAmount               = 10,  -- per "Pet K9" ox_target interaction
-        petCooldownMs                = 30000, -- per (interactor, target) pair -- stops repeat-pet spam
-        feedRegenAmount              = 20,  -- per configured food item use
-        feedItemName                 = 'k9_treat', -- PLACEHOLDER item name, needs to exist in the target server's ox_inventory items table
-        -- RAISED 0.2 -> 1.0. This is the ONLY recovery path for a solo
-        -- handler: server/wellbeing.lua rejects targetPed == usingPed for both
-        -- Pet and Feed, so a K9 can never pet or feed itself. At 0.2 per 5s
-        -- tick, Mood 0 -> full took ~42 minutes with nobody else online --
-        -- long enough that most players would never see it move and would
-        -- read the meter as broken. Now ~8.3 minutes, still leaving Pet/Feed
-        -- (instant 10/20) clearly worth doing.
-        passiveRegenPerTick          = 1.0,
-        performancePenaltyThreshold  = 25, -- mood at or below this is also the exact line where a bonded handler's HUD badge starts calling their dog "Unhappy" -- raise it and that word shows up sooner, lower it and it shows up later
-        performancePenaltyMultiplier = 0.95, -- RAISED 0.9 -> 0.95, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves DEVELOPER_REFERENCE.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
-    },
-    FearStress = {
-        max                      = 100,
-        gunfireRadius            = 20.0, -- meters -- reuses Phase 2's relayWeaponFire relay (server/tracking.lua also consumes it), new CONSUMER not new native
-        gunfireLookbackSeconds   = 15,
-        -- LOWERED 5.0 -> 3.0. At 5.0 with a 5s tick, continuous fire from ONE
-        -- shooter crossed hesitationThreshold in ~70 seconds -- i.e. one
-        -- ordinary firefight, which is precisely the situation BiteAndHold and
-        -- NonLethalTakedown exist for. passiveDecayPerTick then needed ~6 more
-        -- minutes to clear. See also the forgeability note on hesitationThreshold.
-        risePerNearbyShotPerTick = 3.0,
-        passiveDecayPerTick      = 1.0,
-        -- RAISED 70 -> 85, alongside the rise-rate cut above.
-        -- SECURITY, READ BEFORE ENABLING FearStressSystem TOGETHER WITH
-        -- BiteAndHold OR NonLethalTakedown: server/combat.lua's
-        -- ValidateCombatRequest rejects a bite/takedown while the K9
-        -- IsHesitating(). Hesitation is driven by relayWeaponFire, which
-        -- server/wellbeing.lua documents as deliberately payload-less and
-        -- therefore FORGEABLE. That disclosure was written when nothing
-        -- consumed IsHesitating(); combat.lua does now. So a hostile client
-        -- can re-touch that event to lock out a specific K9's combat actions.
-        -- CLOSED, and the wording here has been corrected: this comment used
-        -- to say "indefinitely", which was true when written and is no longer.
-        -- server/wellbeing.lua's HESITATION_MAX_CONTINUOUS_MS now caps any
-        -- single continuous hesitation episode, forcing a real window in which
-        -- ValidateCombatRequest is guaranteed to grant. What remains, and is
-        -- disclosed rather than claimed closed, is that a forger who stays
-        -- nearby can still cause repeated BOUNDED disruption.
-        -- Two things worth carrying forward. First, the exploit was worse than
-        -- its own original disclosure: once fearStress is primed, the renewal
-        -- check re-extends hesitation every tick regardless of new input, so
-        -- sustaining the lock cost roughly one forged event per minute, not
-        -- the continuous spam the note assumed. Second, a forger targets
-        -- ANOTHER player's K9 simply by standing within gunfireRadius of it --
-        -- proximity to the victim, no relationship to the attacker required.
-        -- Two correct reviews, one emergent hole in the seam between them.
-        -- Tuning these numbers does NOT close it; the cap does.
-        hesitationThreshold      = 85, -- at or above this is also the exact line where a bonded handler's HUD badge starts calling their dog "Stressed" -- lower it and that word shows up sooner (a lower tolerance for stress), raise it and it shows up later
-        hesitationDurationMs     = 8000,  -- how long a rejected Phase 3 combat-command attempt stays refused before the K9 may retry, absent a manual calm-down
-        calmDownReduceAmount     = 40,    -- "Calm Down" command's effect (self-only, see server/wellbeing.lua)
-        calmDownCooldownMs       = 15000,
-    },
-    Distraction = {
-        flashbangImmune     = true, -- HALF IMPLEMENTED DELIBERATELY, AND SETTLED 2026-08-25 -- the missing half should stay missing; see the note below. server/wellbeing.lua exposes IsFlashbangImmune(citizenid) as a real callable accessor. What is deliberately NOT built is the consumer side: honouring immunity means listening to some third-party stun resource's event, whose name and payload shape are unknown, and fabricating a listener for an unnamed resource would look implemented and never fire. So a companion resource has something real to check, and this is still not a
-        -- shipped guarantee on its own.
-        -- RESEARCHED AND CLOSED, so this stops being reopened: the ecosystem has
-        -- no dominant flashbang or stun resource to target. The popular ones are
-        -- closed-source paid scripts -- unverifiable in principle, not merely
-        -- unresearched -- and Qbox's own qbx_police ships no flashbang or taser
-        -- at all, so there is no house implementation to piggyback on either.
-        -- Of the two open-source candidates whose source was actually read, one
-        -- reacts to a native game event AFTER the stun has landed (useless for
-        -- prevention), and the other has a pre-effect gate that is an internal
-        -- stub, not an export -- and FiveM resources do not share Lua global
-        -- scope, so it cannot be overridden from outside regardless. Neither
-        -- offers anything like ox_inventory's registerHook veto.
-        -- Building a listener now would either never fire on a server not
-        -- running that exact resource, or require maintaining a patch on
-        -- someone else's niche script. Revisit only if a specific operator
-        -- names the resource they actually run -- verifying one real contract
-        -- is small and concrete; guessing generically is not.
-        meatBaitItemName    = 'k9_meat_bait',      -- PLACEHOLDER
-        meatBaitDurationMs  = 6000,
-        meatBaitRadius      = 8.0,
-        whistleItemName     = 'k9_ultrasonic_whistle', -- PLACEHOLDER
-        whistleDurationMs   = 4000,
-        whistleRadius       = 15.0,
-        perTargetCooldownMs = 20000, -- stops the same K9 being re-distracted back-to-back
-    },
-    Injury = {
-        max                     = 100,
-        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see DEVELOPER_REFERENCE.md §13.0 Decision 3's disclosed bounded limitation). Also the exact line where a bonded handler's HUD badge starts calling their dog "Injured" -- raise it and that word shows up sooner, lower it and it shows up later
-        jumpBlockThreshold      = 20, -- below this, jump input is blocked
-        speedPenaltyMultiplier  = 0.80, -- RAISED 0.7 -> 0.80, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
-        damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
-        -- RAISED 0.1 -> 1.0. K9Medkit was documented as "the intended
-        -- primary recovery path," but at 0.1/tick a K9 dropped to 0 Injury
-        -- (a handful of hits in one firefight, at damageDecayAmount 10 each)
-        -- took ~16.7 real minutes to clear jumpBlockThreshold and ~25
-        -- minutes to clear sprintBlockThreshold -- and client/wellbeing.lua
-        -- HARD-BLOCKS sprint and jump input the entire time, with no server
-        -- override. The medkit escape hatch also depends on an operator
-        -- having actually registered Config.K9Medkit.itemName in their own
-        -- ox_inventory, which this resource cannot guarantee (hence the new
-        -- startup warning in server/wellbeing.lua). That combination is a
-        -- stuck player, not a tuning choice. Same precedent and reasoning as
-        -- Mood.passiveRegenPerTick's own 0.2 -> 1.0 raise above -- applied
-        -- here because Injury's penalty is a hard INPUT BLOCK, a stronger
-        -- case for parity than Mood's soft speed multiplier, not a weaker
-        -- one. Now: jump clears in ~1.67 min, sprint in ~2.5 min, a full
-        -- 0->100 climb in ~8.33 min, identical to Mood's adopted rate.
-        passiveRegenPerTick     = 1.0,
 
-        -- DEATH/RESPAWN RESTORE. Added to Injury the tick
-        -- server/wellbeing.lua first observes a tracked K9's native health
-        -- recover above its dead-health threshold after having been at or
-        -- below it -- i.e. the K9 died and was revived. 100 = Injury.max, a
-        -- FULL reset: the ped's real health is already restored to full by
-        -- whatever laststand/ambulance system handles revival, so a virtual
-        -- Injury value surviving that same event untouched was the real
-        -- inconsistency.
-        -- CONFIGURABLE: set to 0 to disable entirely (a supported no-op, for
-        -- an operator who wants "still limping after respawn" for realism),
-        -- or any value in [0, Injury.max] for a partial restore.
-        -- DISCLOSED RESIDUAL RISK, restated 2026-08-25 after a red-team
-        -- pass found the original wording understated it. What remains is:
-        -- a player deliberately holding their K9's health at or below the
-        -- dead-health threshold for at least MIN_DEATH_EPISODE_DURATION_MS
-        -- (server/wellbeing.lua, ~60s at shipped defaults) and then healing
-        -- normally, with no real ambulance or laststand flow required.
-        -- That is bounded to a real minimum time cost per attempt and to
-        -- ONE payout per episode -- never free, never unbounded.
-        --
-        -- What this fix already closed, and why the earlier wording here
-        -- was wrong: the restore originally fired on ANY observed health
-        -- crossing of the threshold, so an ordinary bandage after an
-        -- ordinary hit paid a full Injury reset, and health oscillating
-        -- during one genuine laststand could pay out several times. Both
-        -- are now gated behind the minimum-duration check. The health
-        -- transition itself is read SERVER-side and cannot be spoofed.
-        --
-        -- Note the duration gate is a code constant, not a config value,
-        -- on purpose -- an operator-tunable minimum could simply be set
-        -- low enough to reopen the exploit. Same reasoning as
-        -- HESITATION_MAX_CONTINUOUS_MS elsewhere in that file.
-        deathRespawnRestoreAmount = 100,
-    },
 
-    -- HUNGER / THIRST (Config.Features.HungerThirstSystem). ADDED (this
-    -- pass, coder-backend) -- server/wellbeing.lua's feature code already
-    -- existed and already reads every field below through its own
-    -- GetResolvedHungerThirstConfig() (CLAMP AND WARN, never abort), which
-    -- is why this block's defaults below were copied FROM that function's
-    -- own fallback values, not chosen independently -- keep the two in
-    -- sync if either changes. See Config.Features.HungerThirstSystem's own
-    -- comment above for the two things (the item names, the bowl model)
-    -- you must confirm on your own server before relying on this feature.
-    Hunger = {
-        max                    = 100,
-        decayPerTick           = 0.093, -- empties in ~90 minutes of one on-duty shift at the shipped tickIntervalMs (5000ms) if never fed
-        lowThreshold           = 30,    -- hunger below this triggers the speed penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Hungry" -- raise it and that word shows up sooner, lower it and it shows up later
-        speedPenaltyMultiplier = 0.95,  -- fed into RecomputeK9MoveRate() (client/movement.lua), same "MULTIPLIES with every other penalty" caveat as Fatigue/Injury/Mood above
-        feedRegenAmount        = 35,    -- restored per feedK9Hunger (/k9eat) use
-        -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's
-        -- own comment above. Must exist in your ox_inventory item list or
-        -- feeding silently fails.
-        feedItemName           = 'k9_food',
-        feedCooldownMs         = 120000, -- 2 minutes between feeds, per citizenid
-    },
-
-    Thirst = {
-        max                    = 100,
-        decayPerTick           = 0.139, -- empties in ~60 minutes if never watered -- faster than Hunger, dogs need water more often
-        lowThreshold           = 30, -- also the exact line where a bonded handler's HUD badge starts calling their dog "Thirsty" -- raise it and that word shows up sooner, lower it and it shows up later
-        speedPenaltyMultiplier = 0.95,
-        drinkRegenAmount       = 35,    -- restored per giveK9Water (/k9drink) use, the item path
-        -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's
-        -- own comment above. Must exist in your ox_inventory item list or
-        -- watering silently fails.
-        drinkItemName          = 'k9_water',
-        drinkCooldownMs        = 90000,  -- 90 seconds between item-based drinks, per citizenid
-        bowlRegenAmount        = 15,     -- restored per drinkFromBowl use -- smaller than the item path, the free/no-cost world-prop alternative
-        bowlCooldownMs         = 60000,  -- 60 seconds between bowl drinks, per citizenid -- shorter than the item cooldown since there is no item cost
-        bowlInteractRange      = 2.0,    -- metres, how close the K9 must be to a matched bowl entity
-        -- CONFIRMED FAKE, AND REPLACED WITH REAL PROPS. `'water_bowl'`
-        -- used to be the sole entry here, carried as a disclosed guess.
-        -- It is now settled, not guessed: a full fetch of the DurtyFree
-        -- gta-v-data-dumps ObjectList.ini (all 21,631 entries -- earlier
-        -- passes could only reach a partial slice of that same file)
-        -- contains ZERO matches for `water_bowl`, `waterbowl`, or any
-        -- water*bowl* combination, and Forge/Pleb Masters returns a clean
-        -- 404 for the literal name, control-tested against a known-fake
-        -- string to confirm the 404 means "not found" rather than "fetch
-        -- failed". There is no such model. While it sat here, "Drink from
-        -- Bowl" could never appear on anything, on any server, silently.
-        --
-        -- WHAT IS REAL: the same full dump does contain genuine dog bowls.
-        -- These three are the ones in it, and they are what this list now
-        -- carries.
-        --
-        -- READ THIS BEFORE EXPECTING IT TO JUST WORK: these are DLC
-        -- INTERIOR props, not open-world street furniture. They exist and
-        -- will load, but the base map does not scatter them around the
-        -- city the way it does benches. So the feature is no longer broken
-        -- -- it is now waiting on you. Place one of these props wherever
-        -- you want your K9s to be able to drink (your kennel, the station
-        -- yard, a training area) using whatever mapping resource you
-        -- already use, and "Drink from Bowl" starts appearing on it. Add
-        -- your own custom bowl model's name to this list too if you have
-        -- one; the list is matched by name, so any number of entries work.
-        --
-        -- If you place nothing, the item path (giveK9Water, above) is
-        -- completely unaffected and remains the way a K9 drinks -- exactly
-        -- as it has been all along, since this list never matched anything
-        -- until now.
-        bowlSources            = {
-            'm25_1_prop_m51_dog_bowl_full',
-            'm25_1_prop_m51_dog_bowl_empty',
-            'm25_2_int_01_dog_bowl',
-        },
-    },
 
     -- ==================================================================
     -- PERSISTENCE (this pass, coder-backend) -- see server/wellbeing.lua's
@@ -5592,41 +5163,7 @@ Config.Leaderboard = {
     CommandCooldownMs = 5000,
 }
 
--- ======================================================================
--- TRAINING MODE (Config.Features.TrainingMode) -- server/training.lua and
--- client/training.lua.
---
--- A practice yard. Stand inside one of the areas below, run /k9training,
--- and you can rehearse the search and bite-and-hold flow against a
--- scripted dummy. It never touches a real player, never reads anyone's
--- real inventory, and awards NO XP at all -- so it is safe to leave on.
---
--- YOU ALMOST CERTAINLY NEED TO EDIT THE COORDINATES BELOW. The single
--- entry that ships is a placeholder near Mission Row PD -- a starting
--- point, not a surveyed spot on your map. Stand where you want the yard,
--- note your coordinates, and replace them.
--- ======================================================================
-Config.TrainingZones = {
-    { label = 'LSPD K9 Training Yard', x = 441.8, y = -981.7, z = 30.7, radius = 20.0 },
-    -- Add as many as you like:
-    -- { label = 'Sandy Shores Sheriff Yard', x = 1853.2, y = 3689.4, z = 34.3, radius = 25.0 },
-}
 
-Config.Training = {
-    -- Minimum gap between turning training mode on and off again, and
-    -- between one practice rep and the next, in milliseconds. BOTH MUST BE
-    -- POSITIVE. Zero or negative does NOT mean "no cooldown" in this
-    -- codebase -- the shared cooldown helper treats a non-positive
-    -- threshold as PERMANENTLY ON, which would lock the feature out for
-    -- everyone, forever, with nothing logged to explain why.
-    ToggleCooldownMs = 3000,
-    ActionCooldownMs = 4000,
-
-    -- How often a practice search comes back as a "find" rather than
-    -- "clean", from 0.0 (never) to 1.0 (always). A coin flip so trainees
-    -- see both outcomes. It decides nothing real and pays nothing.
-    ContrabandFoundChance = 0.5,
-}
 
 -- ======================================================================
 -- K9 SUPPLY SHOP (Config.Features.K9EquipmentShop) -- server/equipmentshop.lua
@@ -5721,62 +5258,6 @@ Config.K9EquipmentShop = {
     },
 }
 
--- ======================================================================
--- SCENT TRAIL HUNT -- PROJECT_HISTORY.md §2. client/scenttrail.lua +
--- server/scenttrail.lua.
---
--- The Config.Features.ScentTrailHunt SWITCH THAT GATED THIS WAS REMOVED
--- (owner-approved -- see Config.Features' own comment, in the block
--- above, where that key used to live, for the full reasoning and exactly
--- how to bring it back). This TUNING TABLE was deliberately left in place
--- rather than deleted along with it -- neither client/scenttrail.lua nor
--- server/scenttrail.lua was touched, and this file's own convention is
--- "leave what a removed switch owns in place, remove only the switch" --
--- so this table now sits here, correct and untouched, simply unused.
--- Restoring the flag above needs nothing further here.
---
--- Different from the scent tracking above, and deliberately so: that one
--- reveals a location and draws a trail to it. This one reveals NOTHING.
--- The hiding spot's coordinates never leave the server -- the player's
--- game is only ever told how far away they are, which is what paces the
--- growl. So there is nothing in the player's game to read the answer out
--- of. It awards no XP either.
--- ======================================================================
--- INERT AS SHIPPED -- NOTHING BELOW THIS LINE IS READ. The scent trail
--- hunt's own switch was removed (owner-approved, judged redundant with the
--- merged tracking action, which is the same walk-toward-a-fading-signal
--- interaction). The two files that implement it correctly go inert the
--- moment that switch is absent, so every number in this table is currently
--- dead weight -- tuning any of them changes nothing.
---
--- It is kept, rather than deleted, so the tuning survives if the feature is
--- ever brought back; the steps to do that are written where the switch used
--- to be, in Config.Features above. This banner is on the table itself
--- because the explanation up there is several hundred lines away, and an
--- owner scrolling to these numbers would have no way of knowing.
-Config.ScentTrailHunt = {
-    -- How far from the K9 the hidden spot can be, in meters.
-    minRadius         = 10.0,
-    maxRadius         = 30.0,
-
-    -- How close counts as finding it. Measured flat, ignoring height.
-    arrivalRadius     = 3.0,
-
-    -- How often the growl checks distance when far away, in milliseconds.
-    -- Close in, it speeds up to a fixed rate that is not configurable.
-    pollIntervalMs    = 2000,
-
-    -- Minimum gap between one hunt and the next, per player, in
-    -- milliseconds. MUST BE POSITIVE -- a non-positive value here does NOT
-    -- mean "no cooldown"; the shared cooldown helper treats it as
-    -- PERMANENTLY ON and the feature locks out for everyone, forever.
-    startCooldownMs   = 8000,
-
-    -- A hunt nobody finishes gives up after this long, in milliseconds
-    -- (five minutes). This is what stops a forgotten hunt lasting all
-    -- session.
-    maxHuntDurationMs = 300000,
-}
 
 -- ======================================================================
 -- DATABASE (Config.Database) -- whether this resource is allowed to talk
@@ -5912,209 +5393,8 @@ Config.PursuitSprint = {
     requestRangeMeters = 20.0,
 }
 
--- ======================================================================
--- SCENT LINEUP (Config.Features.ScentLineup) -- PROJECT_HISTORY.md §4.
--- server/scentlineup.lua + client/scentlineup.lua.
---
--- "Sniff the row and pick the match." A K9 invites several online players
--- to stand in a line. Every one of them has to accept -- nobody is pulled
--- into this without agreeing. The moment the last invite is accepted the
--- SERVER secretly picks one of them at random, and tells NOBODY, not even
--- the K9 running the drill, until a single final guess is committed. So
--- there is nothing in anyone's game to read the answer out of.
---
--- It awards no XP, on purpose: the outcome is random and you could run it
--- all day with a group of willing friends, which is exactly the shape of
--- XP farm this resource has already had to close eight times.
--- ======================================================================
-Config.ScentLineup = {
-    -- Fewest OTHER players a lineup may contain, not counting the K9
-    -- running it. Below this there is no real guess to make.
-    minParticipants = 2,
 
-    -- Most other players in one lineup, so a single K9 cannot tie up a
-    -- large share of everyone online.
-    maxParticipants = 6,
 
-    -- How long the invited group has to ALL accept before the whole thing
-    -- cancels and everyone is freed, in milliseconds.
-    inviteWindowMs = 30000,
-
-    -- Once everyone has accepted, how long the K9 has to commit their one
-    -- guess before it cancels, in milliseconds.
-    pickWindowMs = 240000,
-
-    -- Minimum gap between one K9 starting a lineup and starting another,
-    -- in milliseconds.
-    startCooldownMs = 60000,
-}
-
--- ======================================================================
--- SEARCH AND RESCUE CALLS (Config.Features.SARCalls) -- PROJECT_HISTORY.md §3.
--- client/sarcalls.lua + server/sarcalls.lua.
---
--- Dispatch hands the K9 a missing-person or lost-property call. Somewhere
--- nearby, the server hides a target and tells nobody where -- the officer
--- only gets their dog reacting more strongly as they get closer. Find it
--- and the call resolves as a rescue: nobody is arrested, nothing bad
--- happens to anyone.
---
--- The "missing person" is always scenery -- an NPC that appears only once
--- the call is already solved, on the finder's own screen. It is never a
--- real player, so nobody can be volunteered into one without agreeing.
--- ======================================================================
-Config.SARCalls = {
-    -- How far from the officer the hidden target may be placed, in meters.
-    -- The minimum is doing real work here: it guarantees a genuine walk no
-    -- matter how often calls are taken, which is what stops this becoming
-    -- an XP treadmill.
-    minRadius = 40.0,
-    maxRadius = 90.0,
-
-    -- How close counts as finding it, in meters. Measured on the server
-    -- from the officer's real position, never from anything their game
-    -- claims.
-    arrivalRadius = 6.0,
-
-    -- How strongly the dog reacts, by distance in meters. A new reaction
-    -- only fires when the officer crosses one of these lines, not
-    -- continuously.
-    burningDistance = 8.0,
-    hotDistance     = 20.0,
-    warmDistance    = 45.0,
-
-    -- How often the server re-checks distance, in milliseconds.
-    pollIntervalMs = 2000,
-
-    -- How long an unsolved call lasts before it gives up, in milliseconds
-    -- (eight minutes). A call that times out costs nothing and grants
-    -- nothing -- an honest "came up empty", exactly like a real search
-    -- that finds nothing.
-    maxCallDurationMs = 480000,
-
-    -- Minimum gap between one officer taking a call and taking another, in
-    -- milliseconds (ten minutes). This is on REQUESTING a call, not on
-    -- finishing one.
-    startCooldownMs = 600000,
-
-    -- A second officer can now ask to help with someone else's active
-    -- call -- these four settings tune that. Joining never pays XP by
-    -- itself (only whoever originally took the call ever earns the find
-    -- reward, no matter who actually locates it), so none of these are an
-    -- anti-farm knob -- they only shape how easy it is to team up.
-
-    -- How close a second officer must stand to the officer running the
-    -- call before they may ask to join, in meters. LOWER = they must be
-    -- right next to that officer to ask (stricter). HIGHER = they can ask
-    -- from farther away (looser).
-    joinProximityMeters = 10.0,
-
-    -- How many officers, INCLUDING the one who started it, may work the
-    -- same call at once. LOWER = fewer helpers allowed. HIGHER = a bigger
-    -- team can pile onto one call.
-    maxMembers = 4,
-
-    -- How long a "let me help" request stays open before it silently
-    -- expires if the officer running the call never answers, in
-    -- milliseconds (thirty seconds). LOWER = a slower-to-respond officer
-    -- misses more requests. HIGHER = requests linger longer, which can
-    -- start to feel like nagging.
-    joinRequestTTLMs = 30000,
-
-    -- Minimum gap between one officer's own join requests, in milliseconds
-    -- (one second). This only slows down someone mashing the button; it
-    -- has nothing to do with how often a call itself can be taken -- see
-    -- startCooldownMs above for that.
-    joinRequestCooldownMs = 1000,
-
-    -- What the "we found them" moment looks like. Scenery only, drawn on
-    -- the finder's own screen after the call has already resolved, then
-    -- cleaned up by that same screen. The person model is the standard
-    -- multiplayer character, which every player already has loaded --
-    -- deliberately not a themed model this resource cannot guarantee your
-    -- server streams.
-    missingPersonPedModel = 'mp_m_freemode_01',
-    lostPropertyPropModel = 'prop_tennis_ball',
-    revealDurationMs = 15000,
-}
-
--- server/dangerwarn.lua + client/dangerwarn.lua (Config.Features.DangerWarn
--- above). Lets a K9's own player press a key, or use the radial, to tell
--- their partnered handler "something's off" (Alert) or "this is a real
--- threat" (Threat). The handler only ever learns a rough direction and a
--- rough distance to their partner -- never an exact spot, never anything
--- about anyone else. Every setting below already has a safe built-in
--- fallback baked into the code, so leaving this whole block out of your
--- config entirely is fine -- these are here only for a server that wants
--- to tune the feel.
-Config.DangerWarn = {
-    -- How long a K9 must wait between danger warnings, in milliseconds
-    -- (15 seconds). LOWER = warnings can be sent more often (weaker
-    -- anti-spam, more chatter for the handler). HIGHER = longer gap between
-    -- warnings (stronger anti-spam, but a genuinely fast-moving situation
-    -- may need a second warning sooner than this allows).
-    cooldownMs = 15000,
-
-    -- How far away, in meters, another connected player can be and still
-    -- hear the dog actually bark when a warning is sent. HIGHER = more
-    -- people nearby hear it (more atmosphere, more "everyone knows a dog
-    -- just barked"). LOWER = only people standing right next to the K9
-    -- hear anything. This has no effect on whether the HANDLER is told --
-    -- the handler always gets the full text alert regardless of distance.
-    audibleRadius = 30.0,
-
-    -- How the handler's distance readout is worded, in meters, measured
-    -- from the HANDLER to the K9. Each number is the outer edge of that
-    -- band -- "close" covers 0 up to this number, "nearby" covers from
-    -- there up to its own number, and so on; anything past "far" reads as
-    -- "very far away". Must stay in increasing order (close < nearby <
-    -- far) or the built-in fallback below is used instead. Narrowing these
-    -- bands makes the readout feel more precise; widening them makes it
-    -- vaguer.
-    distanceBuckets = {
-        close  = 15.0,
-        nearby = 50.0,
-        far    = 150.0,
-    },
-
-    -- The two warning types a K9's player can choose from, each with its
-    -- own bark sound (must already exist in html/sounds/ and be listed in
-    -- fxmanifest.lua's files{} block) and its own notification colour
-    -- ('error' shows red, 'warning' shows amber, matching ox_lib's own
-    -- notify types). You can add more entries here without touching any
-    -- code -- an unrecognized type sent by a player is simply treated as
-    -- this list's own 'Alert' entry.
-    Types = {
-        Alert  = { soundName = 'Bark_Alert',      notifyType = 'warning' },
-        Threat = { soundName = 'Bark_Aggressive', notifyType = 'error' },
-    },
-
-    -- Default keyboard key for the "Danger Warn: Alert" keybind (always
-    -- sends the lower-urgency Alert type -- Threat is only reachable
-    -- through the radial menu today). Always rebindable client-side in
-    -- Settings > Key Bindings > FiveM; changing this value later does not
-    -- move a binding a player already changed for themselves, it only sets
-    -- what a brand new player starts with.
-    -- CHANGED FROM 'N' ON 2026-08-27 -- IT COLLIDED, AND THE COLLISION WAS
-    -- ARMED BY THE VERY COMMENT INVITING YOU TO TURN THIS FEATURE ON.
-    -- client/pursuitsprint.lua hardcodes 'N' for pursuit sprint, which
-    -- ships ON. This feature ships OFF, and its whole file is gated behind
-    -- that switch, so the two never met on a stock install -- but the
-    -- moment an owner did what Config.Features.DangerWarn's own comment
-    -- invites ("turn it on once that review has happened"), every press of
-    -- N would have fired BOTH: a K9 bursting after a suspect would bark a
-    -- danger warning to their handler, every single time, and vice versa.
-    -- Nothing anywhere warned about it, and it would only have appeared
-    -- after a restart, for the one person who opted in.
-    --
-    -- 'P' chosen by this file's own documented rule (client/keybinds.lua's
-    -- header: "a free, uncommonly-bound letter, not a forced mnemonic",
-    -- avoiding every other default this resource ships and every core
-    -- movement key). Verified free: the keys already taken are B, C, G, H,
-    -- I, J, K, L, M, N, O, T, U, V, X, Y and Z, and D/E/F/Q/R were ruled
-    -- out as core GTA controls rather than merely unused here.
-    keybind = 'P',
-}
 
 -- ======================================================================
 -- DEBUG DUMP (server/debugdump.lua, client/debugdump.lua) -- owner's own
