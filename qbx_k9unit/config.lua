@@ -265,7 +265,7 @@ Config.Features = {
     --      offered and the owner may still take -- a nose-following
     --      practice exercise, since TrainingMode's own dummy drills below
     --      cover bite-and-hold and searching but nothing for tracking):
-    --      same step 1, but nest it under Config.FeatureGroups.Training
+    --      same step 1, but add it to STANDALONE_FEATURE_KEYS
     --      instead of Config.FeatureGroups.Detection, and update
     --      server/tablet.lua's FEATURE_DOMAINS entry from 'training' (it
     --      is still there, harmless and unused while this key is absent --
@@ -710,135 +710,45 @@ Config.Features = {
 -- table was being designed -- HungerThirstSystem below is that key).
 -- ======================================================================
 Config.FeatureGroups = {
-    Detection = {
-        enabled   = true, -- was the standalone ScentTracking switch -- scent tracking IS this capability's baseline, see FEATURE_STRUCTURE_SPEC.md §3.5, so there is no separate ScentTracking slot here
-        Blood     = true, -- BloodTracking
-        Gunpowder = true, -- GunpowderSniffing
-        Water     = true, -- WaterTrackingDecay
-        Vision    = true, -- ScentVision -- own keybind/entry point, kept deliberately unmerged, see spec §2.1
-        -- ScentTrailHunt is not listed here or anywhere else in this tree
-        -- -- REMOVED, not folded. See Config.Features' own comment above
-        -- (where that key used to live) for the full writeup and exactly
-        -- how to bring it back, including as a sibling of FetchMechanic
-        -- under Training instead of here.
-    },
-    Search = {
-        enabled          = true, -- was the standalone SearchZones switch
-        ContrabandAlerts = true,
-        FindAlerts       = true,
-        ScreenFX         = true, -- ContrabandScreenFX
-    },
-    Sensory = {
-        -- NEW switch -- no single existing flag was this capability's
-        -- natural baseline (spec §3.5), unlike Detection/Search above.
-        enabled        = true,
-        NightVision    = true,
-        ThermalVision  = true,
-        CameraFeedPiP  = true, -- own entry point, requires an active partnership, deliberately not folded into the night/thermal cycle -- spec §2, Sensory table
-        ProximityAudio = true, -- ProximityAudioFX
-    },
-    Combat = {
-        -- NEW switch, same reasoning as Sensory above -- BiteAndHold/
-        -- NonLethalTakedown/PropDragging are parallel siblings, not a
-        -- base+variants relationship, so none of them collapses into this.
-        -- Deliberately never merged into one entry point (spec §7.1): a
-        -- wrong guess here has a real, unrecoverable consequence for
-        -- another player, unlike a wrong guess on a kennel or a fetch
-        -- ball.
-        enabled            = true,
-        BiteAndHold        = true,
-        NonLethalTakedown  = true,
-        PropDragging       = true,
-        PursuitSprint      = true,
-    },
-    Movement = {
-        enabled            = true, -- was the standalone LeashMechanics switch
-        BasicBarkSounds    = true,
-        AdvancedBarkRadial = true,
-        AgilityBasicJump   = true,
-        AgilityAdvanced    = true,
-        VehicleEntryExit   = true,
-        DoorInteraction    = true,
-    },
-    Wellbeing = {
-        enabled        = true, -- was the standalone FatigueSystem switch
-        HUD            = true, -- HealthStaminaHUD
-        K9DownDispatch = true,
-        Medkit         = true, -- K9Medkit -- moved here from a "gear" grouping, see spec §3.3: its entry point belongs with feed/pet/drink, not with kennels/shop/attachments
-    },
-    Progression = {
-        enabled             = true, -- was the standalone XPProgression switch
-        -- HandlerXPProgression. THIS IS THE SECOND SWITCH, and the one that
-        -- actually decides: group resolution runs AFTER Config.Features, so
-        -- while this said `false`, setting Config.Features.HandlerXPProgression
-        -- to `true` was silently undone (resolved true -> false) and the
-        -- handler rank ladder stayed completely dead. Both must agree. If you
-        -- turn handler XP off again, set BOTH this and
-        -- Config.Features.HandlerXPProgression to `false`, or a future reader
-        -- will hit the same trap from the other direction.
-        --
-        -- The old comment here claimed "two of its six award keys still lack a
-        -- real per-actor mint cooldown". That was true when written and is now
-        -- false: handlerTreatK9 and handlerKennelDeploy were both wired behind
-        -- their own citizenid-keyed, disconnect-surviving mint cooldowns
-        -- (server/medkit.lua, server/kennel.lua). See
-        -- Config.Features.HandlerXPProgression's own header above for the
-        -- go-live reasoning and the one-line revert.
-        HandlerXP           = true,
-        -- MUST AGREE WITH Config.Features.CertificationExpiry above -- this
-        -- table resolves AFTER it and silently wins. Both set true
-        -- 2026-09-01; see that key's own comment for the database caveat.
-        CertificationExpiry = true,
-        Leaderboard         = true, -- K9Leaderboard
-    },
-    Partnership = {
-        -- Split out of a combined "progression" grouping (spec §3.4) --
-        -- HandlerPartnership has its own real entry point (Partner Up)
-        -- unrelated to XP; nothing requires XP tracking to be on for a
-        -- partnership to exist.
-        enabled     = true, -- was the standalone HandlerPartnership switch
-        TenureBonus = true, -- PartnershipTenureBonus
-    },
-    Gear = {
-        enabled          = true, -- was the standalone K9Inventory switch
-        EquipmentShop    = true, -- K9EquipmentShop
-        DeployableKennel = true,
-        PropAttachments  = true,
-    },
-    Training = {
-        enabled       = true, -- the family switch; TrainingMode itself was removed 2026-09-02
-        FetchMechanic = true,
-    },
-    Tablet = {
-        -- Split out of a combined "admin" grouping (spec §3.6) --
-        -- config.lua's own comment on AdminAuditCommands documents
-        -- `CommandTablet = false` + `AdminAuditCommands = true` as "a
-        -- real, plausible config, not a contrived one"; a shared parent
-        -- here would make that documented, intentional combination
-        -- impossible to express. Only the tablet's own two intrinsic
-        -- screens live under it.
-        enabled               = true, -- was the standalone CommandTablet switch
-        RuntimeFeatureControl = true,
-        Theming               = true, -- TabletTheming
-    },
-    Integrations = {
-        -- Narrowed from a combined "admin"/"integration" grouping (spec
-        -- §3.7) -- RadialMenu was removed from this family entirely: it is
-        -- the delivery mechanism for most OTHER families' entry points,
-        -- not a member of this one, so it lives standalone below instead.
-        enabled            = true,
-        DiscordWebhook     = false, -- ships off, see Config.Features.DiscordWebhook's own comment above
-        ResourceAutoDetect = true,
-    },
-
-    -- STANDALONE -- deliberately outside every parent above. Each reason
-    -- is specific, not a shrug; see FEATURE_STRUCTURE_SPEC.md §3 for the
-    -- full writeup (Recall removed 2026-09-02 at the owner's request):
-    HighCommand        = true, -- proven independent in this resource's own code; the single highest-blast-radius flag in this file, already carrying its own lockout protection in server/runtimecontrol.lua
-    PermissionGrants   = true, -- proven independent of the tablet -- server/permissions.lua's grant/revoke command path is gated on IsHighCommand, never CommandTablet
-    AdminAuditCommands = true, -- see this table's own Tablet-family comment above -- the documented, load-bearing reason this cannot share CommandTablet's fate
-    BoneSweepDevTool   = true, -- dev-only, already double-gated by its own convar + ACE, must never share fate with anything else
-    RadialMenu         = true, -- delivery mechanism for most other families' entry points, not a member of any one capability
+    -- ONE MASTER SWITCH PER CAPABILITY FAMILY. That is all this table holds.
+    --
+    -- It used to also carry a duplicate on/off slot for every individual
+    -- feature, so 36 of the 49 features in Config.Features above were
+    -- controlled from TWO places that had to agree -- and when they
+    -- disagreed, this table won, silently, with no error and no console
+    -- line. That is not a hypothetical: Config.Features.HandlerXPProgression
+    -- was set to `true` while this table said `false`, and the entire
+    -- handler rank ladder was dead -- no XP, no rank-ups -- while config.lua
+    -- said in plain sight that it was switched on. Thirteen of those
+    -- duplicate slots were also spelled DIFFERENTLY from the feature they
+    -- controlled (`HUD` for HealthStaminaHUD, `Blood` for BloodTracking,
+    -- and so on), so searching this file for a feature's real name found
+    -- the switch that did nothing and missed the switch that decided.
+    --
+    -- The duplicate slots are gone (2026-09-02, at the owner's request).
+    -- Config.Features above is now the ONE place a feature is turned on or
+    -- off, and this table only answers a different question: "is this whole
+    -- capability available at all?"
+    --
+    -- HOW A FAMILY SWITCH BEHAVES. `enabled = false` forces every feature in
+    -- that family off, whatever Config.Features says, and says so in the
+    -- server console at boot by name. `enabled = true` changes nothing --
+    -- each feature keeps exactly the value you gave it above. So this is a
+    -- one-way master cut-off, never a second opinion.
+    --
+    -- Which features belong to which family is defined once, in
+    -- FEATURE_GROUP_MEMBERS below, and never hand-maintained here.
+    Detection    = { enabled = true }, -- scent tracking and everything built on it (blood, gunpowder, water decay, scent vision)
+    Search       = { enabled = true }, -- searching vehicles and people, and the alerts a find produces
+    Sensory      = { enabled = true }, -- night vision, thermal, the camera feed, proximity audio
+    Combat       = { enabled = true }, -- bite and hold, non-lethal takedowns, dragging, pursuit sprint
+    Movement     = { enabled = true }, -- leash, barks, agility, vehicle entry, door scratching
+    Wellbeing    = { enabled = true }, -- fatigue, the health/stamina HUD, K9-down dispatch, the medkit
+    Progression  = { enabled = true }, -- K9 XP, handler XP, certification expiry, the leaderboard
+    Partnership  = { enabled = true }, -- handler/K9 pairing and the tenure bonus
+    Gear         = { enabled = true }, -- inventory, the equipment shop, deployable kennels, prop attachments
+    Tablet       = { enabled = true }, -- the command tablet, its live feature control and its theming
+    Integrations = { enabled = true }, -- the Discord webhook and resource auto-detection
 }
 
 -- ======================================================================
@@ -871,27 +781,41 @@ Config.FeatureGroups = {
 -- on-defaults pin, and the clamp-and-warn behaviour all actually work
 -- against the REAL function, not a hand-typed duplicate of it.
 -- ======================================================================
+--- Which features belong to which capability family. The ONLY place this is
+--- written down. Each family lists its member Config.Features keys by their
+--- REAL names -- there are no nicknames here any more, because there is no
+--- second on/off slot for a nickname to label.
+---
+--- `base` is the one special member: a family whose `enabled` switch IS that
+--- feature (turning Detection off IS turning ScentTracking off). A family
+--- without a `base` -- Sensory, Combat, Integrations -- is an ordinary
+--- supported shape; its `enabled` switch simply sits above its members
+--- without being any one of them.
 local FEATURE_GROUP_MEMBERS = {
-    Detection    = { base = 'ScentTracking', Blood = 'BloodTracking', Gunpowder = 'GunpowderSniffing', Water = 'WaterTrackingDecay', Vision = 'ScentVision' },
-    Search       = { base = 'SearchZones', ContrabandAlerts = 'ContrabandAlerts', FindAlerts = 'FindAlerts', ScreenFX = 'ContrabandScreenFX' },
-    Sensory      = { NightVision = 'NightVision', ThermalVision = 'ThermalVision', CameraFeedPiP = 'CameraFeedPiP', ProximityAudio = 'ProximityAudioFX' },
-    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint' },
-    Movement     = { base = 'LeashMechanics', BasicBarkSounds = 'BasicBarkSounds', AdvancedBarkRadial = 'AdvancedBarkRadial', AgilityBasicJump = 'AgilityBasicJump', AgilityAdvanced = 'AgilityAdvanced', VehicleEntryExit = 'VehicleEntryExit', DoorInteraction = 'DoorInteraction' },
-    Wellbeing    = { base = 'FatigueSystem', HUD = 'HealthStaminaHUD', K9DownDispatch = 'K9DownDispatch', Medkit = 'K9Medkit' },
-    Progression  = { base = 'XPProgression', HandlerXP = 'HandlerXPProgression', CertificationExpiry = 'CertificationExpiry', Leaderboard = 'K9Leaderboard' },
-    Partnership  = { base = 'HandlerPartnership', TenureBonus = 'PartnershipTenureBonus' },
-    Gear         = { base = 'K9Inventory', EquipmentShop = 'K9EquipmentShop', DeployableKennel = 'DeployableKennel', PropAttachments = 'PropAttachments' },
-    -- No `base` since TrainingMode was removed (2026-09-02, owner's request).
-    -- A base-less family is an ordinary supported shape -- Sensory, Combat and
-    -- Integrations have always been that way; the family's own `enabled` switch
-    -- is then the only thing above its members.
-    Training     = { FetchMechanic = 'FetchMechanic' },
-    Tablet       = { base = 'CommandTablet', RuntimeFeatureControl = 'RuntimeFeatureControl', Theming = 'TabletTheming' },
-    Integrations = { DiscordWebhook = 'DiscordWebhook', ResourceAutoDetect = 'ResourceAutoDetect' },
+    Detection    = { base = 'ScentTracking', 'BloodTracking', 'GunpowderSniffing', 'WaterTrackingDecay', 'ScentVision' },
+    Search       = { base = 'SearchZones', 'ContrabandAlerts', 'FindAlerts', 'ContrabandScreenFX' },
+    Sensory      = { 'NightVision', 'ThermalVision', 'CameraFeedPiP', 'ProximityAudioFX' },
+    Combat       = { 'BiteAndHold', 'NonLethalTakedown', 'PropDragging', 'PursuitSprint' },
+    Movement     = { base = 'LeashMechanics', 'BasicBarkSounds', 'AdvancedBarkRadial', 'AgilityBasicJump', 'AgilityAdvanced', 'VehicleEntryExit', 'DoorInteraction' },
+    Wellbeing    = { base = 'FatigueSystem', 'HealthStaminaHUD', 'K9DownDispatch', 'K9Medkit' },
+    Progression  = { base = 'XPProgression', 'HandlerXPProgression', 'CertificationExpiry', 'K9Leaderboard' },
+    Partnership  = { base = 'HandlerPartnership', 'PartnershipTenureBonus' },
+    Gear         = { base = 'K9Inventory', 'K9EquipmentShop', 'DeployableKennel', 'PropAttachments' },
+    Tablet       = { base = 'CommandTablet', 'RuntimeFeatureControl', 'TabletTheming' },
+    Integrations = { 'DiscordWebhook', 'ResourceAutoDetect' },
 }
 
 local STANDALONE_FEATURE_KEYS = {
     'HighCommand', 'PermissionGrants', 'AdminAuditCommands', 'BoneSweepDevTool', 'RadialMenu',
+    -- FetchMechanic was the sole member of a `Training` family until
+    -- 2026-09-02. With family switches reduced to a one-way cut-off, a
+    -- family holding exactly one feature is just a second switch that does
+    -- the same job as the first -- so the family is gone and fetch is
+    -- turned on or off in Config.Features like any other standalone
+    -- feature. (Training's other members, TrainingMode and the scent games,
+    -- were removed earlier at the owner's request; that is what left it
+    -- with one.)
+    'FetchMechanic',
 }
 
 -- Reverse index (flat Config.Features name -> family name), built once
@@ -899,7 +823,8 @@ local STANDALONE_FEATURE_KEYS = {
 -- separately from it, so the two can never drift apart.
 local FLAT_KEY_TO_FAMILY = {}
 for familyName, members in pairs(FEATURE_GROUP_MEMBERS) do
-    for childKey, flatName in pairs(members) do
+    if members.base then FLAT_KEY_TO_FAMILY[members.base] = familyName end
+    for _, flatName in ipairs(members) do
         FLAT_KEY_TO_FAMILY[flatName] = familyName
     end
 end
@@ -937,51 +862,12 @@ function IsFeatureGroupParentEnabled(flatName)
     return familyTable.enabled ~= false
 end
 
---- @param value boolean
---- @return string -- 'ON' or 'OFF' -- this whole diagnostic is written for
---- an owner reading server console output, not a developer, so it never
---- says "true"/"false" or "boolean"
-local function OnOffWord(value)
-    return value and 'ON' or 'OFF'
-end
+-- The flat-versus-grouped disagreement reporter that used to live here is
+-- GONE, along with the disagreement it reported. Config.FeatureGroups no
+-- longer carries a second on/off value for any feature, so there is nothing
+-- left that can quietly say something different from Config.Features. The
+-- bug class it existed to surface cannot occur any more.
 
---- Prints the warning this section exists to add. Config.Features and
---- Config.FeatureGroups name the SAME flag two different ways, and they
---- disagree, while the family (if any) is still enabled -- so nothing was
---- ever forced off, the grouped value is just a quietly different answer
---- than Config.Features gives, and Config.FeatureGroups always wins. This
---- is the exact shape that silently kept HandlerXPProgression's handler
---- rank ladder minting zero XP after Config.Features.HandlerXPProgression
---- was flipped back to `true` -- see that key's own header comment above
---- for the full incident -- and it is reported here for every flag this
---- resolver handles, not only that one.
----
---- A family whose own `enabled` is `false` gets its OWN, separate warning
---- instead (see `forcedOff` below) -- that case is not silent today and is
---- not this function's job; this one exists specifically for the case that
---- prints nothing today.
---- @param flatName string -- the Config.Features key
---- @param groupedLocation string -- e.g. 'Config.FeatureGroups.Progression.HandlerXP', 'Config.FeatureGroups.Detection.enabled', or 'Config.FeatureGroups.HighCommand'
---- @param flatValue boolean -- Config.FeaturesBeforeGrouping[flatName], i.e. what Config.Features said before this function ever touched it
---- @param groupedValue boolean -- the value Config.FeatureGroups is actually forcing flatName to right now
-local function ReportFlatGroupedDisagreement(flatName, groupedLocation, flatValue, groupedValue)
-    print((
-        "[qbx_k9unit] config.lua: '%s' is set in two places and they disagree. " ..
-        "Config.Features.%s says %s. %s says %s. Your server is actually using " ..
-        "%s right now, because Config.FeatureGroups is read after Config.Features " ..
-        "and always wins. To fix this, make both say the same thing: change %s " ..
-        "to %s if '%s' should be %s, or change Config.Features.%s to %s if %s is " ..
-        "what you actually want. Search this file for '%s' to find both settings."
-    ):format(
-        flatName,
-        flatName, OnOffWord(flatValue),
-        groupedLocation, OnOffWord(groupedValue),
-        OnOffWord(groupedValue),
-        groupedLocation, OnOffWord(flatValue), flatName, OnOffWord(flatValue),
-        flatName, OnOffWord(groupedValue), OnOffWord(groupedValue),
-        flatName
-    ))
-end
 
 --- Runs the resolution described in this section's own header comment.
 --- Safe to call more than once (tests do; production calls it exactly
@@ -999,13 +885,11 @@ end
 --- rather than genuinely re-resolving.
 function ResolveFeatureGroups()
     -- Snapshot Config.Features EXACTLY as authored above, before any
-    -- narrowing -- but ONLY ONCE, ever (the `if` guard below), specifically
-    -- so a second-or-later call can never capture an already-narrowed
-    -- value as if it were the original default -- see this function's own
-    -- doc comment above. Cheap (60 booleans) and always correct. Real use
-    -- beyond the test suite: an operator can inspect this table to see
-    -- what Config.Features would be with Config.FeatureGroups entirely
-    -- ignored, without editing anything.
+    -- narrowing -- but ONLY ONCE, ever (the `if` guard below), so a
+    -- second-or-later call can never capture an already-narrowed value as
+    -- if it were the original. Real use beyond the test suite: an operator
+    -- can inspect this table to see what Config.Features would be with
+    -- every family switch ignored, without editing anything.
     if type(Config.FeaturesBeforeGrouping) ~= 'table' then
         Config.FeaturesBeforeGrouping = {}
         for key, value in pairs(Config.Features) do
@@ -1014,18 +898,20 @@ function ResolveFeatureGroups()
     end
 
     if type(Config.FeatureGroups) ~= 'table' then
-        print('[qbx_k9unit] config.lua: Config.FeatureGroups not found -- Config.Features is in the classic flat format and is loaded unchanged. See FEATURE_STRUCTURE_SPEC.md if you want the new grouped format.')
+        print('[qbx_k9unit] config.lua: Config.FeatureGroups not found -- every family is treated as enabled and Config.Features is used exactly as authored.')
         return
     end
 
     for familyName, members in pairs(FEATURE_GROUP_MEMBERS) do
         local family = Config.FeatureGroups[familyName]
         if family ~= nil and type(family) ~= 'table' then
-            print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a table (got %s) -- ignoring it, Config.Features keeps its existing value(s) for this family. Fix Config.FeatureGroups.%s in config.lua.'):format(familyName, type(family), familyName))
+            print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a table (got %s) -- treating this family as enabled, so Config.Features keeps the values you authored. Fix Config.FeatureGroups.%s in config.lua.'):format(familyName, type(family), familyName))
             family = nil
         end
 
-        local enabled = true -- also the correct value when the family is omitted entirely -- "not mentioned" means "on, nothing overridden", never "off"
+        -- Also the correct value when the family is omitted entirely: "not
+        -- mentioned" means "on, nothing overridden", never "off".
+        local enabled = true
         if family ~= nil then
             if family.enabled == nil then
                 enabled = true
@@ -1037,102 +923,26 @@ function ResolveFeatureGroups()
             end
         end
 
-        -- Named here, per family, and printed below ONLY if non-empty --
-        -- see this function's own header ("SILENT ON THE NORMAL PATH").
-        -- This is the one thing genuinely worth an operator's attention: a
-        -- child whose OWN configured value (explicit here, or its
-        -- original shipped default if not overridden here) was `true`,
-        -- forced to `false` anyway because its parent's `enabled` is
-        -- `false` -- the exact invisible-state shape rule 2 of this
-        -- resource's own task brief exists to surface, not hide.
-        local forcedOff = {}
+        -- A family switch is a ONE-WAY CUT-OFF. enabled = true changes
+        -- nothing at all -- every member keeps exactly the value authored in
+        -- Config.Features. Only `false` does anything, and when it does, it
+        -- names every feature it took down, by name, in the server console.
+        if not enabled then
+            local forcedOff = {}
 
-        for childKey, flatName in pairs(members) do
-            if childKey == 'base' then
-                -- The family's own baseline flag (e.g. ScentTracking for
-                -- Detection) has no separate child slot in
-                -- Config.FeatureGroups -- see that table's own comment,
-                -- and FEATURE_STRUCTURE_SPEC.md §3.5. Its resolved value
-                -- IS `enabled`, directly. Its "own configured value" for
-                -- the forced-off check is its original shipped default,
-                -- same as any other member -- there is no separate slot
-                -- for it to have been set to something else here.
-                --
-                -- `enabled` is ALSO this flag's "grouped counterpart", the
-                -- same relationship every other child below has with its
-                -- own Config.FeatureGroups.<Family>.<child> slot -- with
-                -- one real difference worth knowing: an ordinary child left
-                -- out of Config.FeatureGroups falls back to the flat
-                -- default below, so an omitted child can never disagree
-                -- with it. `enabled` does NOT do that -- omitted or left
-                -- out entirely, it defaults to `true` regardless of what
-                -- the flat default says (this function's own comment
-                -- above) -- so this flag can disagree with its flat
-                -- default even with nothing explicitly written here at
-                -- all.
-                local flatValue = Config.FeaturesBeforeGrouping[flatName]
-                Config.Features[flatName] = enabled
-                if not enabled and flatValue == true then
+            local function narrow(flatName)
+                if Config.Features[flatName] == true then
                     forcedOff[#forcedOff + 1] = flatName
-                elseif enabled and flatValue == false then
-                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s.enabled'):format(familyName), flatValue, enabled)
                 end
-            else
-                -- Default: the PRISTINE original shipped value (see this
-                -- function's own doc comment on why this must never read
-                -- Config.Features' own live value here) -- i.e. "not
-                -- overridden in Config.FeatureGroups".
-                local flatValue = Config.FeaturesBeforeGrouping[flatName]
-                local childValue = flatValue
-                local explicitOverride = nil
-                if family ~= nil and family[childKey] ~= nil then
-                    if type(family[childKey]) ~= 'boolean' then
-                        print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.%s is not a boolean (got %s) -- using Config.Features.%s\'s original shipped value instead. Fix Config.FeatureGroups.%s.%s in config.lua.'):format(familyName, childKey, type(family[childKey]), flatName, familyName, childKey))
-                    else
-                        childValue = family[childKey]
-                        explicitOverride = family[childKey]
-                    end
-                end
-                Config.Features[flatName] = enabled and childValue
-                if not enabled and childValue == true then
-                    forcedOff[#forcedOff + 1] = flatName
-                elseif enabled and explicitOverride ~= nil and explicitOverride ~= flatValue then
-                    -- The family stays enabled AND someone explicitly wrote
-                    -- a value here that disagrees with the flat default --
-                    -- the exact case `forcedOff` above cannot see, because
-                    -- nothing was forced off: the family never said no, the
-                    -- grouped value is just quietly a different answer than
-                    -- Config.Features gives, and it always wins. Never
-                    -- fires for a child simply left OUT of
-                    -- Config.FeatureGroups -- `childValue` already equals
-                    -- `flatValue` in that case, so there is nothing to
-                    -- disagree about.
-                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s.%s'):format(familyName, childKey), flatValue, explicitOverride)
-                end
+                Config.Features[flatName] = false
             end
-        end
 
-        if forcedOff[1] then
-            table.sort(forcedOff)
-            print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.enabled is false -- this also forced the following, which were themselves set (or default) to true, off: %s. This is not a bug; it is what a parent switch does. Set Config.FeatureGroups.%s.enabled = true if any of these should actually be reachable.'):format(familyName, table.concat(forcedOff, ', '), familyName))
-        end
-    end
+            if members.base then narrow(members.base) end
+            for _, flatName in ipairs(members) do narrow(flatName) end
 
-    for _, flatName in ipairs(STANDALONE_FEATURE_KEYS) do
-        local value = Config.FeatureGroups[flatName]
-        if value ~= nil then
-            if type(value) ~= 'boolean' then
-                print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a boolean (got %s) -- Config.Features.%s keeps its existing value. Fix Config.FeatureGroups.%s in config.lua.'):format(flatName, type(value), flatName, flatName))
-            else
-                local flatValue = Config.FeaturesBeforeGrouping[flatName]
-                Config.Features[flatName] = value
-                -- Standalone flags have no parent `enabled` to consult, so
-                -- unlike a family child above, this comparison is always
-                -- "currently decisive" -- there is no disabled-family case
-                -- that already explains a mismatch some other way.
-                if value ~= flatValue then
-                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s'):format(flatName), flatValue, value)
-                end
+            if forcedOff[1] then
+                table.sort(forcedOff)
+                print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.enabled is false, so the following features are OFF no matter what Config.Features says: %s. This is not a bug; it is what a family switch does. Set Config.FeatureGroups.%s.enabled = true if any of these should be reachable.'):format(familyName, table.concat(forcedOff, ', '), familyName))
             end
         end
     end
