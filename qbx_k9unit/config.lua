@@ -350,136 +350,20 @@ Config.Features = {
     K9Inventory          = true,
     XPProgression        = true,
 
-    -- server/progression.lua's AwardHandlerXP/GetHandlerXPTier -- a SEPARATE
-    -- accumulated total from XPProgression above (own `handler_xp` column
-    -- on the existing k9_progression row, own Config.HandlerXPTiers ladder,
-    -- own Config.HandlerXP.awards table) for actions a HUMAN HANDLER
-    -- performs, as opposed to XPProgression's K9-mechanical actions
-    -- (search/track/bite/takedown). See Config.HandlerXPTiers' own header
-    -- for the full "why a second total, not the same one" reasoning.
+    -- Handler XP: a SEPARATE total from the K9's own XP above, for what the
+    -- HANDLER does rather than what the dog does. Its own ladder
+    -- (Config.HandlerXPTiers) and its own award table (Config.HandlerXP).
     --
-    -- CODE LANDED (this pass, coder-backend): AwardHandlerXP/GetHandlerXPTier
-    -- now exist in server/progression.lua, K9Store.HandlerXP_Get/
-    -- HandlerXP_UpsertAdd now exist in server/datastore.lua, this flag has
-    -- its own FEATURE_TIERS entry (server/runtimecontrol.lua) and its own
-    -- `block.HandlerXPProgression`/`feature.HandlerXPProgression`
-    -- per-person path (server/progression.lua's
-    -- IsHandlerXPProgressionPermittedForCitizenId, the identical four-step
-    -- shape every other feature here already gets) -- so this key is back.
+    -- SHIPS ON. Every award key that can be farmed is throttled by a
+    -- per-actor mint cooldown that survives a disconnect/reconnect, so this
+    -- is safe to leave on -- see DEVELOPER_REFERENCE.md §22 for which key is
+    -- capped at what, and the arithmetic behind each number.
     --
-    -- STILL DEFAULT FALSE, DELIBERATELY -- for a NARROWER reason than
-    -- before this pass (the missing-code gap above is closed; a real
-    -- anti-farm gap on two specific award keys is not). Of the six award
-    -- keys in Config.HandlerXP.awards below, FOUR are wired this pass and
-    -- each rides a real per-actor throttle of its own:
-    -- `handlerCertifyK9` (server/certifications/'s GrantCertification
-    -- AND GrantCertificationOffline) is gated by that file's own
-    -- CertifyXpMintCooldown -- a DEDICATED per-(granter, target) MINT
-    -- cooldown (24 real hours) on the AWARD itself, added by the same
-    -- economy audit (2026-08-26) that found and closed a live farm loop
-    -- here. This bullet used to claim handlerCertifyK9 was "already gated
-    -- by that file's own per-granter IsCertifyActionOnCooldown check" --
-    -- THAT WAS FALSE, by this exact section's own standard:
-    -- IsCertifyActionOnCooldown is a flat 1,500ms per-granter fat-finger
-    -- guard on the grant/revoke ACTION (same shape as handlerTreatK9's
-    -- MedkitCooldown and handlerKennelDeploy's DeployCooldown below,
-    -- neither of which this comment ever credited as a mint guard), not a
-    -- per-actor MINT cooldown -- and with Config.AllowSelfCertification
-    -- true by default, an eligible certifier could `/k9certify <self>` then
-    -- `/k9decertify <self>` on repeat, 3 seconds per cycle, 60,000 XP/hr
-    -- gross -- worse than either of the two awards this comment already
-    -- refused to wire below for exactly this class of gap. Corrected here
-    -- and at server/certifications/'s own CertifyXpMintCooldown
-    -- declaration comment (search that file for "FALSIFIED CLAIM"), not
-    -- just patched around. handlerCertifyK9 is genuinely safe to wire NOW,
-    -- for the same reason this comment always intended: a first
-    -- certification of a genuinely new person still pays every time, and a
-    -- repeat mint against the SAME (granter, target) pair inside 24 hours
-    -- does not -- see CertifyXpMintCooldown's own declaration comment for
-    -- the full arithmetic. The three
-    -- `handlerPartnershipTenure{1,7,30}Day` milestones (server/tenure.lua's
-    -- CheckTenureMilestonesForK9, one-time-per-partnership-row, never
-    -- repeating -- the SAME CAS guard the K9-side milestones already rely
-    -- on) are unaffected by this correction. The remaining TWO --
-    -- `handlerTreatK9` (server/medkit.lua) and
-    -- `handlerKennelDeploy` (server/kennel.lua) -- are DELIBERATELY LEFT
-    -- UNWIRED this pass: AwardHandlerXP is called from NOWHERE for either
-    -- of those two actionKeys. Neither file has a per-actor XP MINT
-    -- cooldown today -- server/medkit.lua's own MedkitCooldown is keyed by
-    -- the TARGET K9's citizenid, not the USING handler's, and
-    -- server/kennel.lua's own DeployCooldown throttles the ACTION, not a
-    -- per-actor mint -- and the arithmetic below (unchanged, still
-    -- accurate) shows exactly why minting through either unthrottled would
-    -- be unsafe even with the shared budget backing it up. Concretely,
-    -- WITHOUT a dedicated per-actor mint cooldown,
-    -- Config.DeployableKennel.deployCooldownMs's own 5000ms default lets a
-    -- SOLO handler mint handlerKennelDeploy's 8 XP every 5 seconds with no
-    -- accomplice and no per-actor throttle at all -- 5,760 XP/hr
-    -- uncapped, which alone would exhaust the ENTIRE shared 3,600 XP/hr
-    -- budget (the same budget XPProgression's own K9 awards rely on to
-    -- keep Elite over two hours away) in under 40 minutes. The shared
-    -- budget still caps the damage (nobody can mint UNLIMITED XP), but it
-    -- would make kennel-deploy-spam the fastest way to cap out a
-    -- citizenid's TOTAL K9+handler XP for the hour, crowding out every
-    -- legitimate award.
-    --
-    -- CLOSED (WIRING PASS, coder-backend -- the "top handler rank cannot be
-    -- reached by playing" anti-farm audit finding): the "flip this only
-    -- once..." condition directly above is now MET, for real, not just on
-    -- paper. server/medkit.lua now declares a dedicated HandlerTreatXpMintCooldown
-    -- (a per-ACTOR, citizenid-keyed mint cooldown, 30 real minutes, entirely
-    -- separate from MedkitCooldown) and awards handlerTreatK9 (12 XP) only
-    -- through it, and only for a GENUINE heal -- never a no-op top-off of an
-    -- already-healthy K9. server/kennel.lua now declares
-    -- HandlerKennelDeployXpMintCooldown (per-actor, citizenid-keyed, 60 real
-    -- minutes, entirely separate from DeployCooldown) and awards
-    -- handlerKennelDeploy (8 XP) only at a CONFIRMED new placement, through
-    -- it. Both new trackers survive the actor's own disconnect/reconnect
-    -- (citizenid-keyed, swept, never cleared on playerDropped) -- closing
-    -- the specific farm shape this section's own arithmetic above
-    -- describes, including the disconnect/reconnect loop that would
-    -- otherwise let a scripted relog force a fresh kennel deploy (and a
-    -- fresh mint) on demand. RESULT: handlerTreatK9 is capped at
-    -- 12 XP / 30 min = 24 XP/hr per actor; handlerKennelDeploy at
-    -- 8 XP / 60 min = 8 XP/hr per actor -- 32 XP/hr combined, nowhere near
-    -- the shared 3,600 XP/hr budget, and nowhere near fast enough to reach
-    -- Master (500 XP) "in an afternoon" (see Config.HandlerXPTiers' own
-    -- header below for the full time-to-Master arithmetic, both theoretical-
-    -- ceiling and realistic-pace). Full derivation and file-by-file citation:
-    -- server/progression.lua's own "HANDLER XP TIER UNLOCKS" section,
-    -- "CLOSED (WIRING PASS...)" paragraph.
-    --
-    -- GO-LIVE DECISION TAKEN, 2026-08-27 -- THIS NOW SHIPS `true`.
-    --
-    -- The paragraph that used to sit here said this flag stayed `false` as a
-    -- go-live decision separate from the anti-farm fix, and that turning it
-    -- on was "a genuine choice... set this to `true` once you're ready."
-    -- That reasoning was correct at the time and is now spent, for one
-    -- reason: while it shipped `false`, the entire handler rank ladder was
-    -- DEAD. AwardHandlerXP (server/progression.lua) hard-returns on this
-    -- flag before doing anything, and it is the only function anywhere that
-    -- mints Handler XP -- so with the flag off, all six award keys fire,
-    -- pass their cooldowns, call AwardHandlerXP, and mint exactly zero. Not
-    -- a slow ladder: no ladder. Meanwhile the tablet advertises the ranks.
-    --
-    -- A rank a player can see and can never earn is worse than no rank at
-    -- all, and the owner of this resource is not going to find line 481 of a
-    -- config file to switch it on. Verified independently before flipping:
-    -- the anti-farm gap that originally forced the `false` is genuinely
-    -- closed (both new mints are per-actor, citizenid-keyed, survive
-    -- disconnect/reconnect, and sit under the shared XPMintBudget), and the
-    -- three awards that go live alongside it were already wired and already
-    -- protected -- handlerCertifyK9 by Config.CertifyMaxNewGranteesPerDay,
-    -- the handlerPartnershipTenure{1,7,30}Day milestones by tenure's own
-    -- break-and-reform reset (breaking a partnership LOSES progress rather
-    -- than re-minting it).
-    --
-    -- TO TURN IT BACK OFF: set this to `false`. That is the whole revert --
-    -- nothing else in this file or any other needs to change, and no data
-    -- is lost by doing it (already-earned Handler XP stays in the database
-    -- and simply stops accruing). tests/featuregroups_spec.lua's "never
-    -- silently re-enable" guard still pins this value; it now pins `true`,
-    -- so an accidental drift in either direction still fails a test.
+    -- TO TURN IT OFF: set this to `false`. That is the whole revert. No data
+    -- is lost -- already-earned Handler XP stays in the database and simply
+    -- stops accruing. Note that with this off the handler rank ladder is
+    -- completely dead (nothing else mints Handler XP) while the tablet still
+    -- advertises the ranks.
     HandlerXPProgression = true,
 
     HealthStaminaHUD     = true,
@@ -2315,199 +2199,34 @@ Config.XPTiers = {
 }
 
 -- ======================================================================
--- HANDLER XP TIERS (Config.Features.HandlerXPProgression,
--- server/progression.lua's AwardHandlerXP/GetHandlerXPTier). The owner's
--- own ask: a "partners and levels" tablet tab for BOTH K9s and handlers.
--- Config.XPTiers above already answers the K9 half; this is the handler
--- half.
+-- HANDLER XP TIERS -- the ranks a HANDLER climbs, separate from the K9's own
+-- ladder (Config.XPTiers above). Switched on by
+-- Config.Features.HandlerXPProgression.
 --
--- WHY A SEPARATE LADDER, NOT A SECOND READING OF Config.XPTiers: every
--- effect on Config.XPTiers (speedMultiplier/scentRangeMultiplier/
--- medkitCooldownMultiplier) acts on a K9's own ped -- meaningless applied
--- to a human handler. Rather than invent effects for a handler on the SAME
--- ladder (which would also mean a K9's own combat/search grinding
--- silently unlocked handler perks, and a handler's own certifying/treating
--- silently unlocked K9 speed/scent, for the SAME citizenid across two
--- unrelated skill tracks -- see Config.HandlerXP's own header for why that
--- was rejected), this is its own ladder, fed by its own
--- Config.HandlerXP.awards table, walked the identical way
--- server/progression.lua's ResolveTier already walks Config.XPTiers
--- (ascending, first entry MUST be xp = 0 -- same mandatory baseline
--- contract).
+-- Two totals, one row per person: a player who is sometimes the dog and
+-- sometimes the handler keeps two separate standings, each earned only by
+-- that role's own actions.
 --
--- STILL ONE ROW PER CITIZENID, NOT A SECOND k9_progression-shaped TABLE:
--- persisted as `k9_progression.handler_xp`, a second column on the SAME
--- row XPTiers' own total (`xp`) already lives on -- see
--- sql/migrations/0017_add_k9_progression_handler_xp.sql's own header for
--- the full schema reasoning. One citizenid, one row, TWO independent
--- totals -- a person who is sometimes the K9 and sometimes the handler
--- keeps two separate standings, each earned only by that role's own
--- actions, rather than one shared number blending unrelated skill tracks.
+-- TUNING RULES, THE ONLY TWO THAT MATTER:
+--   * The first entry MUST be `xp = 0`. The ladder is walked ascending and
+--     that entry is the baseline everyone starts on.
+--   * Each tier restates every lower tier's bonus fields plus its own, on
+--     purpose -- a handler's benefits should only ever grow with rank, never
+--     drop out at a higher one.
 --
--- EVERY EFFECT FIELD BELOW IS INTENDED TO BE OPTIONAL AND DEFENSIVELY
--- BOUNDED, same "consulted only after an existing gate has already allowed
--- the action, can only ever shorten a wait or lengthen a distance, never
--- grant access" posture Config.XPTiers' own medkitCooldownMultiplier
--- already established for the K9 side (GetXPTierMedkitCooldownMs,
--- server/progression.lua).
+-- Every bonus field here can only shorten a wait or lengthen a distance. It
+-- is read AFTER an existing permission check has already allowed the action,
+-- so no rank can ever grant access to something a handler could not
+-- otherwise do.
 --
--- DEAD-CONFIG-FIELD AUDIT RESOLUTION (coder-backend, this pass; supersedes
--- the "None of that exists" correction that used to sit in this exact spot
--- -- that correction was accurate when written and is now itself stale,
--- exactly the trap this resource's "note at the field, not a thousand
--- lines away" rule exists to prevent): a full audit found these three
--- fields genuinely unread, named the three missing accessors that would
--- need to exist, and required each to be either wired or removed --
--- "known and disclosed" is not an acceptable third state. Resolution,
--- field by field:
---   * medkitTreatCooldownMultiplier -- WIRED. GetHandlerXPTierMedkitCooldownMs
---     (server/progression.lua) now exists and is consulted by
---     server/medkit.lua's RunUseK9MedkitMutation, keyed on the USING
---     player's own citizenid, chained on top of Config.XPTiers' own
---     medkitCooldownMultiplier (the TARGET K9's tier) rather than
---     replacing it -- a high-tier handler treating a high-tier K9 gets
---     both reductions at once.
---   * kennelDeployCooldownMultiplier -- WIRED. GetHandlerXPTierKennelDeployCooldownMs
---     (server/progression.lua) now exists and is consulted by
---     server/kennel.lua's requestDeployKennel handler, keyed on the
---     deploying handler's own citizenid (the same identity DeployCooldown
---     itself is already keyed by, unlike the medkit case above).
---   * leashRangeMultiplier -- REMOVED, not wired (this pass judged wiring
---     it more than a small, safe change -- pulled rather than left half
---     done). Config.LeashMaxDistance is consulted as a raw, shared
---     constant in at least four places across three files today
---     (server/main.lua's CheckLeashEligibility attach-time proximity
---     check; client/movement.lua's LEASH_PULL_ZONE_FACTOR/
---     LEASH_HARD_CAP_FACTOR elastic-constraint math, which actually
---     enforces the leash mechanically once attached; client/leashvisual.lua's
---     rope max-length; client/radial.lua's pre-attach candidate search),
---     with NO per-citizenid channel anywhere in that chain -- server/main.lua's
---     own header explicitly documents reusing the raw base value at
---     attach time as deliberate. Wiring a per-handler bonus correctly
---     would mean threading a brand-new value through the leash
---     consent-handshake payload AND updating the live elastic-constraint
---     math in client/movement.lua to match (an attach that succeeds at a
---     rank-widened range but is then immediately "pulled back" by a
---     client unaware of that widening is the exact half-wire this
---     resource's own rule forbids), deciding WHICH of the two leashed
---     parties' rank should apply, and deciding whether a mid-session rank-up
---     needs a live re-push the way Config.XPTiers' own PushTierSnapshot
---     gives the K9 side. Real design work, not an accessor to mirror --
---     if this is reintroduced later, do that work in full rather than
---     bolting a multiplier onto the existing raw-constant reads.
---
--- FEEDBACK-LOOP SAFETY CHECKED BEFORE WIRING EITHER COOLDOWN MULTIPLIER
--- (both shorten the cooldown on an action Config.HandlerXP.awards also
--- prices -- handlerTreatK9 for medkit, handlerKennelDeploy for kennel
--- deploy -- so a rank that shortens either could, in principle, make the
--- ladder faster to climb the higher you climb it): NO LOOP EXISTS TODAY,
--- because AwardHandlerXP is called from nowhere for either actionKey (see
--- this file's own Config.Features.HandlerXPProgression header, "DELIBERATELY
--- LEFT UNWIRED", for the full reasoning and arithmetic). THIS COOLDOWN
--- REDUCTION MUST BE ACCOUNTED FOR THE DAY EITHER AWARD IS WIRED, THOUGH --
--- see server/progression.lua's own doc comment on
--- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs
--- ("HANDLER XP TIER UNLOCKS" section) for the exact rank-reduced worst-case
--- numbers (31500ms combined medkit floor, 3000ms kennel-deploy floor) and
--- the binding requirement (a dedicated per-actor mint cooldown, sized
--- against THOSE numbers, never derived from MedkitCooldown/DeployCooldown
--- itself). tests/medkit_spec.lua and tests/kennel_spec.lua each carry a
--- SOURCE AUDIT test that fails outright if either award is ever wired
--- without that companion mint cooldown also present.
---
--- RESCALED 2026-08-26 (owner-directed audit: "the handler rank ladder
--- cannot be reached in a human lifetime") -- REPLACES the "UNREVIEWED
--- PLACEHOLDER NUMBERS, tune freely" text that used to sit here. What
--- follows is the real arithmetic behind the new thresholds below, worked
--- out against the REAL shipped Config.HandlerXP.awards values, the REAL
--- per-award anti-farm cooldowns, and the REAL shared XP mint budget
--- (server/progression.lua's XP_MINT_BUDGET_CAP_XP = 3600 XP/hour, SHARED
--- with the K9 side's own Config.XP.awards for the same citizenid) -- not
--- assumed from the old thresholds' own history. Re-derive this yourself
--- before ever retuning these numbers again; do not carry the conclusion
--- forward without re-checking the inputs it depends on.
---
--- THE REAL EARNABLE SET, TODAY: of the six Config.HandlerXP.awards keys,
--- only FOUR are actually wired to AwardHandlerXP (see
--- Config.Features.HandlerXPProgression's own header, "STILL DEFAULT
--- FALSE" section, for exactly which and why):
---   handlerCertifyK9              50 XP -- gated by
---     server/certifications/'s CertifyXpMintCooldown, a MINT cooldown
---     per (granter, target) PAIR, 24 REAL HOURS. This is NOT an
---     hours-of-play rate the way the K9 ladder's own mechanics are -- it
---     can only be earned once per unique NEW person you personally
---     certify (once per 24h for that same pair after that). It depends on
---     how many genuinely new K9 candidates exist for you to certify, not
---     on how many hours you personally spend on duty.
---   handlerPartnershipTenure1Day/7Day/30Day -- 15 / 40 / 100 XP, each
---     ONE-TIME, EVER, per partnership (server/tenure.lua) -- together a
---     HARD, LIFETIME CAP of 15+40+100 = 155 XP for staying partnered with
---     the SAME K9 for 30 real-world days, gated on both of you being
---     online and near each other at the moment each threshold is checked
---     (a light bar, not a grind). This is a WALL-CLOCK trickle, not an
---     hours-played one -- idling the partnership for a year pays the exact
---     same 155 XP total as 30 days does.
--- handlerTreatK9 (12 XP) and handlerKennelDeploy (8 XP) are DELIBERATELY
--- UNWIRED today (Config.Features.HandlerXPProgression's own header) -- they
--- pay ZERO XP right now, no matter how many times either action is
--- performed, until a dedicated per-actor mint cooldown is added to
--- server/medkit.lua/server/kennel.lua. Any arithmetic that counts these
--- two as earning something today is wrong.
---
--- WHAT THIS MEANS, PUT TOGETHER: a handler who never personally certifies
--- anyone new -- most handlers, most of the time -- can earn AT MOST 155
--- XP, EVER, from a single partnership, no matter how many hours or how
--- many real-world YEARS they play. Under the OLD thresholds
--- (750/2500/6000) that handler could not reach even the FIRST rank, ever.
--- That is a HARDER failure than "3.2 years to the top" (the figure this
--- audit started from): it is "never, for most players, at any threshold
--- above 155, regardless of played time." The 3.2-year figure is roughly
--- the right order of magnitude only for the OTHER case -- a handler who
--- actively certifies other people at a generous, sustained pace of ~2 new
--- candidates/week (100 XP/week): (6000 - 155) / 100-per-week is about 58
--- weeks (a bit over a year) to the OLD Master threshold alone, and even
--- that undercounts the real wait, since 2 genuinely NEW candidates a week
--- is an optimistic pace few servers sustain indefinitely.
---
--- The shared 3600-XP/hour mint budget is NOT the binding constraint here,
--- in either direction -- neither wired source can plausibly approach
--- anywhere near 3600 XP inside one hour (certifying dozens of distinct new
--- people in an hour is not realistic; the single biggest one-time tenure
--- milestone is only 100 XP) -- named for completeness, not because it
--- shapes the numbers below.
---
--- UPDATE (WIRING PASS, coder-backend -- closes the gap this whole section
--- above describes): handlerTreatK9 (12 XP) and handlerKennelDeploy (8 XP)
--- are NO LONGER unwired. Both now pay, each gated by its own dedicated
--- per-actor mint cooldown (server/medkit.lua's HandlerTreatXpMintCooldown,
--- 30 real minutes; server/kennel.lua's HandlerKennelDeployXpMintCooldown,
--- 60 real minutes -- see each file's own declaration comment for the full
--- arithmetic, and server/progression.lua's "HANDLER XP TIER UNLOCKS"
--- section, "CLOSED (WIRING PASS...)" paragraph, for the consolidated
--- write-up). This is now exactly the repeatable, solo, hours-based handler
--- mechanic the "STILL A REAL GAP" note below the table used to say this
--- ladder was missing: handlerTreatK9 caps at 24 XP/hr per actor,
--- handlerKennelDeploy at 8 XP/hr per actor, 32 XP/hr combined -- small next
--- to a K9's own 500+ XP/hr realistic pace (by design: this is a support
--- action, not the main K9 gameplay loop), but real, repeatable, and
--- entirely independent of certifying anyone or maintaining a partnership.
--- A handler who never personally certifies anyone new is THEREFORE NO
--- LONGER CAPPED AT 155 XP -- see the table's own "STILL A REAL GAP" note
--- below, now itself corrected, for the recomputed time-to-Master.
---
--- RESCALED THRESHOLDS BELOW, anchored to what a handler can ACTUALLY,
--- REPEATABLY earn today (certifying + tenure), not to an hours-of-duty
--- curve the way Config.XPTiers' own K9 arithmetic is -- there is currently
--- no repeatable, solo, hours-based handler mechanic to anchor to (see the
--- "STILL A REAL GAP" note below the table for why, and what would fix
--- that properly). Each tier's own comment says, in plain English, roughly
--- what a real player needs to actually do to get there. Cumulative by
--- design (each tier restates every lower tier's own bonus fields plus its
--- own new one) so a handler's benefits only ever grow with rank, never
--- drop out at a higher tier the way Config.XPTiers' own Elite row
--- currently omits medkitCooldownMultiplier (an existing, pre-dating
--- inconsistency on the K9 ladder this pass observed but does not touch --
--- flagged for whoever owns that table's own tuning next).
+-- WHAT A HANDLER CAN ACTUALLY EARN, so these thresholds mean something:
+-- certifying a genuinely new person (50 XP, once per person per day), three
+-- one-time partnership milestones worth 155 XP total for the life of a
+-- partnership, and two repeatable support actions -- treating the K9 and
+-- deploying a kennel -- worth 32 XP/hr combined. Full derivation, the audit
+-- that forced the rescale, and the three tier effect fields that were wired
+-- or removed: DEVELOPER_REFERENCE.md §22.
+-- ======================================================================
 Config.HandlerXPTiers = {
     { xp = 0,   label = 'Rookie Handler' }, -- everyone starts here -- day one on the job, no XP earned yet
     -- CERTIFIED HANDLER (medkitTreatCooldownMultiplier -- WIRED,
