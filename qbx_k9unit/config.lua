@@ -5130,6 +5130,19 @@ Config.Compat = {
         ambulance = {
             override = nil,
             candidates = {
+                -- FIRST on purpose (added 2026-09-02): this is the ambulance
+                -- script this server actually runs, and it is CONFIRMED --
+                -- the adapter was written against the resource's own source,
+                -- not a secondhand citation. It is also the reason the
+                -- ambulance signal used to resolve to "unknown" here:
+                -- sc-ambulance is a qbx_medical compatibility layer and
+                -- writes the same metadata, but the qbx_medical adapter is
+                -- gated on qbx_medical itself being started, which it is
+                -- not on this server. Order matters only in that the first
+                -- STARTED candidate with a working adapter wins, so putting
+                -- the confirmed, actually-installed one first costs nothing
+                -- and skips four probes that cannot match.
+                'sc-ambulance',
                 'qbx_medical',
                 'qb-ambulancejob',
                 'ps-ambulancejob',

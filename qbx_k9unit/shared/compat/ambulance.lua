@@ -355,3 +355,70 @@ end)
 K9Compat.RegisterAdapter('ambulance', 'esx_ambulancejob', function(_realm)
     return nil
 end)
+
+-- ======================================================================
+-- sc-ambulance -- CONFIRMED, by reading the resource's own source (the
+-- owner supplied the script directly on 2026-09-02, so this is the
+-- strongest evidence class this file recognises: not a secondhand
+-- citation, the actual file).
+--
+-- WHAT WAS READ: sc-ambulance/server/qbx_medical_compat.lua exports
+-- `IsDead(playerId)` and `IsLaststand(playerId)`, each reading
+-- `Player.PlayerData.metadata.isdead` / `.inlaststand` through
+-- QBCore.Functions.GetPlayer, and each returning `false` (never nil) when
+-- the player or metadata is absent.
+--
+-- WHY THIS ADAPTER EXISTS AT ALL: sc-ambulance is itself a qbx_medical
+-- COMPATIBILITY layer -- it writes the same two metadata fields the
+-- qbx_medical adapter above already reads. But that adapter is gated on
+-- `GetResourceState('qbx_medical') == 'started'`, and on a server running
+-- sc-ambulance INSTEAD of qbx_medical that check fails, so the whole
+-- ambulance signal resolved to nil (UNKNOWN) and every caller silently
+-- fell back to this resource's own best-effort guess. The mechanism was
+-- right; it was keyed to a resource name this server does not run.
+--
+-- WHY IT CALLS THE EXPORTS RATHER THAN RE-READING METADATA: the two
+-- adapters above read metadata directly because that is the only contract
+-- their resources publish. sc-ambulance publishes real exports, so this
+-- goes through them -- if it ever changes how it stores that state
+-- internally, its own exports keep answering correctly and this adapter
+-- does not silently start reading a field that no longer exists.
+--
+-- THE ONE CARE POINT: those exports return `false` for "player not found"
+-- as well as for "confirmed alive", so a bare `false` is NOT the
+-- positive, confirmed-alive signal this file's header requires. This
+-- adapter therefore confirms the player actually resolves through
+-- qbx_core FIRST, and only then treats `false` as a real answer;
+-- otherwise it returns nil (UNKNOWN), which is the honest reading and the
+-- fail-closed direction this file already establishes.
+-- ======================================================================
+K9Compat.RegisterAdapter('ambulance', 'sc-ambulance', function(realm)
+    -- Server-only, same as the two adapters above: these exports resolve a
+    -- player by server id through qbx_core, which is a server-side concept.
+    if realm ~= 'server' then return nil end
+
+    return {
+        --- @param src number
+        --- @return boolean|nil downed -- true/false/nil, see header
+        IsDowned = function(src)
+            if GetResourceState('sc-ambulance') ~= 'started' then return nil end
+
+            -- Establishes that `false` below is a real answer about a real
+            -- player, not this export's own not-found fallback.
+            local playerOk, player = pcall(function() return exports.qbx_core:GetPlayer(src) end)
+            if not playerOk or type(player) ~= 'table' then return nil end
+
+            local deadOk, isDead = pcall(function() return exports['sc-ambulance']:IsDead(src) end)
+            if not deadOk or type(isDead) ~= 'boolean' then return nil end
+            if isDead then return true end
+
+            local standOk, inLaststand = pcall(function() return exports['sc-ambulance']:IsLaststand(src) end)
+            if not standOk or type(inLaststand) ~= 'boolean' then return nil end
+            if inLaststand then return true end
+
+            -- Both answered, both false, against a player that genuinely
+            -- resolved -- a positive "confirmed upright" reading.
+            return false
+        end,
+    }
+end)

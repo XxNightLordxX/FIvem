@@ -374,20 +374,41 @@ local function newAmbulanceFixture(opts)
         end,
     }
 
+    -- sc-ambulance answers through its own exports rather than by reading
+    -- metadata (see that adapter's own header for why), so this fixture
+    -- stubs them. `scDead`/`scLaststand` are keyed by src; the string
+    -- 'throw' simulates the export itself erroring, and a non-boolean
+    -- simulates a malformed return.
+    local scDead = opts.scDead or {}
+    local scLaststand = opts.scLaststand or {}
+    local scAmbulanceMethods = {
+        IsDead = function(_self, src)
+            if scDead[src] == 'throw' then error('simulated sc-ambulance IsDead crash') end
+            return scDead[src]
+        end,
+        IsLaststand = function(_self, src)
+            if scLaststand[src] == 'throw' then error('simulated sc-ambulance IsLaststand crash') end
+            return scLaststand[src]
+        end,
+    }
+
     local k9CompatStub, registered = newK9CompatStub()
 
     local env = Sandbox.newEnv({
         K9Compat = k9CompatStub,
         GetResourceState = GetResourceState,
-        exports = newExportsStub({ ['qbx_core'] = qbxCoreMethods }),
+        exports = newExportsStub({ ['qbx_core'] = qbxCoreMethods, ['sc-ambulance'] = scAmbulanceMethods }),
     })
     Sandbox.loadInto('../shared/compat/ambulance.lua', env)
 
     return registered, env
 end
 
-local AMBULANCE_CANDIDATES = { 'qbx_medical', 'qb-ambulancejob', 'ps-ambulancejob', 'wasabi_ambulance', 'esx_ambulancejob' }
-local AMBULANCE_CONFIRMED = { ['qbx_medical'] = true, ['qb-ambulancejob'] = true }
+local AMBULANCE_CANDIDATES = { 'sc-ambulance', 'qbx_medical', 'qb-ambulancejob', 'ps-ambulancejob', 'wasabi_ambulance', 'esx_ambulancejob' }
+-- sc-ambulance joined the CONFIRMED set on 2026-09-02 on the strongest
+-- evidence this file recognises: the owner supplied the resource itself, so
+-- the adapter was written against its real source rather than a citation.
+local AMBULANCE_CONFIRMED = { ['sc-ambulance'] = true, ['qbx_medical'] = true, ['qb-ambulancejob'] = true }
 
 t.test('ambulance.lua registers every Config.Compat candidate exactly once, in the "ambulance" system', function()
     local registered = newAmbulanceFixture()
@@ -489,5 +510,91 @@ for _, resourceName in ipairs({ 'qbx_medical', 'qb-ambulancejob' }) do
         t.isTrue(result ~= nil, 'false must be a distinct value from nil, not merely falsy')
     end)
 end
+
+-- ----------------------------------------------------------------------
+-- sc-ambulance specifically. Confirmed adapter, and the only one that
+-- answers through the resource's OWN exports rather than by reading
+-- qbx_core metadata -- so it has a failure mode the other two do not:
+-- sc-ambulance's IsDead/IsLaststand return `false` for "no such player"
+-- as well as for "confirmed alive", and this file's whole contract is that
+-- `false` means CONFIRMED upright. These tests pin the resolution that
+-- keeps those apart.
+-- ----------------------------------------------------------------------
+
+t.test('sc-ambulance: a player confirmed DEAD reports downed', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = true },
+    })
+    t.isTrue(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: a player in LASTSTAND reports downed too, not just outright dead', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = false }, scLaststand = { [7] = true },
+    })
+    t.isTrue(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: a real player that both exports report false is CONFIRMED upright -- a positive false, not a shrug', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = false }, scLaststand = { [7] = false },
+    })
+    t.isFalse(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('THE TRAP: an UNRESOLVABLE player is UNKNOWN, never "alive" -- sc-ambulance returns false for a player it cannot find, which must not be read as confirmed-upright', function()
+    -- This is the one real difference from the metadata-reading adapters.
+    -- Without the qbx_core resolution check first, every unknown/disconnected
+    -- src would come back as a confident `false`, and callers treat `false`
+    -- as a positive signal they may act on.
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = {}, -- src 7 resolves to nil
+        scDead = { [7] = false }, scLaststand = { [7] = false },
+    })
+    t.isNil(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: not started -> UNKNOWN, and the exports are never consulted', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = {}, -- missing
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = true },
+    })
+    t.isNil(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: a THROWING export is caught and reported UNKNOWN, never crashing the caller', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = 'throw' },
+    })
+    t.isNil(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: a MALFORMED (non-boolean) export return is UNKNOWN, never coerced', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = { PlayerData = { metadata = {} } } },
+        scDead = { [7] = 'yes' },
+    })
+    t.isNil(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
+
+t.test('sc-ambulance: a throwing qbx_core resolution is caught and reported UNKNOWN', function()
+    local registered = newAmbulanceFixture({
+        resourceStates = { ['sc-ambulance'] = 'started' },
+        players = { [7] = 'throw' },
+        scDead = { [7] = false }, scLaststand = { [7] = false },
+    })
+    t.isNil(registered.ambulance['sc-ambulance']('server').IsDowned(7))
+end)
 
 os.exit(t.summary())
