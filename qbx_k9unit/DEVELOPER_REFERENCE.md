@@ -3043,6 +3043,119 @@ change a value, change the reasoning here too.
 
 ---
 
+### `Config.Combat` -- why bite/takedown/dragging shipped when they did
+
+All three combat mechanics were built before they were switched on, and the
+config carried a long record of what was blocking each one. That record is
+spent: every blocker named in it was resolved, and all three ship `true`.
+
+The order was deliberate. Shipping the code gated off was never the same
+decision as flipping the flag on a live server -- each mechanic got its own
+go/no-go (a balance review, and for bite-and-hold an animation preview) after
+the implementation landed, and the flags flipped only once
+`server/combat.lua` had been through a red-team trust-boundary pass.
+
+One correction worth preserving, because the spec was wrong and a future
+editor will otherwise re-derive it: `DEVELOPER_REFERENCE.md` §12.3 assumed
+the handler-down defense could reuse an attacker identity from
+`relayDamageEvent`. That event is deliberately PAYLOAD-LESS -- there is no
+attacker field to reuse. The feature therefore carried its own explicitly
+low-trust hint channel, with no server-authoritative consequence depending on
+that hint; the K9's confirmation was re-validated from scratch by
+`ValidateCombatRequest`. (The handler-down defense itself was removed on
+2026-09-02 at the owner's request; the lesson about that event's shape
+outlives it.)
+
+### `Config.HandlerXPTiers` -- the reachability gap, and how it closed
+
+For a while the top handler rank was genuinely unreachable for most players,
+and the config said so in a paragraph headed "STILL A REAL GAP, DISCLOSED
+RATHER THAN PAPERED OVER". A handler who never personally certified anyone
+new was hard-capped at Senior Handler: tenure alone tops out at a lifetime
+155 XP, and Master sits at 500. Lowering thresholds could not fix it, because
+the thresholds were not the problem -- only two of six award actions were
+wired, and neither was repeatable, solo and hours-based the way the K9
+ladder's search/track/bite/takedown mix is.
+
+That closed when `handlerTreatK9` and `handlerKennelDeploy` were wired with
+their own per-actor mint cooldowns. A handler who never certifies anyone is
+no longer capped.
+
+**Recomputed time to Master (500 XP)** for exactly that handler, both the
+theoretical ceiling (to prove it is not an afternoon farm) and a realistic
+pace (to prove it is not a wall):
+
+- *With a normal partnership* -- the 155 XP tenure trickle arrives over 30
+  real days at zero effort beyond staying partnered, so 345 XP must come from
+  treating and deploying, capped at a combined 32 XP/hr ceiling: **10.78
+  hours** of continuous, never-missed action. That means an injured K9 to
+  treat every 30 minutes and a kennel to redeploy every 60, without a single
+  miss, for nearly eleven straight hours. Not a single sitting.
+- *With no partnership at all* -- the worst case, all 500 XP from those two
+  actions: **15.6 hours** theoretical ceiling.
+- *Realistic pace*, which is the number that actually matters. A handler
+  organically treats a genuinely injured K9 a handful of times a shift, not
+  once every thirty minutes on the dot, and redeploys a kennel roughly once
+  per session (its natural cadence -- a second deploy is blocked while the
+  first object exists, and an ordinary logout clears it). A representative
+  session of ~3 treats and 1 deploy is 44 XP, so the 345 remainder lands in
+  roughly **8 sessions** -- one to a few weeks of regular duty. The same
+  order of magnitude as the certifying-handler estimate.
+
+**Thresholds (0/50/150/500) were left unchanged**, deliberately: the
+arithmetic puts them in the "reachable in weeks, not an afternoon and not a
+lifetime" band already. Wiring the two awards was what closed the gap, not
+retuning. A future balance pass may want to revisit them now that a genuine
+hours-of-duty mechanic exists -- an optional balance decision, not an open
+correctness gap.
+
+### `Config.HandlerXP`
+
+What each handler action pays. `Config.XP` pays the K9 for K9-mechanical
+actions; this pays the person, into a separate `k9_progression.handler_xp`
+total walked against `Config.HandlerXPTiers`.
+
+**Why each award is safe to pay for.** Every one is something this codebase
+can already observe server-side -- none is an invented event.
+
+- `handlerCertifyK9` -- paid at a NEW certification, not a renewal. This is
+  the highest single award and was this table's worst farm loop: a
+  revoke-then-regrant cycle is an ordinary supported lifecycle, and with
+  `Config.AllowSelfCertification` true by default an eligible certifier can
+  run it against THEMSELVES with no accomplice. What makes it safe is
+  `CertifyXpMintCooldown` -- a dedicated per-(granter, target) MINT cooldown
+  of 24 real hours on the AWARD, never on the grant/revoke action itself,
+  which always succeeds regardless. A genuinely new target pays immediately;
+  the same pair cannot pay again for a day.
+- `handlerTreatK9` -- paid to the USING player, never the K9 being healed,
+  and only on a genuine restore rather than a no-op top-off of a healthy dog.
+  Bounded by the per-TARGET `MedkitCooldown` and by a dedicated per-ACTOR
+  mint cooldown (`HandlerTreatXpMintCooldown`, 30 real minutes,
+  citizenid-keyed, survives disconnect/reconnect), so a handler roaming
+  between several simultaneously injured K9s is still capped at 24 XP/hr.
+- `handlerKennelDeploy` -- paid at a CONFIRMED placement only, never the
+  earlier request step that can still fail. Bounded by `DeployCooldown` and
+  by `HandlerKennelDeployXpMintCooldown` (60 real minutes, citizenid-keyed),
+  which closes the loop where a scripted relog would otherwise force a fresh
+  deploy and a fresh mint on demand. 8 XP/hr.
+- `handlerPartnershipTenure{1,7,30}Day` -- paid by the same milestone check
+  `server/tenure.lua` already runs for the K9 side, so it inherits that
+  mechanism's one-time-per-partnership CAS guard and same-pair-reform seeding
+  for free. No new anti-farm needed.
+
+**One award deliberately NOT moved here.** "Present for a successful
+search/track" stays where it is: `server/search.lua`'s `coopSearchBonus` pays
+a present, Trained+ partner through the original shared `xp` column. Routing
+an already-shipped, already-tested award into this separate total was
+considered and rejected. It is one of only two role-agnostic exceptions the
+design leaves alone -- the other being `/k9givexp`'s `AwardXPDirect`.
+
+**The budget everything shares.** Every award mints through `AwardHandlerXP`,
+which reuses rather than duplicates the existing per-(citizenid, actionKey)
+500 ms rate floor and the shared cross-mechanic mint budget: 3,600 XP per
+rolling hour PER CITIZENID, shared with `Config.XP`. A citizenid farming both
+totals at once still mints 3,600 XP/hr combined, never 3,600 of each.
+
 ### `Config.Wellbeing.restSources`
 
 The prop names a K9 must be near to rest. Detection has always been real --

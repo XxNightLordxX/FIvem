@@ -324,7 +324,6 @@ Config.Features = {
     -- happened -- see server/partnership.lua's own header for what was
     -- independently verified -- and this flag now ships `true` above,
     -- consistent with BiteAndHold/NonLethalTakedown/PropDragging/
-    -- HandlerDownDefense all having gone through the same review and now
     -- shipping `true` too.
     HandlerPartnership   = true,
     -- ALSO gates the "handler condition badge" (server/wellbeing.lua) --
@@ -2288,80 +2287,16 @@ Config.HandlerXPTiers = {
     -- (the xp threshold itself is not referenced by either).
     { xp = 500, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.50, kennelDeployCooldownMultiplier = 0.45 },
 }
--- STILL A REAL GAP, DISCLOSED RATHER THAN PAPERED OVER BY THIS RESCALE: a
--- handler who never personally certifies anyone new is HARD-CAPPED at
--- Senior Handler (150 XP threshold, 155 XP lifetime ceiling from tenure
--- alone) -- Master Handler stays out of reach for that player specifically,
--- forever, regardless of hours played. Lowering thresholds cannot fix this
--- on its own, because the underlying problem is not the thresholds -- it
--- is that only TWO of six configured award actions are wired, and neither
--- is a repeatable, solo, hours-based mechanic the way the K9 ladder's own
--- search/track/bite/takedown mix is. The real, complete fix is finishing
--- the work Config.Features.HandlerXPProgression's own header already
--- calls for: a dedicated per-actor mint cooldown for handlerTreatK9
--- (server/medkit.lua) and handlerKennelDeploy (server/kennel.lua), then
--- wiring AwardHandlerXP into both success paths. That would give every
--- handler a genuine, repeatable, hours-of-duty path to the top rank, the
--- same way the K9 ladder already has one -- and would likely justify
--- re-reviewing these thresholds upward again once it lands. Not done by
--- this pass (needs edits to two files outside this rescale's own scope),
--- flagged here so the next person who tunes this table does not have to
--- rediscover it.
+-- HOW LONG THESE THRESHOLDS ACTUALLY TAKE, so you can judge them: a handler
+-- who never certifies anyone reaches Master in roughly eight ordinary
+-- sessions -- one to a few weeks of regular duty. The theoretical floor is
+-- about 11 hours of flawless, back-to-back action, which is not a realistic
+-- single sitting. A handler who does certify people gets there sooner.
 --
--- CLOSED (WIRING PASS, coder-backend). The paragraph above is now history,
--- not the current state -- kept rather than deleted so the next reader can
--- see what was wrong and why, per this file's own established "correct in
--- place, do not silently rewrite" convention. handlerTreatK9 and
--- handlerKennelDeploy are both wired now (see the "UPDATE (WIRING PASS...)"
--- note a few screens up, and server/progression.lua's own "HANDLER XP TIER
--- UNLOCKS" section for the full file-by-file citation). A handler who never
--- personally certifies anyone new is NO LONGER hard-capped at Senior
--- Handler.
---
--- RECOMPUTED TIME-TO-MASTER (500 XP), for exactly that handler (never
--- certifies, so handlerCertifyK9 contributes nothing) -- both the
--- theoretical, never-missed-a-beat CEILING (proves this is not an afternoon
--- farm) and a REALISTIC pace (proves it is genuinely reachable through
--- ordinary duty, not a wall):
---   * WITH a normal partnership (earns the full 155-XP tenure trickle over
---     30 real-world days in parallel, at zero effort beyond staying
---     partnered): the remaining 500 - 155 = 345 XP must come from
---     handlerTreatK9/handlerKennelDeploy, capped at a combined 32 XP/hr
---     theoretical ceiling (see the "UPDATE" note above) -- 345 / 32 =
---     10.78 hours of continuous, never-missed, back-to-back action at that
---     ceiling. THIS CANNOT BE DONE IN AN AFTERNOON: it requires an injured
---     K9 to treat every single 30 minutes and a kennel to redeploy every
---     single 60 minutes, without a single miss, for nearly 11 straight
---     real hours -- not a realistic single sitting, let alone the seconds-
---     to-minutes the pre-fix, unwired arithmetic above would have allowed
---     once wired without a mint cooldown.
---   * WITHOUT any partnership at all (zero tenure income, the worst case):
---     the full 500 XP must come from these two actions alone -- 500 / 32 =
---     15.625 hours theoretical ceiling.
---   * REALISTIC PACE (the number that actually matters for "is this
---     reachable by playing"): a handler organically treats a genuinely
---     injured K9 a handful of times per shift (not once every 30 minutes on
---     the dot) and redeploys a kennel roughly once per session (this
---     action's own natural cadence -- Kennels[citizenid] blocks a second
---     deploy while the first object still exists, and an ordinary logout
---     clears it, so "redeploy" naturally recurs about once per login, not
---     more). A rough, representative session earning ~3 treats (36 XP) + 1
---     deploy (8 XP) = 44 XP nets the 345-XP remainder (with tenure) in
---     roughly 8 sessions -- on the order of one to a few weeks of ordinary,
---     regular duty, the SAME order of magnitude this table's own
---     certifying-handler estimate already uses for Master ("several weeks
---     to a couple of months," a few screens up). Genuinely reachable, not a
---     wall, and not a same-day grind either.
---
--- THRESHOLDS (0/50/150/500) LEFT UNCHANGED BY THIS PASS, DELIBERATELY: the
--- arithmetic above shows they are already comfortably in the "reachable in
--- weeks, not an afternoon and not a lifetime" band this ladder is built to
--- sit in -- re-tuning them was not needed to close the reachability gap,
--- only wiring the two awards was. A future balance pass may still want to
--- revisit them now that a genuine hours-of-duty mechanic exists (the "would
--- likely justify re-reviewing these thresholds upward" note above is still
--- a fair observation for that future pass) -- that is a separate, optional
--- balance decision, not a correctness gap this pass leaves open.
+-- These were left at 0/50/150/500 on purpose: they sit in the "weeks, not an
+-- afternoon and not a lifetime" band already. Full arithmetic, and the
+-- reachability gap that used to make Master impossible for most players:
+-- DEVELOPER_REFERENCE.md §22.
 
 -- ======================================================================
 -- XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
@@ -2482,94 +2417,23 @@ Config.XP = {
 }
 
 -- ======================================================================
--- HANDLER XP PROGRESSION (Config.Features.HandlerXPProgression,
--- server/progression.lua's AwardHandlerXP). Config.XP above pays the K9
--- for K9-mechanical actions (search/track/bite/takedown/wall-clock
--- tenure); this pays the HANDLER for handler actions -- into a SEPARATE
--- accumulated total (`k9_progression.handler_xp`), walked against the
--- SEPARATE Config.HandlerXPTiers ladder above.
+-- HANDLER XP -- what each HANDLER action pays. Config.XP above pays the dog;
+-- this pays the person, into a separate total with its own ladder
+-- (Config.HandlerXPTiers).
 --
--- WHAT COUNTS AS A HANDLER ACTION, and why each one is safe to pay for --
--- chosen from what this codebase can actually observe server-side today,
--- never an invented event:
---   * handlerCertifyK9 -- server/certifications/'s GrantCertification (and
---     GrantCertificationOffline), at the point a NEW (not renewed/
---     already-active) certification is granted. NOT, on its own, "rare and
---     deliberate by nature" the way this bullet used to claim: a genuine
---     revoke-then-regrant cycle is exactly the ordinary lifecycle this
---     resource supports (RevokeCertification followed by GrantCertification
---     for the same citizenid+job is not an edge case), and with
---     Config.AllowSelfCertification true by default an eligible certifier
---     can run that cycle against THEMSELVES with no accomplice at all --
---     found live by an economy audit (2026-08-26) as this table's single
---     worst farm loop, well past what handlerKennelDeploy/handlerTreatK9
---     below were already rejected for. What actually makes this safe to pay
---     is CertifyXpMintCooldown (server/certifications/) -- a dedicated
---     per-(granter, target) MINT cooldown, 24 real hours, gating the AWARD
---     itself (never the grant/revoke action, which always succeeds
---     regardless) -- added by that same audit. It is still the highest
---     single award here, but because a genuinely NEW target pays
---     immediately while the SAME (granter, target) pair cannot pay again
---     for a day, not because repeating it was already hard.
---   * handlerTreatK9 -- server/medkit.lua's RunUseK9MedkitMutation, paid to
---     the USING player (never the K9 being healed) on a genuine injury
---     restore (never a no-op top-off of an already-healthy K9). Bounded by
---     that file's own per-TARGET MedkitCooldown (Config.K9Medkit.cooldownMs,
---     60000ms default) AND, WIRED THIS PASS, by a DEDICATED per-ACTOR mint
---     cooldown (HandlerTreatXpMintCooldown, 30 real minutes, citizenid-keyed,
---     survives the actor's own disconnect/reconnect) -- a handler roaming
---     between several simultaneously-injured K9s is capped at 24 XP/hr
---     regardless. See Config.Features.HandlerXPProgression's own comment
---     above for the full arithmetic this closes.
---   * handlerKennelDeploy -- server/kennel.lua's confirmKennelPlaced success
---     path (a CONFIRMED new placement only -- never the earlier
---     requestDeployKennel step, which can still fail). Bounded by that
---     file's own per-connection DeployCooldown (Config.DeployableKennel.
---     deployCooldownMs, 5000ms default) AND, WIRED THIS PASS, by a
---     DEDICATED per-actor mint cooldown (HandlerKennelDeployXpMintCooldown,
---     60 real minutes, citizenid-keyed, survives disconnect/reconnect --
---     closing the specific loop where a scripted relog would otherwise
---     force a fresh deploy, and a fresh mint, on demand) -- capped at
---     8 XP/hr regardless. See Config.Features.HandlerXPProgression's own
---     comment above for the full arithmetic this closes.
---   * handlerPartnershipTenure{1,7,30}Day -- paid to `handler_citizenid`
---     by the SAME milestone-crossing check server/tenure.lua already runs
---     for the K9 side (Config.Partnership.TenureBonus.milestones' own
---     `handlerActionKey` field below) -- inherits that mechanism's
---     existing one-time-per-partnership-row CAS guard and same-pair-reform
---     seeding for free, no new anti-farm needed. WIRED (issue-closer sweep,
---     2026-08-26): this bullet used to say "NOT YET WIRED -- server/tenure.lua
---     is not edited by this pass" -- stale, since corrected at that field's
---     own declaration comment (Config.Partnership.TenureBonus.milestones,
---     below, search for "dead-config-field audit correction"). Verified
---     directly in server/tenure.lua's CheckTenureMilestonesForK9: its
---     milestone-crossing loop calls `AwardHandlerXP(row.handler_citizenid,
---     milestone.handlerActionKey)` right after paying the K9 side, so all
---     three of these keys are live today, not merely planned.
---   * "present for a successful search/track" is DELIBERATELY NOT
---     duplicated here -- server/search.lua's existing coopSearchBonus
---     (Config.XP.awards above) already pays a present, Trained+ partner
---     (which may already be a handler citizenid) through the ORIGINAL
---     shared `xp` column, exactly as it does today. Re-routing that
---     already-shipped, already-tested award into this SEPARATE handler
---     total was considered and rejected: it is one of only two role-
---     agnostic exceptions this design intentionally leaves alone (the
---     other being /k9givexp's AwardXPDirect) -- see server/progression.lua's
---     AwardHandlerXP doc comment for the full "why not touch these two"
---     reasoning.
+-- Five things earn handler XP: certifying someone new, treating an injured
+-- K9, deploying a kennel, and three one-time partnership milestones.
 --
--- ANTI-FARM: every award below is minted through AwardHandlerXP, which
--- reuses (never duplicates) server/progression.lua's existing
--- per-(citizenid, actionKey) 500ms rate floor AND its shared,
--- cross-mechanic XP mint budget (3,600 XP per rolling hour, PER CITIZENID,
--- SHARED with Config.XP.awards above -- a citizenid farming both totals at
--- once still only ever mints 3,600 XP/hr combined, never 3,600 of each).
--- See server/progression.lua's own AwardHandlerXP doc comment for the full
--- per-award-path anti-farm accounting (repeat-cheapest-action,
--- accomplice-trading, break/reform-partnership, and relog, each answered).
+-- BEFORE YOU RAISE ANY OF THESE. Each award is throttled by its own mint
+-- cooldown, and the numbers below were chosen against those throttles --
+-- certifying is the largest because the same pair cannot pay again for 24
+-- hours, treating and deploying are small because they are repeatable. They
+-- also share ONE budget with the K9's own XP: 3,600 XP per hour per person,
+-- combined, not each. Raising a number here does not raise that ceiling; it
+-- just means fewer actions reach it.
 --
--- UNREVIEWED PLACEHOLDER VALUES, same status as every number in Config.XP
--- above.
+-- Which cooldown guards which award, and the farm loop each one closes:
+-- DEVELOPER_REFERENCE.md §22.
 -- ======================================================================
 Config.HandlerXP = {
     awards = {
@@ -2931,7 +2795,7 @@ Config.Tracking = {
         -- 'L' (camera, client/movement.lua), 'H' (camera feed,
         -- Config.CameraFeed.toggleKey above), 'K'/'J' (thermal/night vision,
         -- Config.Vision.Thermal/.Night.toggleKey above), 'G' (handler-down
-        -- confirm, Config.Combat.HandlerDownDefense.confirmKey below), 'V'/
+        -- confirm), 'V'/
         -- 'C'/'U' (sit/bark/recall, literals in client/keybinds.lua), 'B'
         -- (BiteAndHold.toggleKeybind, below), 'T' (NonLethalTakedown.keybind,
         -- below), 'Y' (PropDragging.toggleKeybind, below). 'Z' is not among
@@ -3193,62 +3057,9 @@ Config.Vision = {
 -- way the K/J keys already do.
 
 -- ======================================================================
--- COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
---
--- UPDATE (coder-security, this pass): DEVELOPER_REFERENCE.md §12.0 item 8 (the
--- client-relay/non-cooperating-target-client architecture question) is now
--- RESOLVED (Revision 4) — see that item's own "ship it, with binding
--- guardrails" verdict. `BiteAndHold` and `NonLethalTakedown` (including
--- their PLAYER-target paths, gated by `RequireWantedStatus` below) are
--- implemented this pass in `server/combat.lua` / `client/combat.lua`,
--- under item 8's five binding guardrails. `Config.Features.BiteAndHold`/
--- `NonLethalTakedown` shipped `false` above at that point — shipping the
--- code gated-off-by-default was not the same decision as flipping either
--- flag on a live server, which still wanted its own separate go/no-go
--- (balance review, anim preview for BiteAndHold). That review has SINCE
--- happened: server/combat.lua's own header records the red-team
--- trust-boundary pass both features went through, and `BiteAndHold`/
--- `NonLethalTakedown` now ship `true` above. This paragraph is kept only
--- for the history of why the implementation and the flag flip were
--- originally separate decisions.
---
--- STILL DELIBERATELY NOT ADDED — genuinely different, still-open blockers:
---   - `PropDragging` is OUT OF SCOPE for this pass (not requested, not
---     implemented) — its config entries stay absent rather than added as
---     dead placeholders. It shares item 8's Category B relay exposure for
---     its drag-speed-limit half (see item 8's own write-up) and ADDITIONALLY
---     needs DEVELOPER_REFERENCE.md §12.0 item 6's downed-check contract for a
---     player target, so it is not simply "the same pattern, one more
---     feature" — left for whoever picks it up next to design/implement
---     against item 8's already-resolved guardrails directly.
---   - `HandlerDownDefense` NO LONGER BLOCKED, AND NEITHER IS PropDragging.
---     Both of the "blocked" write-ups above and here are superseded and are
---     kept only so the reasoning that unblocked them is legible:
---       * PropDragging shipped -- see Config.Combat.PropDragging below,
---         plus client/combat.lua and server/combat.lua.
---       * HandlerDownDefense shipped -- see Config.Combat.HandlerDownDefense
---         below, plus the removed handler-down-defense server file and the removed handler-down-defense client file. Its stated
---         blocker (DEVELOPER_REFERENCE.md §12.0 item 7, "who is this K9's handler")
---         was resolved by the HandlerPartnership registry landing.
---         NOTE, because the spec was WRONG about this and a future editor
---         will otherwise re-derive it: §12.3 assumed HandlerDownDefense
---         could reuse an attacker identity from `relayDamageEvent`. That
---         event is deliberately PAYLOAD-LESS -- there is no attacker field
---         to reuse. the removed handler-down-defense server file therefore carries its own, explicitly
---         low-trust hint channel, and no server-authoritative consequence
---         depends on that hint; the K9's confirmation is re-validated from
---         scratch by ValidateCombatRequest.
---     Both features shipped `false` at that point, per this resource's
---     convention that a newly-landed mechanic stays off until its own
---     go-live review. That review has SINCE happened for both:
---     the removed handler-down-defense server file's own header documents HandlerDownDefense being
---     flipped to `true` by the config owner after its go-live review, and
---     server/combat.lua's red-team trust-boundary pass covers PropDragging
---     the same way it covers BiteAndHold/NonLethalTakedown above. Both
---     `Config.Combat.PropDragging` and `Config.Combat.HandlerDownDefense`
---     now ship `true` above.
--- Re-diff this block against DEVELOPER_REFERENCE.md §12.2 in full if either of the
--- above is picked up later, rather than assuming this copy stays in sync.
+-- COMBAT & ADVANCED AGILITY -- bite and hold, non-lethal takedowns, dragging.
+-- All three ship on. Why each was held back until it was reviewed, and one
+-- correction to the spec worth knowing: DEVELOPER_REFERENCE.md §22.
 -- ======================================================================
 -- IF YOU CAME HERE BECAUSE SOMEONE SAID "YOUR K9s ARE TOO STRONG" (or too
 -- weak): this is one of only TWO places in this file that complaint usually
@@ -3318,7 +3129,7 @@ Config.Combat = {
         -- to be wrong in a way worth correcting rather than deleting.
         --
         -- It used to say this flag is independent of BiteAndHold/
-        -- NonLethalTakedown/PropDragging/HandlerDownDefense "which all
+        -- NonLethalTakedown/PropDragging "which all
         -- default false", so leaving it on would spin a 500ms thread
         -- sweeping a table that stays empty on a default install. Those four
         -- actually default TRUE (see Config.Features above), so on a default
@@ -3433,7 +3244,7 @@ Config.Combat = {
         -- Default keyboard key for the "Drag / Release" TOGGLE keybind
         -- (client/keybinds.lua registers `k9dragtoggle` + this as its
         -- RegisterKeyMapping default). Always rebindable client-side, same
-        -- disclosure as HandlerDownDefense.confirmKey below -- and the same
+        -- disclosure the since-removed handler-down defense carried -- and the same
         -- REAL CONSTRAINT: RegisterKeyMapping only sets a DEFAULT. Once a
         -- player has rebound this in Settings > Key Bindings > FiveM,
         -- changing this value in a later config update does NOT move their
@@ -3442,36 +3253,6 @@ Config.Combat = {
         toggleKeybind = 'Y',
     },
 
-    -- DEVELOPER_REFERENCE.md §12.5.3, implemented in the removed handler-down-defense server file +
-    -- the removed handler-down-defense client file. Per §12.0 item 2 this is a UI/auto-targeting
-    -- CONVENIENCE, never an AI takeover — the K9 never acts on its own; a
-    -- prompt is surfaced faster and the player still confirms.
-    --
-    -- Reuses Config.Combat.PropDragging.IsPlayerDownedOverride rather than
-    -- adding its own: "is this player down per the server's own scripted
-    -- laststand" is the same question for a drag target and a handler, and
-    -- the same native-unreliability caveat applies (IsPedDeadOrDying /
-    -- IsPedRagdoll read raw physics, not laststand state).
-    --
-    -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
-    -- balance pass, same status as every other Phase 3 tuning number here.
-    HandlerDownDefense = {
-        -- RAISED 100 -> 140. 100 is GTA's own player-ped "already dying"
-        -- boundary -- this resource documents it as exactly that where
-        -- NonLethalTakedown uses it as a health FLOOR, which is correct there.
-        -- As a TRIGGER for "alert my partner K9, my handler is in trouble" it
-        -- meant the alert only fired once the handler was already at the death
-        -- line, leaving no lead time for the K9 to actually respond -- the
-        -- number was right for its original use and wrong for this one.
-        handlerHealthThreshold   = 140,   -- fallback-only signal; the override above is the real check
-        triggerRadius            = 15.0,  -- how close the partner K9 must be to be prompted
-        hostileLookbackSeconds   = 10,    -- how far back an attacker hint stays relevant
-        pollIntervalMs           = 1000,
-        retriggerCooldownMs      = 30000, -- anti-spam; stamped at send, not at retry (see the removed handler-down-defense server file)
-        promptTtlMs              = 10000, -- client-local clock, see that file's CLOCK-DOMAIN note
-        attackerReportCooldownMs = 500,
-        confirmKey               = 'G',   -- always rebindable client-side
-    },
 
     BiteAndHold = {
         -- HIGHER = the dog can start a bite hold from farther away (stronger,
@@ -3588,7 +3369,7 @@ Config.Combat = {
 --
 -- OWN TOP-LEVEL BLOCK, DELIBERATELY NOT NESTED UNDER Config.Combat: this
 -- mechanic has its OWN file, its OWN feature flag (independent of
--- BiteAndHold/HandlerDownDefense per the resolved design's explicit
+-- BiteAndHold per the resolved design's explicit
 -- "one-flag-per-mechanic" reasoning), and its own owner (server/
 -- partnership.lua, not server/combat.lua) — nesting its tuning knobs inside
 -- Config.Combat (a different file's config namespace) would blur that

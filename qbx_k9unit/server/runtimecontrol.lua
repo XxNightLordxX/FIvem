@@ -1262,7 +1262,7 @@ local TUNABLE_REGISTRY = {
 
     -- the removed handler-down-defense server file (Config.Features.HandlerDownDefense, live).
     -- handlerHealthThreshold/triggerRadius/hostileLookbackSeconds are each
-    -- read directly off Config.Combat.HandlerDownDefense inline, inside
+    -- read directly off the handler-down-defense tuning table inline, inside
     -- IsHandlerDown/TryNotifyPartnerK9, called fresh every maintenance-tick
     -- pass. pollIntervalMs is EXCLUDED -- that file's own comment states
     -- outright it is "still captured once into a local (not re-read from
