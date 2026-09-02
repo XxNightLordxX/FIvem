@@ -263,11 +263,13 @@ local LiveWellbeingTunables = {
     -- from this client's own static config copy until the first snapshot
     -- arrives, same safety argument (nothing here is a security boundary).
     fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
-    -- HUNGER/THIRST (this pass, coder-backend). CONFIG-DEFENSIVE (see
-    -- server/wellbeing.lua's header for the full reasoning): this CLIENT's
-    -- own static `Config.Wellbeing.Hunger`/`.Thirst` copy may not exist yet
-    -- either (this file does not own config.lua), so this seed is guarded
-    -- the same way server/wellbeing.lua's SnapshotOf guards its own
+    -- CONFIG-DEFENSIVE seeding (see server/wellbeing.lua's header for the
+    -- full reasoning): a sub-table this client reads may not exist in a
+    -- given server's config.lua at all (this file does not own that file),
+    -- so this seed is guarded the same way server/wellbeing.lua's SnapshotOf
+    -- guards its own. The hunger and thirst systems this paragraph was
+    -- originally written for were removed on 2026-09-02; the guarding
+    -- pattern it describes is still how every other sub-table is read
     -- equivalent read -- a client that boots against an old config.lua
     -- simply seeds these two at a safe default instead of erroring out of
     -- this entire file's load (which would take every OTHER wellbeing

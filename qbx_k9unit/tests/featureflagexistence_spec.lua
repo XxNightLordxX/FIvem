@@ -626,6 +626,13 @@ local COMMENT_CONFIG_ALLOWLIST = {
     K9BoneIndices          = 'explicitly described as an earlier, more elaborate sketch that was superseded -- client/fetch.lua and server/fetch.lua both say so in the same sentence',
 }
 
+--- Sub-tables that were REMOVED from a config block that still exists, so
+--- the top-level check cannot catch a comment still naming one. Add to this
+--- when a subsystem is deleted but its parent block stays.
+local REMOVED_SUBTABLES = {
+    Wellbeing = { Mood = true, FearStress = true, Distraction = true, Injury = true, Hunger = true, Thirst = true },
+}
+
 --- Top-level `Config.<Name> =` assignments in the shipped config.
 --- @return table<string, boolean>
 local function ShippedConfigBlocks()
@@ -690,9 +697,24 @@ t.test('COMMENT ROT: every Config.<block> a comment names still exists in the sh
                 -- tail of `trackingConfig.maxRange` and reports `maxRange`
                 -- as a missing top-level block. Three real comments hit
                 -- that during development of this guard.
-                for name in (' ' .. entry.text):gmatch('[^%w_]Config%.([A-Za-z0-9_]+)') do
+                for name, sub in (' ' .. entry.text):gmatch('[^%w_]Config%.([A-Za-z0-9_]+)%.?([A-Za-z0-9_]*)') do
                     if not blocks[name] and not COMMENT_CONFIG_ALLOWLIST[name] then
                         stale[#stale + 1] = ('%s:%d names Config.%s'):format(path:gsub('^%.%./', ''), entry.line, name)
+                    elseif sub ~= '' and REMOVED_SUBTABLES[name] and REMOVED_SUBTABLES[name][sub] then
+                        -- ONE LEVEL DEEPER, for removed SUB-tables only. The
+                        -- top-level check above cannot see these: the parent
+                        -- block still exists, so `Config.Wellbeing.Mood` reads
+                        -- as valid while `Mood` itself was deleted. Two such
+                        -- comments survived the guard's first version --
+                        -- Config.Wellbeing.Mood.petCooldownMs and
+                        -- Config.Wellbeing.Thirst.bowlSources -- which is why
+                        -- this second pass exists. Deliberately NOT a general
+                        -- walk of every sub-key: that would need the whole
+                        -- config loaded and resolved, and would fire on every
+                        -- comment naming a field in passing. Only names that
+                        -- were genuinely REMOVED are listed.
+                        stale[#stale + 1] = ('%s:%d names Config.%s.%s, which was removed'):format(
+                            path:gsub('^%.%./', ''), entry.line, name, sub)
                     end
                 end
             end

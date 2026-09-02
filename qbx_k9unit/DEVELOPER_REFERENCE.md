@@ -3043,6 +3043,64 @@ change a value, change the reasoning here too.
 
 ---
 
+### `Config.Wellbeing.restSources`
+
+The prop names a K9 must be near to rest. Detection has always been real --
+the scan, the radius check and the server-side position resolution all work.
+What took the work was establishing which prop names actually EXIST in the
+game, because a name that does not exist fails silently: the K9 simply never
+rests near it, and nothing says why.
+
+**How each name was established.** `prop_dog_cage_01` (hash 379820688) is
+confirmed independently, in two sources, with a rendered screenshot in a
+vanilla-prop database. `prop_bench_04` and `prop_couch_01` are one-source
+confirmations -- present in a community prop list alongside sibling variants,
+picked as the least location-suffixed of each family, but not corroborated by
+the second source, which could only be partially read. Treat them as a lower
+confidence tier than the cage, not as equals.
+
+`prop_dog_cage_02` exists too and is deliberately NOT listed, for the same
+reason `Config.DeployableKennel.fallbackPropModel` ('prop_tennis_ball') is
+not: that model collides with the fetch ball and the fallback vest, so
+listing it would let an unrelated dropped ball silently grant a rest bonus to
+any K9 standing near it.
+
+**`water_bowl`, and why a name that looks plausible is worth doubting.** It
+shipped in this list for a long time and does not exist. The tell was a
+pattern, not a hunch: every real bowl name either source produced carries a
+`prop_` prefix (or a DLC prefix plus a `prop_`-style segment), and
+`water_bowl` has neither. Neither source contained any "bed", dog "bowl",
+"kennel", "doghouse", "trough", "food_bowl" or "water_bowl" match of any
+kind -- only `prop_bowl_crisps` (a snack bowl) and two unidentified
+story-mission bowls. It never matched anything, so removing it changed
+nothing for any existing server. It has been replaced by three real dog-bowl
+models (`m25_1_prop_m51_dog_bowl_full`/`_empty`, `m25_2_int_01_dog_bowl`)
+that the same check turned up.
+
+**A tooling note for anyone re-checking this.** Every dedicated GTA/FiveM
+prop database was blocked outright by the sandbox's network egress policy
+during the audit -- docs.fivem.net, gtahash.ru, forge.plebmasters.de,
+vespura.com, gta-objects.xyz, forum.cfx.re and the rest. Two sources were
+reachable: DurtyFree's `ObjectList.ini` (a direct dump of the game's own
+object data, 21,631 entries, of which only the first ~4,637 loaded, so every
+negative from it is partial rather than conclusive) and a community-compiled
+gist (~3,000 entries, also truncated). That is a tooling gap to report if a
+live re-check is ever needed, not a shortcut taken here.
+
+### `Config.Wellbeing.speedPenaltyMultiplier`
+
+Raised from 0.85 to 0.90 during a review that looked at the speed penalties
+TOGETHER rather than one at a time. At the time three of them multiplied --
+injury 0.7 x fatigue 0.85 x mood 0.9 = 0.535 -- which is the ordinary
+aftermath of one bad gunfight, and at those values an Elite K9 with its 1.15x
+tier bonus netted 0.615x: slower than a healthy Recruit. Three independently
+reviewed "mild" penalties had compounded into half speed because nobody
+reviewed them together.
+
+Only fatigue survives -- the injury and mood systems were removed at the
+owner's request on 2026-09-02 -- so there is nothing left to compound with,
+and this value is now the whole penalty rather than one factor of three.
+
 ### `Config.HandlerXPTiers`
 
 **Why a separate ladder rather than a second reading of `Config.XPTiers`.**

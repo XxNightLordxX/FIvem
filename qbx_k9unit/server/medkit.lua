@@ -192,7 +192,8 @@
        wellbeing subsystem" the open question named — is CONFIRMED (read its
        real implementation directly this session) to be an entirely
        separate, virtual, per-citizenid float (`WellbeingStats[citizenid]
-       .injury`, clamped 0..Config.Wellbeing.Injury.max) that never touches
+       .injury`, clamped against the injury system's own configured maximum)
+       that never touched
        the ped's actual native health/max-health fields at all — `Config
        .K9Medkit.injuryRestore` restores THAT virtual stat via
        `RestoreInjury`, entirely independent of the `GetEntityMaxHealth`

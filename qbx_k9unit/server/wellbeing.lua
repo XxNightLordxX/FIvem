@@ -97,8 +97,8 @@
        already confirmed HIGH confidence against real ox_inventory source
        this session (see that file's header) — not re-verified independently
        here, but the same confirmed signatures apply unchanged.
-    5. Flashbang immunity (Config.Wellbeing.Distraction.flashbangImmune) —
-       THIS PASS (coder-backend) implements the one half achievable without
+    5. Flashbang immunity (the distraction system's own immunity flag,
+       removed 2026-09-02) — implemented the one half achievable without
        guessing a third-party resource's own event shape:
        `IsFlashbangImmune(citizenid)`, a resource-global accessor mirroring
        `IsHesitating`/`IsDistracted`'s exact established contract (self-only
@@ -166,200 +166,57 @@
        restSources.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 4, wellbeing subsystem.
+    EVENT/CALLBACK CONTRACT.
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:getWellbeingSnapshot' () -> table? stats
-       [THIS FILE] On-demand snapshot for a client that just became
-       K9-modeled (client/wellbeing.lua calls this once on that transition,
-       rather than waiting up to tickIntervalMs for the next automatic push)
-       or when the whole subsystem is disabled (returns nil). Resolves the
-       CALLER'S OWN citizenid server-side — no target parameter, no way to
-       ask about another citizenid.
-    2. 'qbx_k9unit:server:petK9' (targetServerId: number) -> { ok, reason? }
-       [THIS FILE] Re-validates Config.Features.MoodSystem, live proximity
-       between the interactor's and target's own live positions, target
-       re-verified as a real connected K9-model player server-side, and a
-       per-(interactor, target) cooldown (Config.Wellbeing.Mood.petCooldownMs)
-       — never a client-claimed "I petted my K9."
-    3. 'qbx_k9unit:server:feedK9' (targetServerId: number) -> { ok, reason? }
-       [THIS FILE] Same validation shape as petK9, plus real ox_inventory
-       item possession/consumption (Config.Wellbeing.Mood.feedItemName),
-       mirroring server/medkit.lua's item-consumption discipline exactly
-       (possession check, stamp cooldown BEFORE removal, remove, only then
-       mutate state).
-    4. 'qbx_k9unit:server:applyK9Distraction' (itemType: 'meatBait'|'whistle')
-       -> { ok, reason?, affected? } [THIS FILE] Re-validates
-       Config.Features.DistractionSystem, consumes the configured item from
-       the USING player (open question, DEVELOPER_REFERENCE.md §13.4.3.4 item 2,
-       resolved here as OPEN to any player, not gated on Config.Departments —
-       this document's own tentative reading, "a trainer's tool that also
-       works as a suspect's countermeasure"), then resolves affected K9s by
-       querying the USING PLAYER'S OWN live position (never a client-claimed
-       coordinate) against every currently-connected K9-model player's own
-       live position within the configured radius, subject to
-       Config.Wellbeing.Distraction.perTargetCooldownMs per affected K9.
+       On-demand snapshot for a client that just became K9-modeled
+       (client/wellbeing.lua calls this once on that transition rather than
+       waiting up to tickIntervalMs for the next automatic push), or nil when
+       the subsystem is disabled. Resolves the CALLER'S OWN citizenid
+       server-side -- no target parameter, no way to ask about anyone else.
 
-    Server events (RegisterNetEvent, client->server):
-    5. 'qbx_k9unit:server:calmDownK9' () [THIS FILE] Self-only radial-style
-       action (mirrors K9Sit — no target). Re-validates
-       Config.Features.FearStressSystem, the caller's own K9 model, and
-       Config.Wellbeing.FearStress.calmDownCooldownMs.
-    6. 'qbx_k9unit:server:relayDamageEvent' () [ALREADY REGISTERED BY
-       server/tracking.lua — THIS FILE adds an ADDITIONAL, independent
-       AddEventHandler] Decrements Mood/Injury for the reporting client's
-       OWN citizenid if it's currently K9-modeled, subject to this file's
-       OWN ingest cooldown (reuses Config.Tracking.Blood.relayCooldownMs as
-       the threshold value — same numeric rate server/tracking.lua already
-       applies to the identical event, applied here via an independent
-       tracker instance, not shared state).
-    7. 'qbx_k9unit:server:relayWeaponFire' () [ALREADY REGISTERED BY
-       server/tracking.lua — THIS FILE adds an ADDITIONAL, independent
-       AddEventHandler] Appends the reporting client's own live position to
-       this file's OWN `RecentGunfire` log (only if FearStressSystem is
-       enabled), subject to this file's OWN ingest cooldown (reuses
-       Config.Tracking.Gunpowder.relayCooldownMs).
-    8. 'qbx_k9unit:server:feedK9Hunger' () [THIS FILE, this pass] Self-only,
-       no target (mirrors calmDownK9 above). Re-validates
-       Config.Features.HungerThirstSystem, the caller's own K9 model/access,
-       Config.Wellbeing.Hunger.feedItemName possession, and
-       HungerFeedCooldown (per-citizenid).
-    9. 'qbx_k9unit:server:giveK9Water' () [THIS FILE, this pass] Same shape
-       as feedK9Hunger, for Thirst — Config.Wellbeing.Thirst.drinkItemName,
-       ThirstReliefCooldown (per-citizenid, SHARED with drinkFromBowl below).
-    10. 'qbx_k9unit:server:drinkFromBowl' (bowlNetId: number) [THIS FILE,
-       this pass] Self-only. `bowlNetId` is the world bowl OBJECT's own
-       network id (client/wellbeing.lua's ox_target `data.entity`, converted
-       client-side via NetworkGetNetworkIdFromEntity) — re-resolved
-       server-side via server/entities.lua's ResolveNetworkEntity
-       (expectedEntityType = 3), re-checked against
-       Config.Wellbeing.Thirst.bowlSources' own model-hash set, and
-       re-checked for live proximity to the caller's own ped — never a
-       client-claimed "I am near a bowl." No item is consumed.
+    Client events (server->client):
+    2. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) -- requester only.
+       One combined push per tick rather than a message per value, matching
+       the HUD bridge's own "one combined message beats a split one" rule.
+       Carries `stats.featureFlags`, the LIVE fresh-read state of the feature
+       flags this file owns, so the client's move-rate composer reacts to a
+       runtime tablet toggle within one tick instead of only ever seeing what
+       that client's own copy of config.lua shipped with.
+    3. 'qbx_k9unit:client:partnerConditionUpdate' (payload: { visible:
+       boolean, tags: string[] }) -- THE BONDED HANDLER ONLY. Closes the
+       "a handler cannot tell how their own dog is doing" gap. Sent from the
+       same per-K9 loop that already builds event 2 (no second thread). The
+       K9's current partner is resolved SERVER-SIDE via
+       GetActivePartnerCitizenId -- never from anything a client claims --
+       and, only if that partner is online, sent COARSE condition tags
+       derived from this file's own thresholds, never a raw value. `tags` is
+       empty (not omitted) when everything is in its healthy band;
+       client/hud.lua renders that as "Fine." Sent only on change, never
+       every tick. `visible = false` is the explicit CLEAR signal -- no
+       partnership, partner disconnected, partnership ended, or the stat
+       system off. NEVER carries a position, a raw stat value, or anything
+       else that could locate the K9.
 
-    Client events (RegisterNetEvent, server->client):
-    11. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
-       requester only, client/wellbeing.lua] — one combined push per tick
-       carrying all six wellbeing values together (mirrors
-       DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
-       beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
-       UPDATED (LIVE FEATURE FLAG PUSH, this pass): `stats.featureFlags` is
-       now also included (see `SnapshotOf`'s own header comment above for
-       the full "why piggyback here, not a new event" writeup) — the LIVE,
-       fresh-read state of all six Config.Features flags this file owns,
-       so client/wellbeing.lua's move-rate composer and Injury sprint/jump
-       block can react to a runtime tablet toggle within one tick instead of
-       only ever seeing the value this client's OWN copy of config.lua
-       shipped with at that client's own resource start. Same shape from
-       `getWellbeingSnapshot` (item 1 above) for the on-demand fetch path.
-    12. 'qbx_k9unit:client:partnerConditionUpdate' (payload: { visible:
-       boolean, tags: string[] }) [server->client, THE BONDED HANDLER
-       ONLY, client/hud.lua] — THIS PASS. Closes the production-readiness
-       audit's own "a handler cannot tell how their own dog is doing" gap.
-       Every tick this file already runs for a tracked K9 (no second
-       thread — see PushHandlerConditionUpdate below, called from the
-       exact same per-K9 loop that already builds/sends item 11 above),
-       the K9's CURRENT PARTNER is resolved SERVER-SIDE via
-       server/partnership.lua's GetActivePartnerCitizenId(k9Citizenid) —
-       never from anything a client claims — and, only if that partner is
-       currently online, sent a small set of COARSE condition tags derived
-       from this file's OWN existing per-stat thresholds, never a new
-       number and never the raw 0-100 value: 'tired' (Fatigue <=
-       speedPenaltyThreshold), 'unhappy' (Mood <=
-       performancePenaltyThreshold), 'stressed' (FearStress >=
-       hesitationThreshold), 'injured' (Injury <= sprintBlockThreshold),
-       'hungry'/'thirsty' (Hunger/Thirst <= lowThreshold). `tags` is empty
-       (not omitted) when every enabled stat is currently in its healthy
-       band — client/hud.lua renders that as "Fine." Each tag is gated on
-       its OWN Config.Features flag (a disabled stat contributes no tag,
-       ever — see ComputeHandlerConditionTags), and the whole feature is
-       additionally gated on Config.Features.HandlerPartnership. Sent ONLY
-       on change (a new tagsKey, a partner change, or the resolved
-       handler reconnecting under a new source id — see
-       PushHandlerConditionUpdate's own comment), never every tick
-       regardless of whether anything moved. `visible = false` (`tags`
-       always `{}` alongside it) is this feature's explicit CLEAR signal,
-       sent whenever there is nothing left to report: no active
-       partnership, the partner just disconnected, the partnership just
-       ended, or every wellbeing stat system is off — see
-       ClearHandlerConditionBadge/ClearAllHandlerConditionBadges below for
-       the distinct stop paths this covers. NEVER carries a position, a
-       raw stat value, or
-       anything else that could be used to locate the K9 — see
-       ComputeHandlerConditionTags' own doc comment for the exact, closed
-       list of everything this payload can ever contain. Full design
-       writeup: this file's own "HANDLER CONDITION BADGE" header section,
-       further down.
+    WHAT USED TO BE HERE. This contract listed twelve entries: petting,
+    feeding, watering, drinking from a bowl, distraction items, calming a
+    stressed dog, and two damage/weapon-fire relays. Ten of them are gone --
+    the mood, fear/stress, distraction, injury and hunger/thirst subsystems
+    were all removed on 2026-09-02 at the owner's request, and their events
+    went with them. Only fatigue survives, which is why one callback and two
+    client events is the whole surface now.
 
-    Resource-globals (no `local` — other files call these directly):
-    - RestoreInjury(citizenid: string, amount: number) — the accessor
-      server/medkit.lua ALREADY CALLS via a `type(RestoreInjury) == 'function'`
-      guard (DEVELOPER_REFERENCE.md §13.4.3.5/§13.4.4). Signature matches that
-      call site exactly: `RestoreInjury(targetCitizenid, Config.K9Medkit.injuryRestore)`.
-      No-op if Config.Features.InjuryLimping is false (never gates/mutates
-      anything the feature flag hasn't activated, per this file's own
-      "read at the point of activation" discipline above) or if the
-      arguments are the wrong type. Clamped to Config.Wellbeing.Injury.max,
-      never allowed to move the value downward.
-    - IsHesitating(citizenid: string) -> boolean — true while a FearStress-
-      driven hesitation window (Config.Wellbeing.FearStress.hesitationDurationMs)
-      is active. THE genuine new cross-file dependency DEVELOPER_REFERENCE.md §13.5
-      flags: server/combat.lua (Phase 3, not yet built as of this pass) must
-      call this as part of its own bite-hold/takedown/drag request
-      validation once it exists — guard with
-      `type(IsHesitating) == 'function'`, the same forward-compatible
-      pattern server/medkit.lua already uses for RestoreInjury.
-      DISCLOSED RESIDUAL RISK (coder-security finding B, config-audit
-      follow-up pass — full writeup on the relayWeaponFire AddEventHandler
-      below): the fearStress input this accessor's return value is derived
-      from is fed by a payload-less, forgeable event, deduped by reporting
-      source to close the primary amplification vector. server/combat.lua
-      DOES now call this accessor as a hard reject in ValidateCombatRequest
-      — that is no longer a hypothetical "whoever wires this up next"
-      concern, it is real, live code today. CONFIRMED (this pass): because
-      the reporting event carries no target and the affected-K9 loop below
-      matches by RADIUS around the reporter's own live position, a forger
-      does not merely hesitate their own K9 — physical proximity to ANY
-      other connected K9 is sufficient to target that specific K9, whether
-      or not the forger is a K9, a combat participant, or has any other
-      interaction with that player at all. That made this a real, targeted
-      denial-of-capability once combat.lua shipped as a consumer, not a
-      near-harmless self-only quirk. TickWellbeing's HESITATION_MAX_CONTINUOUS_MS
-      cap (this pass) bounds it: a forger can still force repeated
-      hesitation episodes on a specific K9 by staying nearby and
-      re-touching the event, but each episode is capped and is always
-      followed by an enforced window where that K9 is guaranteed not to be
-      hesitating — "indefinite" is closed, "repeatable but bounded" is the
-      disclosed, accepted remainder. Not a reason to skip calling this
-      accessor (DEVELOPER_REFERENCE.md §13.5 still requires it) — just an accurate,
-      current statement of what calling it exposes you to, kept up to date
-      here specifically because the LAST version of this note went stale
-      the moment a second file started consuming it without this note being
-      re-checked. Whoever next changes either this accessor's contract or
-      its call site in server/combat.lua should update BOTH this note and
-      that file's own comment together, not just one.
-    - IsDistracted(citizenid: string) -> boolean — same shape as
-      IsHesitating, for Distraction's own "breaks command" state
-      (DEVELOPER_REFERENCE.md §13.4.3.4's reading of that state as a server-enforced
-      command rejection, the same category as FearStress's hesitation, not
-      named as its own accessor anywhere in DEVELOPER_REFERENCE.md's own text but a
-      direct, natural extension of the SAME pattern it names for
-      IsHesitating — added here so Phase 3's combat.lua has a real hook for
-      BOTH command-breaking wellbeing states, not just one).
-    - IsFlashbangImmune(citizenid: string) -> boolean — THIS PASS
-      (coder-backend). See CONFIDENCE GRADING item 5 above for the full
-      "what this does and does not solve" writeup. Unlike IsHesitating/
-      IsDistracted, this reads NO per-citizenid state at all — it is a pure
-      config check (Config.Features.DistractionSystem AND
-      Config.Wellbeing.Distraction.flashbangImmune), the `citizenid`
-      argument existing only to match the established accessor shape and to
-      type-guard against a non-string caller mistake, exactly like every
-      other accessor here. Self-only by construction: nothing about this
-      function's result can be influenced by another player, ever — it
-      cannot be used as a lever against anyone else's K9, unlike
-      IsHesitating's disclosed residual risk above.
 
-    FILE-TO-FILE CONTRACT:
+    Resource-globals (no `local` -- other files call these directly):
+    - GetWellbeingStats / the fatigue accessors this file still exposes.
+
+    REMOVED 2026-09-02 (owner's request), along with the subsystems behind
+    them: RestoreInjury, IsHesitating, IsDistracted and IsFlashbangImmune.
+    Every caller reached them through a `type(fn) == 'function'` guard, so
+    nothing broke by their going away -- server/medkit.lua's own
+    RestoreInjury call simply stops finding one and skips that step. Listed
+    here only so a reader of an old comment elsewhere knows where they went.
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
       server/certifications/ — reused, never re-derived, to verify a
       target/reporting player's ped is really a configured K9 model.
@@ -442,176 +299,26 @@
     ======================================================================
 
     ======================================================================
-    STUCK-K9 SOFTLOCK FIX (this pass, coder-backend) — a QA finding, VERIFIED
-    against this file/client/wellbeing.lua/server/medkit.lua/config.lua as
-    they actually stood before touching anything, not assumed. The chain
-    QA reported was accurate on every link: `Config.Wellbeing.Injury
-    .passiveRegenPerTick = 0.1` per 5000ms tick regenerates Injury at
-    0.02/s, so a K9 dropped to 0 (a handful of `relayDamageEvent` hits at
-    `damageDecayAmount = 10` each, trivial in one firefight) took ~16.7 real
-    minutes to clear `jumpBlockThreshold` (20) and ~25 minutes to clear
-    `sprintBlockThreshold` (30) — client/wellbeing.lua's INPUT_SPRINT/
-    INPUT_JUMP thread `DisableControlAction`-blocks both, unconditionally,
-    below those thresholds, with no server override (DEVELOPER_REFERENCE.md §13.0
-    Decision 3's own disclosed, deliberate limitation — never a security
-    boundary, but a real gameplay one). This file had NO death/respawn
-    handling anywhere before this pass (confirmed: no `IsEntityDead`/
-    `GetEntityHealth` call of any kind existed here), and wellbeing state is
-    deliberately persisted across disconnect (this header, FILE-TO-FILE
-    CONTRACT, above) — so neither dying nor reconnecting ever cleared a
-    depleted Injury value. K9Medkit is the only fast remedy, and
-    `Config.K9Medkit.itemName` ships as an explicitly-documented PLACEHOLDER
-    that must exist in the target server's own ox_inventory items table —
-    unregistered, `GetItemCount` resolves 0 forever and every heal fails
-    closed as a generic `no_item`, indistinguishable from a player simply
-    not carrying one, with nothing anywhere explaining why. Three
-    independent, separable fixes, all landed this pass:
+    STUCK-K9 SOFTLOCK AND THE DEATH-RESPAWN EXPLOIT -- BOTH GONE WITH THE
+    INJURY SYSTEM (removed 2026-09-02, at the owner's request).
 
-    1. REGEN RATE — NOT fixed in this file (this file does not own
-       config.lua). `Config.Wellbeing.Injury.passiveRegenPerTick` should be
-       raised 0.1 -> 1.0, matching the EXACT precedent already set for
-       `Config.Wellbeing.Mood.passiveRegenPerTick` (0.2 -> 1.0, that field's
-       own comment: "This is the ONLY recovery path for a solo handler").
-       Injury's own hard sprint/jump BLOCK makes this an even stronger case
-       for parity than Mood's speed-multiplier-only penalty, not a weaker
-       one. At 1.0/tick: jumpBlockThreshold(20) clears in 100s (~1.67 min),
-       sprintBlockThreshold(30) in 150s (~2.5 min), a full 0->100 climb in
-       500s (~8.33 min, identical to Mood's own already-adopted number).
-       Reported to the task owner for config.lua; NOT applied here.
+    This header carried about 170 lines describing two real problems and
+    their fixes: a K9 whose injury stat hit zero was sprint- and jump-blocked
+    for roughly sixteen real minutes of passive regen with no way out, and a
+    death/respawn reset that could be farmed by crossing a health threshold
+    and healing back within one tick -- paying a full restore for the price
+    of a bandage, once per crossing rather than once per down.
 
-    2. DEATH/RESPAWN RESET — fixed below (`PED_DEAD_HEALTH_THRESHOLD`,
-       `MIN_DEATH_EPISODE_DURATION_MS`, `injuryDeathEpisodeStartedAt`, and
-       the death-episode block inside TickWellbeing's
-       `Config.Features.InjuryLimping` branch). DECISION: a K9 that dies and
-       is later revived/respawned is treated the same way this resource
-       already treats every OTHER measure of that ped's condition across the
-       exact same event — its REAL native health is already reset to full by
-       whatever laststand/ambulance system handles revival/respawn (nothing
-       in this resource, or in the game engine, makes a fresh life inherit
-       the previous one's wounds); a virtual Injury value surviving that
-       same event completely unmodified is the actual inconsistency, not a
-       deliberate design. `Config.Wellbeing.Injury.deathRespawnRestoreAmount`
-       (new field, reported to the task owner for config.lua — recommended
-       default 100, i.e. Injury.max, a FULL reset) is added to Injury once a
-       qualifying death EPISODE ends with the K9 observed alive again.
-       CONFIGURABLE, per this task's own instruction: an operator who wants
-       "still limping after respawn" for realism sets it to 0 (a genuine,
-       supported no-op) or any partial value between 0 and Injury.max.
+    Both were fixed, and both are now moot: the injury stat, its regen, its
+    sprint/jump block, the PED_DEAD_HEALTH_THRESHOLD episode tracking and the
+    restore payout no longer exist in this file. The account is kept in one
+    paragraph rather than deleted outright because the SHAPE of the second
+    bug is worth remembering -- a boolean "were they dead" flag read across
+    two polls will always misread an oscillation as a transition, and the fix
+    was to store the episode's start timestamp instead and judge each episode
+    exactly once. That lesson applies to any future stat with a
+    dead-and-revived edge; the code it was written about does not.
 
-       READ THIS BEFORE TOUCHING THE DETECTION LOGIC — IT IS A HEURISTIC,
-       NOT AN EVENT. This resource has no server-authoritative "this ped
-       just died" or "this ped was just revived" signal of its own, and this
-       file's own established convention (CONFIDENCE GRADING item 5 above,
-       for flashbang immunity) is to refuse to guess at a third-party
-       ambulance/laststand resource's event name or payload shape rather
-       than invent one that would only ever fire on servers running that
-       exact resource. What this actually measures, honestly: has this K9's
-       native health been observed continuously at/below
-       `PED_DEAD_HEALTH_THRESHOLD` for at least
-       `MIN_DEATH_EPISODE_DURATION_MS`, sampled once per
-       `Config.Wellbeing.tickIntervalMs`. That is a real, if imperfect,
-       proxy for "was genuinely downed for a meaningful stretch" — it is NOT
-       a death event, cannot be made into one without a dependency this file
-       has already refused to guess at, and both KNOWN failure directions
-       are disclosed rather than hidden: it can miss a genuine, very fast
-       revive (rare — see the timing note below), and it can very rarely
-       credit a bizarre non-death cause of prolonged sub-threshold health
-       (also see below). `IsEntityDead` is deliberately NOT used for this
-       detection — that native has NO FXServer server-side registration at
-       all (server/combat.lua's and server/medkit.lua's own, independently
-       confirmed "NATIVE-AVAILABILITY FIX" findings, both citing a direct
-       search of citizenfx/fivem's own native-registration source; not
-       re-verified a third time here, reused as already-established fact)
-       and always silently returns `false` server-side. `PED_DEAD_HEALTH_
-       THRESHOLD = 100` mirrors server/combat.lua's/server/medkit.lua's own
-       identical constant and reasoning (a GTA ped is conventionally
-       declared dead at 100 health, not 0 — the reason default max health
-       is 200).
-
-       FOLLOW-UP FIX #1 (regression pass, caught empirically against the
-       live resource): the first version of this detection used a plain
-       boolean ("was this ped observed dead as of the last tick") living in
-       the same per-citizenid `WellbeingStats` table this file's OWN header
-       documents as deliberately surviving a disconnect ("a K9 who logs off
-       tired should still be tired on reconnect") — but that persistence
-       rule was written for the four PERSISTED stats, and this boolean was
-       not one of them; it was a transient snapshot of "was THIS SPECIFIC
-       ped handle observed dead," meaningless the instant a reconnect hands
-       the citizenid a brand-new ped. A K9 could take damage, die,
-       DISCONNECT while dead (before any revive completed), and reconnect to
-       a fresh, genuinely-alive ped that never went through any revive/
-       ambulance flow at all — the next tick misread that as a real
-       transition and paid the full restore for free, repeatably. FIXED:
-       both places that already reset the OTHER field in this exact same
-       transient category (`lastCoords` — the `elseif ped ~= 0` branch
-       inside TickWellbeing, and the `playerDropped` handler) now ALSO reset
-       `injuryDeathEpisodeStartedAt` to 0 alongside it. See the
-       `WellbeingStats` struct comment (above `EnsureStats`) for the
-       now-explicit "persisted vs. transient ped-instance-scoped" category
-       split this bug fell through the seam of.
-
-       FOLLOW-UP FIX #2 (red-team pass, independently found, WORSE than #1):
-       the same boolean design paid out on ANY observed crossing of
-       `PED_DEAD_HEALTH_THRESHOLD`, not a genuine death-and-revival — no
-       disconnect, no ambulance flow, no delay of any kind required. A K9
-       grazed down to ~90 health (a serious wound by this codebase's own
-       health-threshold convention, but very much still an ordinary, ACTIVE
-       combat participant, not "dead" in any gameplay sense) that healed
-       back above 100 within the next `tickIntervalMs` — an ordinary
-       bandage, food, armor, or even vanilla passive regen, all well under
-       the 5s default poll interval — had that single boundary crossing read
-       as "died and was revived," paying the FULL `deathRespawnRestoreAmount`
-       (100 by default) for the cost of a bandage: strictly cheaper than
-       both recovery paths this whole fix was built around (the deliberately
-       slow `passiveRegenPerTick`, and K9Medkit's own `injuryRestore` of 40 —
-       this exploit was worth more than the item it was meant to sit
-       alongside). It also paid out ONCE PER CROSSING rather than once per
-       down episode, so a genuinely downed K9 whose health merely oscillated
-       near the threshold during one real laststand could collect several
-       full resets from a single down. FIXED by replacing the boolean with
-       `injuryDeathEpisodeStartedAt`, a `GetGameTimer()` timestamp (0 =
-       not currently in a candidate episode): set on the FIRST tick a
-       continuous sub-threshold stretch begins, left untouched while it
-       continues, and read — then unconditionally cleared to 0, whether or
-       not it qualifies — the moment the K9 is next observed alive. The
-       restore fires only if that episode's measured span reached
-       `MIN_DEATH_EPISODE_DURATION_MS`; an ordinary combat dip healed within
-       a tick or two never does, and clearing the timestamp unconditionally
-       on every alive-observation means each candidate episode is judged
-       exactly once, closing the oscillation/multi-payout case as a natural
-       consequence of the same fix rather than a second, separate patch.
-       `MIN_DEATH_EPISODE_DURATION_MS` is deliberately a LOCAL constant, not
-       a new Config field — same "small, disclosed, security-relevant value
-       lives in code, not an operator-tunable knob that could be set low
-       enough to reopen the exploit" reasoning this file's own
-       HESITATION_MAX_CONTINUOUS_MS below already established. See that
-       constant's own doc comment for the exact derivation and the residual
-       limitations this heuristic still, honestly, cannot close.
-
-       NOTE FOR CONFIG.LUA'S OWN disclosed-residual-risk COMMENT (task
-       owner, this is the update the coordinator asked for): the OLD text
-       covered only a player choosing to fully die and be revived through a
-       real ambulance system with real cost. It did not cover, and after
-       FOLLOW-UP FIX #2 no longer needs to worry about, ordinary combat
-       healing near the threshold (that path is now gated on
-       MIN_DEATH_EPISODE_DURATION_MS, ~60s minimum by default — see that
-       constant's own comment) or multiple payouts from one oscillating down
-       episode (now impossible — at most one payout per episode, by
-       construction). The residual risk that DOES remain, honestly: a player
-       who deliberately manufactures a real ≥60-second stretch at/below 100
-       health and then heals up still receives a full restore with no real
-       ambulance/laststand system involved at all — cheaper than a genuine
-       downed state in most real deployments (which typically run minutes,
-       not the ~60s floor here), but not free in the way the crossing-based
-       version was, and bounded to at most one payout per attempt rather
-       than one per graze. Recommended config.lua wording: replace the
-       existing disclosed-risk paragraph's scope from "a player choosing to
-       die and be revived" to "a player deliberately holding their K9's
-       health at or below 100 for at least MIN_DEATH_EPISODE_DURATION_MS
-       (server/wellbeing.lua, ~60s by default) and then healing normally,
-       with no real ambulance/laststand flow required" — same underlying
-       risk category, now bounded to a real minimum time cost per attempt
-       and to one payout per episode rather than unbounded/free.
 
     3. SILENT PLACEHOLDER-ITEM FAILURE — fixed below (`WarnIfItemMissing`,
        the trailing `AddEventHandler('onResourceStart', ...)` block).
@@ -627,10 +334,10 @@
        (`exports.ox_inventory:Items(name)`, confirmed against a fresh read
        of ox_inventory's own `modules/items/server.lua` this pass — returns
        the item's registered data table, or nil if that name was never
-       registered), not just `Config.K9Medkit.itemName`:
-       `Config.Wellbeing.Mood.feedItemName`, `Config.Wellbeing.Distraction
-       .meatBaitItemName`, and `.whistleItemName` are this file's own three;
-       `Config.K9Medkit.itemName` is ALSO checked HERE, even though
+       registered). It used to cover three item names of this file's own --
+       the mood system's feed item and the distraction system's meat bait and
+       whistle -- all removed on 2026-09-02 with those subsystems.
+       `Config.K9Medkit.itemName` is checked HERE, even though
        server/medkit.lua is the file that actually consumes it — a
        deliberate exception to this resource's usual "each file validates
        its own config" convention, forced by this task's own file-ownership
@@ -662,97 +369,26 @@
     ======================================================================
 
     ======================================================================
-    HUNGER/THIRST (this pass, coder-backend) -- Config.Features.HungerThirstSystem.
-    A SIXTH sibling stat pair added to the SAME shared file/tick/store this
-    header already establishes -- not a parallel subsystem. Full reasoning
-    (rates, consequences, persistence, anti-farm) is in this task's own
-    hand-off report, not repeated in full here; this is the short version
-    for anyone reading only this file.
+    HUNGER AND THIRST -- REMOVED 2026-09-02, at the owner's request.
 
-    CONSEQUENCE, DELIBERATELY MILD: both stats feed a single MILD move-rate
-    multiplier each (Config.Wellbeing.Hunger/Thirst.speedPenaltyMultiplier,
-    via K9MoveRateModifiers.hunger/.thirst -- client/movement.lua's composer
-    is a generic `for _, modifier in pairs(K9MoveRateModifiers) do effective
-    = effective * modifier end`, so a new named key needs no change there).
-    Deliberately NOT a hard input block (unlike Injury) -- a starving/
-    dehydrated K9 must stay usable, just slower, per this task's own
-    instruction that this "should never be able to reach cannot work at
-    all." Clamped server-side to [0.5, 1.0] (see ClampConfiguredNumber call
-    sites below) so a bad config edit cannot turn "mild" into "frozen."
+    This header carried about 90 lines of design writeup for them: the mild
+    move-rate penalty each fed, their persistence alongside the other stats,
+    the deliberate absence of any death/respawn interaction, the anti-farm
+    posture (passive decay the only thing that ever lowered them), and the
+    self-service feeding path that diverged from mood's petting on purpose.
+    None of it describes this file any more -- the stats, their events, their
+    accessors and their config tables are all gone.
 
-    RATES: decayPerTick is tuned so Hunger empties in ~90 minutes (one
-    on-duty K9 shift) and Thirst in ~60 minutes (dogs need water more often
-    than food) if never fed/watered, at the shipped tickIntervalMs (5000ms).
-    See config.lua's own comment on each field for the exact arithmetic.
+    One inherited note worth keeping, because it later proved right about a
+    field that is still live: the water-bowl path targeted a prop model named
+    'water_bowl', flagged here at the time as unverified and disclosed rather
+    than assumed. It turned out not to exist at all. The same name was also
+    sitting in the fatigue system's restSources, where it had never matched
+    anything either -- see DEVELOPER_REFERENCE.md §22 for how that was
+    finally established, and treat a prop name without a `prop_` prefix as
+    suspect until a database confirms it.
 
-    PERSISTENCE: hunger/thirst are added to the SAME persisted category as
-    fatigue/mood/fearStress/injury (see the WellbeingStats struct comment
-    below, category 1) -- "a K9 who logs off hungry should still be hungry
-    on reconnect within the same server session," same rule, same reason,
-    no new transient/category-2 field needed (there is no per-ped-instance
-    observation for these two stats the way lastCoords/
-    injuryDeathEpisodeStartedAt are for Fatigue/Injury).
 
-    NO DEATH/RESPAWN INTERACTION, DELIBERATELY: unlike Injury, dying and
-    being revived does not refill a K9's stomach -- no restore is wired for
-    either stat on that transition, and none should be added without
-    re-deriving Injury's own MIN_DEATH_EPISODE_DURATION_MS-style defenses
-    first (a full restore-on-revive for a stat with no real connection to
-    combat health would just be a second, needless exploit surface).
-
-    ANTI-FARM: passive decay is the ONLY thing that ever lowers either stat,
-    driven purely by TICK_INTERVAL_MS/GetGameTimer() -- no client input
-    (e.g. "am I sprinting") accelerates it, unlike Fatigue's sprint-decay,
-    specifically so a client cannot grief its OWN K9's hunger/thirst by
-    forging activity. Every RELIEF action below (feedK9Hunger/giveK9Water/
-    drinkFromBowl) is cooldowned per CITIZENID (the stat owner), stamped
-    BEFORE any item removal (TOCTOU-safe ordering, mirrors Mood/K9Medkit),
-    and real item consumption is a real, non-recoverable resource cost --
-    between the cooldown and the item cost, neither stat can be pushed to
-    max and held there for free or arbitrarily often.
-
-    SELF-SERVICE, A DELIBERATE DIVERGENCE FROM MOOD's petK9/feedK9: Mood's
-    `targetPed == usingPed` reject exists to force a genuine second player
-    into the loop (a bonding mechanic). Hunger/Thirst are framed here as
-    PERSONAL upkeep (matching both named competitors' own "food/water items
-    you carry for your own K9" framing, DEVELOPER_REFERENCE task's own WHY
-    section) -- so feedK9Hunger/giveK9Water are plain self-only actions (no
-    target parameter at all, exactly RequestK9CalmDown/calmDownK9's shape),
-    triggered by `/k9eat` and `/k9drink` (client/wellbeing.lua), not an
-    ox_target option on another player. A K9 with no partner online is never
-    locked out of feeding itself, unlike Mood.
-
-    WATER BOWL MODEL RISK, INHERITED AND DISCLOSED: drinkFromBowl (the free,
-    no-item world-prop path, Thirst only -- Hunger has no bowl equivalent,
-    see the report for why) targets Config.Wellbeing.Thirst.bowlSources,
-    shipped as `{ 'water_bowl' }` -- the SAME unverified model name
-    Config.Wellbeing.Fatigue.restSources already carries a disclosed risk
-    for. Kept as an INDEPENDENT list (not a re-read of Fatigue's own field)
-    so a confirmed replacement can be set here without touching Fatigue.
-    DEGRADES GRACEFULLY if it never resolves to a real model: ox_target's
-    AddModel (client/wellbeing.lua) simply never matches anything in the
-    world, so the option never appears -- Thirst still fully works via
-    giveK9Water (the item path), which has no model dependency at all.
-
-    CONFIG DEFENSIVENESS, A REAL CONSTRAINT OF THIS TASK'S OWN FILE-OWNERSHIP
-    BOUNDARY: this file does NOT own config.lua, so `Config.Wellbeing.Hunger`/
-    `.Thirst` may not exist yet on a server whose config.lua has not been
-    updated to add them. Every unconditional read (EnsureStats' defaults,
-    SnapshotOf's wellbeingTunables entries) guards with
-    `type(Config.Wellbeing.Hunger) == 'table'` before indexing into it, so a
-    server missing these tables entirely degrades to safe hardcoded
-    defaults rather than erroring out of THIS FILE'S OWN LOAD (which would
-    take Fatigue/Mood/FearStress/Distraction/Injury down with it -- the
-    exact "one Config typo takes five unrelated features down" failure this
-    file's own TICK_INTERVAL_MS validation above already refuses to repeat).
-    GetResolvedHungerThirstConfig() (CLAMP AND WARN, below) is the one place
-    that reads every field individually and is ONLY ever called from inside
-    an `if Config.Features.HungerThirstSystem then` branch -- "read at the
-    point of activation," restated for a config SECTION that may not exist
-    at all, not just a bad VALUE inside one that does.
-    ======================================================================
-
-    ======================================================================
     HANDLER CONDITION BADGE (this pass, coder-backend) -- closes a
     production-readiness audit's own "the single best remaining thing to
     build" finding: a handler (the human officer at the other end of a
@@ -1199,8 +835,8 @@ end
 --- ABSENT -- exactly GetResolvedHungerThirstConfig's own "an inert
 --- default is never an activation" convention (this file's header), not
 --- TICK_INTERVAL_MS's own "always warn, this field has shipped for a long
---- time" one: `Config.Wellbeing.Persistence` is BRAND NEW, like
---- Config.Wellbeing.Hunger/.Thirst, and this file does not own adding it
+--- time" one: `Config.Wellbeing.Persistence` is newer than the fields
+--- around it, and this file does not own adding it
 --- to every server's config.lua. A server whose config.lua has not yet
 --- picked it up must not print three loud warnings on every single boot
 --- about a sub-block nobody has had the chance to add yet -- that is
@@ -1366,9 +1002,9 @@ local function EnsureStats(citizenid)
     local stats = WellbeingStats[citizenid]
     if stats then return stats end
 
-    -- CONFIG-DEFENSIVE, same reasoning as every other Config.Wellbeing.Hunger/
-    -- .Thirst read in this file: this file does not own config.lua and
-    -- these subtables may not exist yet on a given server.
+    -- CONFIG-DEFENSIVE, the same reasoning applied to every optional
+    -- sub-table read in this file: it does not own config.lua, so a
+    -- sub-table may not exist on a given server at all.
     local hungerMax = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.max)) or 100
     local thirstMax = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.max)) or 100
 
@@ -1605,10 +1241,9 @@ local function SnapshotOf(stats)
             -- DOES, since client/wellbeing.lua is the one that actually
             -- calls RestorePlayerStamina.
             fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
-            -- HUNGER/THIRST (this pass, coder-backend). CONFIG-DEFENSIVE,
-            -- unlike every other line in this table: `Config.Wellbeing.Hunger`/
-            -- `.Thirst` may not exist yet on a server whose config.lua has
-            -- not landed them (this file's header explains why) --
+            -- CONFIG-DEFENSIVE, unlike every other line in this table: the
+            -- sub-table read here may not exist on a server whose config.lua
+            -- has not landed it (this file's header explains why) --
             -- SnapshotOf is built every tick for ANY of the six flags being
             -- on, not just HungerThirstSystem, so an unguarded read here
             -- would crash a snapshot push for e.g. a MoodSystem-only server.
@@ -2187,7 +1822,7 @@ end
 --- had never been through any revive/ambulance flow at all. The very next
 --- TickWellbeing pass then read `isDeadNow == false` against the stale
 --- `true` flag as a real dead-to-alive TRANSITION and paid out a full
---- `Config.Wellbeing.Injury.deathRespawnRestoreAmount` for free — cheaper
+--- full injury restore for free — cheaper
 --- than the passive regen climb this fix deliberately left in place, no
 --- medkit/ambulance/delay required, and trivially repeatable (disconnect
 --- while dead, reconnect, repeat). This is exactly the scenario that field's

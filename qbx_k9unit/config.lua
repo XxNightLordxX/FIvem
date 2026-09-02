@@ -3143,7 +3143,8 @@ Config.SearchZones = {
     -- bounded when it was not: two officers alternating never wait, and one
     -- officer toggling a stash they control was throttled only by this.
     -- The XP award is now separately gated by a per-searcher mint cooldown
-    -- in server/search.lua. Contrast Config.Wellbeing.Mood.petCooldownMs,
+    -- in server/search.lua. (The mood system this used to contrast with was
+    -- removed on 2026-09-02.)
     -- whose "per-(interactor, target)" claim IS accurate.
     searchCooldownMs      = 10000, -- prevents repeat-search spam against the same vehicle/person to fish for a different roll or just to harass
     alertBroadcastRadius  = 15.0,  -- max distance from the searched target's own live coordinates for a bystander to receive the ContrabandAlerts sound/reaction broadcast. Deliberately NOT a global TriggerClientEvent(-1, ...) like relayBark -- unlike a bark, this payload identifies a specific vehicle/person just flagged for contraband, so broadcasting it map-wide would leak that fact to an accomplice anywhere on the server. server/search.lua must iterate connected players and filter by this radius before sending. HARD CEILING: 200.0m, enforced in code (server/search.lua's own onResourceStart guard) -- a value above that is clamped back down to 200.0 rather than honored, specifically so this can never be raised high enough to functionally become a map-wide broadcast.
@@ -4092,106 +4093,16 @@ Config.Wellbeing = {
         idleRegenPerTick        = 1.0,  -- per tick while not sprinting
         restRegenPerTick        = 4.0,  -- WIRED. server/wellbeing.lua scans GetAllObjects()/GetAllVehicles() once per tick (shared across all K9s, not per-K9) for restSources models and applies this instead of idleRegenPerTick when a K9 is within restRadius and not sprinting. Positions are resolved server-side; a client can never claim to be resting. The "NOT WIRED THIS PASS" note that stood here was true when written.
         restRadius              = 5.0,
-        -- The DETECTION is wired (see restRegenPerTick above -- the scan,
-        -- the radius check and the server-side position resolution are all
-        -- real). The MODEL NAMES below are of deliberately mixed, honestly
-        -- labelled confidence -- do not read the list shape as "these are
-        -- all equally trustworthy":
-        --
-        -- 'prop_dog_cage_01' -- CONFIRMED REAL, independently, before this
-        -- pass (see Config.DeployableKennel.propModel's own confidence
-        -- note: hash 379820688, found with a rendered screenshot in a
-        -- vanilla-prop database). Added here in an earlier pass as a
-        -- second rest source alongside the kennel feature, unchanged this
-        -- pass. Deliberately still NOT joined by
-        -- Config.DeployableKennel.fallbackPropModel ('prop_tennis_ball'):
-        -- server/kennel.lua's own header CROSS-FEATURE GAP section already
-        -- documents that model colliding with server/fetch.lua's ball and
-        -- server/propattachment.lua's fallback vest, and listing it here
-        -- too would let an unrelated dropped fetch ball or worn-vest
-        -- fallback silently grant this rest bonus to any K9 standing near
-        -- it.
-        --
-        -- 'water_bowl' -- STILL UNVERIFIED, and RESEARCHED THIS PASS
-        -- (owner-directed prop-name audit) rather than left untouched.
-        -- Every dedicated GTA/FiveM prop database and forum thread this
-        -- task's own brief named -- docs.fivem.net, gtahash.ru, gtahash.com,
-        -- forge.plebmasters.de, vespura.com, gta-objects.xyz, gtamods.com,
-        -- gta.fandom.com, forum.cfx.re, se7ensins.com, pastebin.com,
-        -- gist.githubusercontent.com's raw view, gta5-mods.com and even
-        -- en.wikipedia.org -- was BLOCKED OUTRIGHT by this sandbox's own
-        -- network egress policy this session (report that if a live
-        -- re-check is ever needed; it is a tooling gap, not a research
-        -- shortcut taken here). Two sources were reachable, so this is
-        -- what they actually showed, not a guess dressed up as a lookup:
-        --   1. github.com/DurtyFree/gta-v-data-dumps' ObjectList.ini, a
-        --      direct dump of the game's own object/ytyp data (21,631
-        --      entries total; only the first ~4,637 fit through this
-        --      session's fetch tooling, so this is a PARTIAL read, not a
-        --      full-file negative). Zero "dog" matches anywhere in that
-        --      visible slice. Every real bowl/bench/sofa name it DID
-        --      contain (hei_heist_acc_bowl_01/02,
-        --      apa_mp_h_acc_bowl_ceramic_01, ex_mp_h_acc_bowl_ceramic_01,
-        --      gr_prop_gr_bench_01a-04b, apa_mp_h_stn_sofa*,
-        --      bkr_prop_clubhouse_sofa_01a, hei_heist_stn_sofa*) is DLC
-        --      MP-property interior set-dressing (apartment/executive-
-        --      office/clubhouse/bunker/heist-setup-room), tied to that one
-        --      owned instance rather than general open-world street
-        --      objects, and none of it is dog-related or plainly a
-        --      seating bench (some, like imp_prop_bench_grinder_01a, are
-        --      garage WORKBENCHES, a different object entirely) -- so none
-        --      is proposed as a candidate.
-        --   2. gist.github.com/leonardosnt/53faac01a38fc94505e9, a separate
-        --      community-compiled prop list (~3,000+ entries, also cut off
-        --      before its own alphabetical end). USEFULLY CROSS-CHECKS
-        --      source 1: it independently confirms 'prop_dog_cage_01' AND
-        --      'prop_dog_cage_02', plus 'prop_beware_dog_sign' and several
-        --      'prop_cs_dog_lead_*' leash props -- so dog-adjacent props do
-        --      exist and this source surfaces them when present. It
-        --      contains NO "bed", dog-shaped "bowl", "kennel", "doghouse",
-        --      "trough", "food_bowl", "water_bowl" or "waterbowl" match of
-        --      any kind. The only bowls it lists at all are
-        --      'prop_bowl_crisps' (a snack bowl) and
-        --      'prop_cs_bowl_01'/'prop_cs_bowl_01b' (unidentified story-
-        --      mission bowls).
-        -- A pattern worth naming: every real bowl name either source
-        -- produced, without exception, carries a 'prop_' prefix (or a DLC
-        -- prefix plus a 'prop_'-style segment). 'water_bowl' has neither --
-        -- consistent with, not merely repeating, this field's pre-existing
-        -- "suspicious on its face" doubt. No dog-bowl or dog-bed candidate
-        -- was found anywhere to replace it with, so per instruction it
-        -- stays here, disclosed, rather than being swapped for a
-        -- different, equally-unconfirmed guess that would only look more
-        -- confident.
-        --
-        -- 'prop_bench_04' and 'prop_couch_01' -- ADDED THIS PASS. Both are
-        -- plain, non-DLC-prefixed names, confirmed present in source 2
-        -- above alongside several sibling variants
-        -- ('prop_bench_01b'/'01c'/'05'/'09', 'prop_couch_03'/'04'/'lg_*'/
-        -- 'sm_*') -- picked as the least location-suffixed of each family
-        -- (source 2 also lists 'prop_pris_bench_01'/'prop_byard_bench01'/
-        -- '02', almost certainly tied to the Bolingbroke Penitentiary yard
-        -- specifically, so not used here). Neither collides with any other
-        -- model name used anywhere else in this file (checked). ONE-SOURCE
-        -- CONFIRMATION ONLY, a real and lower tier than 'prop_dog_cage_01'
-        -- above: source 1 could not corroborate either name because both
-        -- fell outside the ~21% of ObjectList.ini this session's tooling
-        -- could load, not because it contradicted them -- so treat this as
-        -- "confirmed in one reachable database this session, backed by
-        -- well-established general FiveM community knowledge that both
-        -- prefixes name common vanilla static street/interior furniture,"
-        -- not as the two-independent-source bar 'prop_dog_cage_01' met. A
-        -- K9 resting near an ordinary bench or couch is a reasonable
-        -- stand-in given no dog-specific rest prop was found anywhere (see
-        -- 'water_bowl' note above) -- this is exactly the "benches, sofas,
-        -- or similar" fallback this field's own review brief allowed for
-        -- once dog-specific furniture was confirmed absent.
-        -- 'water_bowl' REMOVED (it is confirmed not to exist -- see
-        -- Config.Wellbeing.Thirst.bowlSources below for the evidence) and
-        -- replaced with the three real dog-bowl models that same check
-        -- turned up. The other three entries here were already confirmed
-        -- real. Nothing about resting changes for an existing server: the
-        -- entry that was removed had never once matched anything.
+        -- The prop names a K9 must be standing near to rest. A name that does
+        -- not exist in the game fails SILENTLY -- the dog simply never rests
+        -- near it and nothing says why -- so every entry here has been
+        -- checked against a real prop database. Confidence is not uniform:
+        -- 'prop_dog_cage_01' is confirmed in two independent sources; the
+        -- bench, the couch and the three dog bowls in one. See
+        -- DEVELOPER_REFERENCE.md §22 before adding to this list, and note
+        -- that a plausible-looking name is not evidence -- 'water_bowl'
+        -- shipped here for a long time and turned out never to have matched
+        -- anything at all.
         restSources             = {
             'prop_dog_cage_01', 'prop_bench_04', 'prop_couch_01',
             'm25_1_prop_m51_dog_bowl_full',
@@ -4199,13 +4110,11 @@ Config.Wellbeing = {
             'm25_2_int_01_dog_bowl',
         },
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Tired" -- raise it and that word appears sooner (a lower tolerance for tiredness), lower it and it appears later
-        -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
-        -- client/movement.lua's own comment computes the worst case as
-        -- Injury 0.7 * Fatigue 0.85 * Mood 0.9 ~= 0.535. That is the ordinary
-        -- aftermath of one bad gunfight, and at those values an Elite K9
-        -- (1.15x tier bonus) nets 0.615x -- SLOWER than a healthy Recruit.
-        -- Three independently-reviewed "mild" penalties compounded into half
-        -- speed because nobody reviewed them together. New worst case ~0.684.
+        -- How much a tired K9 is slowed. This is now the ONLY speed penalty
+        -- wellbeing applies -- the injury and mood penalties it used to
+        -- compound with were removed on 2026-09-02 -- so the number you set
+        -- here is the whole effect, not one factor of three. See
+        -- DEVELOPER_REFERENCE.md §22 for why it was raised from 0.85.
         speedPenaltyMultiplier  = 0.90, -- fed into RecomputeK9MoveRate() (client/movement.lua, K9MoveRateModifiers.fatigue), never a standalone SetPedMoveRateOverride call
         -- NOT in DEVELOPER_REFERENCE.md §13.2's sketch verbatim -- added here
         -- because "sprinting" needs a concrete speed cutoff to classify
