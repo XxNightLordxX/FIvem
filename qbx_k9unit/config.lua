@@ -3656,7 +3656,6 @@ Config.K9Inventory = {
 Config.K9Medkit = {
     itemName      = 'k9_medkit', -- PLACEHOLDER item name — must exist in the target server's ox_inventory items table; NOT registered as a hotbar-"useable" item by this resource, see server/medkit.lua's header for why
     healthRestore = 50,          -- native health units restored to the K9's REAL ped health, clamped to GetEntityMaxHealth server-side, never allowed to overheal
-    injuryRestore = 40,          -- how much of a dog's injury a medkit heals. THIS IS LIVE: the comment here used to say it was "a no-op today", waiting on a file that has since been written, and an owner reading only this line would have believed changing the number did nothing. It is read by server/medkit.lua on every use. HIGHER = each medkit heals more.
     range         = 2.0,         -- meters — server-enforced max distance between the using player and the target K9's own live positions, checked BEFORE any item consumption or health mutation
     cooldownMs    = 60000,       -- per-target (K9 citizenid) cooldown, prevents repeated instant-heal spam against the same K9
     -- Job names, in addition to any job ∈ Config.Departments, allowed to use

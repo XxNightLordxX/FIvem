@@ -127,25 +127,13 @@
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
       server/certifications/ — reused, never re-derived, to verify the
       TARGET really is a configured K9 model server-side.
-    - Calls `RestoreInjury(citizenid, amount)`, resource-global from
-      server/wellbeing.lua, ONLY IF THAT FUNCTION EXISTS
-      (`type(RestoreInjury) == 'function'` guard) — server/wellbeing.lua
-      (DEVELOPER_REFERENCE.md §13.1 sub-phase 4c/4d, the Injury wellbeing stat)
-      has NOT been implemented as of this file being written (confirmed:
-      no such file exists in this resource's server/ directory at the time
-      of this pass — DEVELOPER_REFERENCE.md §13.1 itself documents K9Medkit, 4g, as
-      depending on 4c/4d landing first). This is forward-compatible by
-      design: once server/wellbeing.lua ships that accessor, this line
-      activates with zero change needed here. Until then, K9Medkit restores
-      REAL ped health only — never silently errors, and never blocks the
-      health restore on a not-yet-built subsystem.
     - Owns `MedkitCooldown` and `MedkitMutex` below as file-local state,
       each a server/cooldowns.lua tracker instance (NewCooldown/NewMutex)
       — DEVELOPER_REFERENCE.md item 1's convention, no hand-rolled table.
     - Calls `GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)`,
       resource-global from server/progression.lua, ONLY IF THAT FUNCTION
-      EXISTS (`type(...) == 'function'` guard, same soft-dependency
-      convention as the `RestoreInjury` call site above) — resolves the
+      EXISTS (`type(...) == 'function'` guard, this resource's own
+      soft-dependency convention) — resolves the
       Veteran-tier `medkitCooldownMultiplier` unlock (config.lua's own
       Config.XPTiers row) into the actual threshold RunUseK9MedkitMutation's
       own `MedkitCooldown.IsOnCooldown` call below is checked against,
@@ -189,15 +177,9 @@
        resource outside the two read-only `GetEntityMaxHealth` call sites
        already known (this file, and client/hud.lua's own read-only HUD
        normalization). server/wellbeing.lua's Injury stat — the "injury/
-       wellbeing subsystem" the open question named — is CONFIRMED (read its
-       real implementation directly this session) to be an entirely
-       separate, virtual, per-citizenid float (`WellbeingStats[citizenid]
-       .injury`, clamped against the injury system's own configured maximum)
-       that never touched
-       the ped's actual native health/max-health fields at all — `Config
-       .K9Medkit.injuryRestore` restores THAT virtual stat via
-       `RestoreInjury`, entirely independent of the `GetEntityMaxHealth`
-       read three lines above it in HandleUseK9Medkit. So: nothing in this
+       wellbeing subsystem" the open question named was, while it existed,
+       an entirely separate virtual per-citizenid float that never touched
+       the ped's actual native health/max-health fields at all. So: nothing in this
        codebase ever modifies a K9 ped's real max health, meaning the
        server's `GetEntityMaxHealth(targetPed)` read (HandleUseK9Medkit,
        "compute" step) and the target's own client's later
@@ -306,9 +288,8 @@
        still fail; nothing consumed or stamped yet) -> RemoveItem (the
        real mutation; failure here is reported as `no_item` with nothing
        stamped) -> cooldown stamp -> TriggerClientEvent, with the two
-       trailing side effects (RestoreInjury, the notify calls) now BOTH
-       pcall-wrapped so a throw in either can never turn an
-       already-committed heal into a reported failure.
+       trailing notify calls now pcall-wrapped so a throw in either can
+       never turn an already-committed heal into a reported failure.
 
        COOLDOWN DECISION: the cooldown stamp moved from "before RemoveItem"
        to "after RemoveItem succeeds" — i.e. the target's cooldown is now
@@ -535,7 +516,7 @@ end)
 -- actually yields — see this file's OX_INVENTORY EXPORT SIGNATURES note —
 -- so the two calls cannot truly interleave mid-handler today, but the
 -- mutex keeps this file correct if a future change, e.g. an awaited audit
--- log write or RestoreInjury growing a DB round-trip, ever introduces a
+-- log write, ever introduces a
 -- real yield point here). Released on EVERY exit path, mirroring
 -- server/search.lua's SearchMutex discipline exactly.
 local MedkitMutex = NewMutex()
@@ -642,7 +623,7 @@ end
 ---      fails despite step 3's check having just passed (should not happen
 ---      given neither ox_inventory call yields in between, but never
 ---      assumed), reject WITHOUT stamping the cooldown and WITHOUT applying
----      any health/Injury change — nothing was actually consumed, so
+---      any health change — nothing was actually consumed, so
 ---      nothing should be charged against the target's cooldown either.
 ---   6. Stamp the cooldown NOW that the item is confirmed consumed, then
 ---      immediately push the heal to the target's own client to
@@ -650,9 +631,7 @@ end
 ---      and CORRECTNESS PASS finding 4 for the residual, honestly-disclosed
 ---      window that remains between "item removed" and "heal actually
 ---      landing on the target's own client").
----   7. Call RestoreInjury(citizenid, ...) if and only if server/wellbeing.lua
----      has defined it (forward-compatible no-op otherwise), then notify
----      both players — both wrapped so a throw in either can never flip an
+---   7. Notify both players — wrapped so a throw can never flip an
 ---      already-committed heal back to a reported failure.
 --- @param usingPed number
 --- @param targetPed number
@@ -681,7 +660,7 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- since MedkitCooldown itself is a per-TARGET cooldown (see this
     -- function's own header, "THE PER-TARGET COOLDOWN"). Soft dependency,
     -- this resource's established `type(...) == 'function'` convention
-    -- (mirrors this file's own RestoreInjury call site below) -- falls back
+    -- falls back
     -- to the FRESHLY-resolved base cooldown (ResolveMedkitBaseCooldownMs,
     -- see that function's own doc comment for why this must be re-resolved
     -- on every call, never cached) when server/progression.lua hasn't
@@ -812,15 +791,8 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- Everything below this line is best-effort and MUST NOT be able to
     -- flip the result back to ok=false — the item is gone and the heal has
     -- already been pushed, so from the caller's perspective the treat has
-    -- already succeeded. RestoreInjury already had its own pcall; the
-    -- notify calls are now wrapped the same way for the same reason (see
+    -- already succeeded. The notify calls are wrapped for that reason (see
     -- CORRECTNESS PASS finding 4).
-    if type(RestoreInjury) == 'function' then
-        local ok = pcall(RestoreInjury, targetCitizenid, Config.K9Medkit.injuryRestore)
-        if not ok then
-            print(('[qbx_k9unit] RestoreInjury errored for citizenid %s during K9Medkit use — health restore already applied, Injury restore skipped'):format(targetCitizenid))
-        end
-    end
 
     -- HANDLER XP (WIRING PASS, coder-backend): handlerTreatK9, paid to the
     -- USING player -- never the K9 -- and ONLY for a GENUINE heal
@@ -839,7 +811,7 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- that tracker's own declaration comment for why reusing it here would
     -- reopen the exact loop this dedicated tracker exists to close).
     -- Soft dependency (`type(AwardHandlerXP) == 'function'`), same
-    -- convention as RestoreInjury/GetXPTierMedkitCooldownMs above -- this
+    -- convention as GetXPTierMedkitCooldownMs above -- this
     -- file works identically whether or not server/progression.lua is
     -- loaded or Config.Features.HandlerXPProgression is on (AwardHandlerXP
     -- itself re-checks that flag and is a real no-op while it is off).
@@ -881,8 +853,8 @@ end
 ---      restores an INJURED, alive K9; it is not a revive item. See this
 ---      file's header, CORRECTNESS PASS finding 2, for why this must not
 ---      fall through to a real laststand/EMS system's own revive flow.
----   5. Resolve the target's citizenid — needed for the cooldown key and
----      the RestoreInjury accessor. Also resolve the USING player's own
+---   5. Resolve the target's citizenid — needed for the cooldown key.
+---      Also resolve the USING player's own
 ---      citizenid (dead-config-field pass) — needed only for the handler's
 ---      own medkitTreatCooldownMultiplier rank-reduction lookup inside
 ---      RunUseK9MedkitMutation; never a rejection if it fails to resolve.

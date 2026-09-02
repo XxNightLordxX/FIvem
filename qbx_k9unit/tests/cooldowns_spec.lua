@@ -641,14 +641,12 @@ end)
 -- EndActiveEffectForHolder).
 -- ----------------------------------------------------------------------
 
-t.test('REGRESSION: simulating this pass\'s 11 real call sites (a raw, invalid Config value wrapped in ResolveConfiguredThresholdMs before NewCooldown) never errors, for any of them', function()
+t.test('REGRESSION: simulating this pass\'s 9 real call sites (a raw, invalid Config value wrapped in ResolveConfiguredThresholdMs before NewCooldown) never errors, for any of them', function()
     local callSites = {
         { value = 0, fallback = 20000, key = 'Config.Combat.BiteAndHold.cooldownMs' },
         { value = 0, fallback = 25000, key = 'Config.Combat.NonLethalTakedown.cooldownMs' },
         { value = -1, fallback = 30000, key = 'Config.Combat.NonLethalTakedown.targetCooldownMs' },
         { value = 0 / 0, fallback = 35000, key = 'Config.Combat.BiteAndHold.targetCooldownMs' },
-        { value = 0, fallback = 500, key = 'Config.Combat.HandlerDownDefense.attackerReportCooldownMs' },
-        { value = -30000, fallback = 30000, key = 'Config.Combat.HandlerDownDefense.retriggerCooldownMs' },
         { value = 0, fallback = 5000, key = 'Config.FetchMechanic.throwCooldownMs' },
         { value = nil, fallback = 500, key = 'Config.FetchMechanic.pickupCooldownMs' },
         { value = 0, fallback = 5000, key = 'Config.DeployableKennel.deployCooldownMs' },

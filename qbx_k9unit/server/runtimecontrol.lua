@@ -1306,7 +1306,7 @@ local TUNABLE_REGISTRY = {
     ['FetchMechanic.deliverProximityMeters']    = { path = { 'FetchMechanic', 'deliverProximityMeters' },        min = 0.5,   max = 15.0,      integer = false },
 
     -- server/medkit.lua (Config.Features.K9Medkit, live). range/
-    -- healthRestore/injuryRestore are each read inline at their own call
+    -- healthRestore is read inline at its own call
     -- sites, genuinely fresh, confirmed by direct read.
     --
     -- cooldownMs is NOW INCLUDED (issue-closer sweep, 2026-08-26) -- this
@@ -1334,7 +1334,6 @@ local TUNABLE_REGISTRY = {
     ['K9Medkit.cooldownMs']                     = { path = { 'K9Medkit', 'cooldownMs' },                          min = 1000,  max = 300000,    integer = true },
     ['K9Medkit.range']                          = { path = { 'K9Medkit', 'range' },                              min = 0.5,   max = 10.0,      integer = false },
     ['K9Medkit.healthRestore']                  = { path = { 'K9Medkit', 'healthRestore' },                      min = 1,     max = 200,       integer = true },
-    ['K9Medkit.injuryRestore']                  = { path = { 'K9Medkit', 'injuryRestore' },                      min = 0,     max = 100,       integer = true },
 
     -- server/inventory.lua (Config.Features.K9Inventory, live).
     -- interactRange is read live inline at the stash-open proximity check.

@@ -33,8 +33,8 @@
     OTHER files' own logic (server/certifications/, server/notify.lua),
     already covered by their own specs, same convention every other spec in
     this suite already establishes (kennel_spec.lua/combat_spec.lua/
-    wellbeing_spec.lua's own headers). RestoreInjury is the documented
-    `type(RestoreInjury) == 'function'` soft dependency on
+    wellbeing_spec.lua's own headers). This file used to also drive a
+    soft dependency on
     server/wellbeing.lua -- omitted by default (proving the guard degrades
     cleanly), added back as a controllable stub only for the tests that
     specifically exercise it, same "runtime existence guard, not a
@@ -145,7 +145,7 @@
         cooldowns_spec.lua's own direct `StartSweep` coverage of the same
         shared primitive, so re-deriving it here against a second Config
         value would be duplication, not new coverage.
-      - RestoreInjury's own internal Injury-stat math is server/wellbeing.lua's
+      - the removed Injury-stat math was server/wellbeing.lua's
         concern (covered by wellbeing_spec.lua) -- this file only proves
         WHETHER server/medkit.lua calls it, with what arguments, and that its
         own guard degrades cleanly when absent and fails soft (not loudly)
@@ -189,7 +189,6 @@ local function baselineK9MedkitConfig()
     return {
         itemName      = 'k9_medkit',
         healthRestore = 50,
-        injuryRestore = 40,
         range         = 2.0,
         cooldownMs    = 60000,
         emsJobs       = { 'ambulance' },
@@ -343,7 +342,6 @@ local function newMedkitFixture(opts)
         },
     }
 
-    local restoreInjuryCalls = {}
     local envOverrides = {
         GetGameTimer = GetGameTimer,
         CreateThread = CreateThread,
@@ -397,14 +395,6 @@ local function newMedkitFixture(opts)
         GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
         AddEventHandler = function() end,
     }
-    if opts.withRestoreInjury then
-        envOverrides.RestoreInjury = function(citizenid, amount)
-            restoreInjuryCalls[#restoreInjuryCalls + 1] = { citizenid = citizenid, amount = amount }
-            if opts.restoreInjuryThrows then
-                error('simulated RestoreInjury failure')
-            end
-        end
-    end
 
     -- XP TIER UNLOCK (this pass) -- server/progression.lua's real
     -- GetXPTierMedkitCooldownMs is NOT loaded into this sandbox (that
@@ -496,7 +486,6 @@ local function newMedkitFixture(opts)
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
         printedLines = printedLines,
-        restoreInjuryCalls = restoreInjuryCalls,
         xpTierCooldownCalls = xpTierCooldownCalls,
         handlerXPTierCooldownCalls = handlerXPTierCooldownCalls,
         awardHandlerXPCalls = awardHandlerXPCalls,
@@ -1256,7 +1245,7 @@ end)
 
 t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 does NOT permanently block a target after their first treat -- it falls back to a real, expiring cooldown instead', function()
     local f = newMedkitFixture({ k9MedkitCfg = {
-        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        itemName = 'k9_medkit', healthRestore = 50, range = 2.0,
         cooldownMs = 0, -- the footgun: operator meant "no cooldown"
         emsJobs = { 'ambulance' },
     } })
@@ -1279,7 +1268,7 @@ end)
 
 t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 prints a loud, named warning identifying the exact config key, resolved FRESH on first actual use -- not cached from file-load', function()
     local f = newMedkitFixture({ k9MedkitCfg = {
-        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        itemName = 'k9_medkit', healthRestore = 50, range = 2.0,
         cooldownMs = 0,
         emsJobs = { 'ambulance' },
     } })
@@ -1300,7 +1289,7 @@ end)
 
 t.test('QUALITY FIX: a NEGATIVE Config.K9Medkit.cooldownMs is treated identically to 0 -- also falls back, never a permanent lockout', function()
     local f = newMedkitFixture({ k9MedkitCfg = {
-        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        itemName = 'k9_medkit', healthRestore = 50, range = 2.0,
         cooldownMs = -5000,
         emsJobs = { 'ambulance' },
     } })
@@ -1315,7 +1304,7 @@ end)
 
 t.test('QUALITY FIX: a normally-configured, positive Config.K9Medkit.cooldownMs is used EXACTLY as configured, with no warning at all', function()
     local f = newMedkitFixture({ k9MedkitCfg = {
-        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        itemName = 'k9_medkit', healthRestore = 50, range = 2.0,
         cooldownMs = 12345,
         emsJobs = { 'ambulance' },
     } })
@@ -1471,7 +1460,7 @@ end)
 -- TEST, not a comment: it fails the moment handlerTreatK9 is awarded from
 -- this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker alongside it --
 -- now GREEN because that tracker genuinely exists. Mirrors
--- the removed recall spec's own "SOURCE AUDIT" precedent.
+-- an earlier spec's own "SOURCE AUDIT" precedent.
 -- ========================================================================
 
 t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 without a dedicated per-actor *_XP_MINT_COOLDOWN tracker also present in this file', function()
@@ -1536,7 +1525,7 @@ t.test('HANDLER XP WIRING: a genuine heal (target strictly below max health) awa
     t.equals(f.awardHandlerXPCalls[1].actionKey, 'handlerTreatK9')
 end)
 
-t.test('MEANINGFUL ACTION: topping off an already-full-health K9 still succeeds (ok=true, item consumed, cooldown stamped) but awards NO handlerTreatK9 XP -- not a genuine injury restore', function()
+t.test('MEANINGFUL ACTION: topping off an already-full-health K9 still succeeds (ok=true, item consumed, cooldown stamped) but awards NO handlerTreatK9 XP -- nothing was actually healed', function()
     local f = newMedkitFixture({ withAwardHandlerXP = true })
     wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
     wireTargetK9(f, TARGET_SRC, { health = 200, maxHealth = 200 }) -- already at max -- nothing to restore
@@ -1544,7 +1533,7 @@ t.test('MEANINGFUL ACTION: topping off an already-full-health K9 still succeeds 
     local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isTrue(result.ok, 'topping off an already-healthy K9 must still succeed -- this gate is on the AWARD, never the action (GATE THE START, NEVER THE STOP)')
     t.equals(f.getItemCount(USER_SRC, f.config.K9Medkit.itemName), 4, 'the item is still consumed even though no XP is paid -- the medkit itself did not fail')
-    t.equals(#f.awardHandlerXPCalls, 0, 'no genuine injury was restored, so no handler XP should be minted for it')
+    t.equals(#f.awardHandlerXPCalls, 0, 'nothing was actually healed, so no handler XP should be minted for it')
 end)
 
 t.test('HANDLER XP WIRING: a second genuine treat by the SAME using citizenid against a DIFFERENT target, immediately after (well inside the 30-minute mint window), heals successfully but is NOT awarded a second time -- the per-actor mint cooldown (not MedkitCooldown\'s own per-target shape) is what stops a multi-target round-robin', function()
@@ -2190,50 +2179,6 @@ t.test('GAP CLOSURE control: WITHOUT the individual override (a different target
 end)
 
 -- ========================================================================
--- RestoreInjury -- the documented soft dependency on server/wellbeing.lua.
--- ========================================================================
-
-t.test('RestoreInjury entirely absent (server/wellbeing.lua not loaded) never crashes and still completes a full, successful heal', function()
-    local f = newMedkitFixture({ withRestoreInjury = false })
-    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
-    wireTargetK9(f, TARGET_SRC)
-    local ok, result = pcall(f.invokeCallback, CALLBACK_NAME, USER_SRC, TARGET_SRC)
-    t.isTrue(ok)
-    t.isTrue(result.ok)
-end)
-
-t.test('RestoreInjury present and succeeding is called with (targetCitizenid, Config.K9Medkit.injuryRestore)', function()
-    local f = newMedkitFixture({ withRestoreInjury = true })
-    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
-    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-INJ-CID' })
-    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
-    t.isTrue(result.ok)
-    t.equals(#f.restoreInjuryCalls, 1)
-    t.equals(f.restoreInjuryCalls[1].citizenid, 'K9-INJ-CID')
-    t.equals(f.restoreInjuryCalls[1].amount, 40, 'Config.K9Medkit.injuryRestore')
-end)
-
-t.test('RestoreInjury throwing is swallowed (pcall-wrapped) -- the overall heal still reports ok=true and the health restore still lands', function()
-    local f = newMedkitFixture({ withRestoreInjury = true, restoreInjuryThrows = true })
-    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
-    wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200, citizenid = 'K9-INJ-ERR-CID' })
-    local ok, result = pcall(f.invokeCallback, CALLBACK_NAME, USER_SRC, TARGET_SRC)
-    t.isTrue(ok, 'a throwing RestoreInjury must never propagate out of the callback')
-    t.isTrue(result.ok, 'the health restore already happened before RestoreInjury was ever called -- its failure must not flip the overall result to failure')
-    local ev = lastClientEvent(f, HEAL_EVENT)
-    t.equals(ev.args[1], 200, 'the heal itself (150 + 50) must still have been sent')
-    local found = false
-    for _, line in ipairs(f.printedLines) do
-        if line:find('RestoreInjury errored', 1, true) and line:find('K9-INJ-ERR-CID', 1, true) then found = true end
-    end
-    t.isTrue(found, 'a diagnostic print naming the citizenid must still occur')
-end)
-
--- ========================================================================
--- Notifications on the success path (locale() is real -- see this suite's
--- README; expected text is built via Sandbox.locale, never hand-copied).
--- ========================================================================
-
 t.test('a successful treat notifies the USING player with treated_success/success', function()
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
@@ -2518,7 +2463,7 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         K9Medkit = opts.k9MedkitCfg or baselineK9MedkitConfig(),
         -- Minimal shape server/wellbeing.lua's own file-load-time code
         -- needs to not error: HESITATION_MAX_CONTINUOUS_MS is computed
-        -- UNCONDITIONALLY at load (`Config.Wellbeing.FearStress
+        -- UNCONDITIONALLY at load (`Config.Wellbeing.Fatigue
         -- .hesitationDurationMs * 8`), and so is
         -- MIN_DEATH_EPISODE_DURATION_MS (`math.max(Config.Wellbeing
         -- .tickIntervalMs * 3, 60000)`, the death/respawn regression fix's
@@ -2528,7 +2473,7 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         -- body, never at load time -- deliberately omitted here since every
         -- wellbeing feature flag above is false and this section never
         -- calls into any of those handlers.
-        Wellbeing = { FearStress = { hesitationDurationMs = 8000 }, tickIntervalMs = 5000 },
+        Wellbeing = { Fatigue = { max = 100 }, tickIntervalMs = 5000 },
         -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
         -- straight to 'ox_inventory' via `override`. The other four
         -- systems get empty-but-present tables so DetectSystem's own

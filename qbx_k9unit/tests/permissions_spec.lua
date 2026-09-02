@@ -3056,7 +3056,7 @@ t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is ON but Conf
     local f = newFixture({
         commandTablet = true,
         commandTabletConfig = { openMode = 'item' },
-        featureControl = { RequireGrant = { SARCalls = true } },
+        featureControl = { RequireGrant = { ScentVision = true } },
     })
     f.fireOnResourceStart()
 
@@ -3066,7 +3066,7 @@ t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is ON but Conf
     end
     t.isNotNil(warningLine, 'the warning must actually print')
     t.isTrue(warningLine:find("openMode is 'item'", 1, true) ~= nil, 'must name the actual reason -- distinct wording from the CommandTablet-off case')
-    t.isTrue(warningLine:find('SARCalls', 1, true) ~= nil)
+    t.isTrue(warningLine:find('ScentVision', 1, true) ~= nil)
 end)
 
 t.test('STARTUP WARNING: a DIFFERENT resource starting is ignored entirely -- mirrors this resource\'s own GetCurrentResourceName() guard convention', function()
