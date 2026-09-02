@@ -1,52 +1,35 @@
 --[[
     tests/clientwellbeing_spec.lua
 
-    Client-side spec for client/wellbeing.lua (the unified Fatigue/Mood/
-    FearStress/Distraction/Injury subsystem's client half). Follows
-    main_spec.lua's worked example: a real, unmodified client/wellbeing.lua
-    loaded into a fresh sandbox per test, driven through its documented
-    resource-global (RequestK9CalmDown), its two RegisterNetEvent/
-    RegisterCommand-captured handlers, its ox_target option definitions,
-    and its two CreateThread bodies -- never a reimplementation of any
-    `local` (ApplyMoveRateModifiers/ApplyWellbeingSnapshot/NotifyResult/
-    UseDistractionItem) this spec has no other way to reach.
+    Client-side spec for client/wellbeing.lua -- the FATIGUE subsystem's
+    client half. Follows main_spec.lua's worked example: a real, unmodified
+    client/wellbeing.lua loaded into a fresh sandbox per test, driven
+    through its captured RegisterNetEvent handlers and its CreateThread
+    bodies -- never a reimplementation of any `local` this spec has no other
+    way to reach.
 
-    LOAD-TIME GATING, UPDATED (RUNTIME TOGGLE FIX pass) -- IMPORTANT FOR
-    THIS FIXTURE: this file used to gate its InjuryLimping thread,
-    MoodSystem ox_target registration, and DistractionSystem commands with
-    bare top-level `if Config.Features.<Name> then ... end` blocks, run ONCE
-    at file-load time -- a real, confirmed bug (an already-connected client
-    could never learn of a runtime tablet toggle either direction: OFF left
-    an in-flight movement penalty/input block frozen forever, ON left a
-    client that booted disabled with nothing registered to ever pick it up).
-    FIXED: registration for all three of those now ALWAYS happens
-    (CreateThread/RegisterCommand/ox_target AddGlobalPlayer are never
-    gated), and the actual per-flag decision is made at the POINT OF USE via
-    `LiveFeatureFlags.<Name>` -- a mirror kept fresh by every
-    `wellbeingUpdate` push's new `featureFlags` field (see
-    server/wellbeing.lua's SnapshotOf), not the static
-    `Config.Features.<Name>` this client shipped with. The on-demand
-    snapshot-fetch thread's own five-flag OR gate is the ONE exception,
-    deliberately left load-time-gated (a disclosed, bounded staleness
-    optimization only, not a correctness path -- see client/wellbeing.lua's
-    own file header). Exactly like clientradial_spec.lua's own
-    newRadialFixture(), every flag this spec needs MUST still be set on the
-    real config.lua's Config.Features table BEFORE client/wellbeing.lua is
-    loaded (it seeds `LiveFeatureFlags`' own starting values, and still
-    gates the on-demand fetch thread) -- newWellbeingFixture() below
-    defaults every one of the five wellbeing flags to `false` and requires
-    each test to opt in exactly what it needs, per this task's own
-    instruction to never depend on config.lua's shipped defaults (currently
-    all 40 flags `true`). A test that specifically wants to prove the LIVE
-    (post-first-snapshot) flag value differs from the boot-time one should
-    push a `featureFlags` field via `triggerWellbeingUpdate` rather than
-    relying on the fixture's own boot-time `features` option, which only
-    ever seeds the STARTING value.
+    IT USED TO COVER FIVE SUBSYSTEMS. Mood, fear/stress, distraction and
+    injury were all handled by the same file, and this spec had sections for
+    each. All four were removed on 2026-09-02 at the owner's request, and
+    their tests went with them.
+
+    LOAD-TIME GATING -- IMPORTANT FOR THIS FIXTURE, and the reason several
+    tests below look the way they do. This file once gated its threads,
+    ox_target registrations and commands with bare top-level
+    `if Config.Features.<Name> then ... end` blocks, run ONCE at file-load
+    time. That was a real, confirmed bug: an already-connected client could
+    never learn of a runtime tablet toggle in either direction -- OFF left an
+    in-flight movement penalty or input block frozen forever, ON left a
+    client that booted disabled with nothing registered to ever pick it up.
+    Registration now ALWAYS happens, and the per-flag decision is made at
+    the POINT OF USE via `LiveFeatureFlags.<Name>`, a mirror kept fresh by
+    every server push. That rule still governs the fatigue paths this spec
+    covers today.
 
     THIS PASS'S PRIORITY, per this file's own task brief:
-    1. The InjuryLimping control-block thread's own-death guard, added this
-       session after it was found spinning at Wait(0) while dead -- section
-       B, using the same instrumented coroutine-yield thread runner
+    1. The control-block thread's own-death guard, added after it was found
+       spinning at Wait(0) while dead -- using the same instrumented
+       coroutine-yield thread runner
        clienttracking_spec.lua's own header documents in full (built fresh
        here too, per this suite's "each spec owns its own tiny fixtures"
        convention -- not shared, since the two files' CreateThread bodies
@@ -346,12 +329,11 @@ local function newWellbeingFixture(opts)
         env.Config.Features[key] = value
     end
 
-    -- HUNGER/THIRST config seed. CORRECTED (this pass, coder-backend, real
-    -- config.lua now carries Config.Wellbeing.Hunger/.Thirst -- see
-    -- config.lua's own Config.Features.HungerThirstSystem comment):
-    -- `Sandbox.loadInto('../config.lua', env)` above already populated
-    -- `env.Config.Wellbeing.Hunger`/`.Thirst` with the REAL, live
-    -- config.lua values -- this used to be harmless when real config.lua
+    -- Config seed note, kept because the reasoning still applies to every
+    -- sub-table this fixture reads:
+    -- `Sandbox.loadInto('../config.lua', env)` above populates the REAL,
+    -- live config.lua values -- a hand-written seed here used to be
+    -- harmless when real config.lua
     -- had no such keys at all (loading it left both `nil`, exactly what
     -- `opts.wellbeingHunger == false` wanted to simulate), but now that
     -- real config.lua defines them for real, the old `elseif ... ~= false
@@ -389,7 +371,7 @@ local function newWellbeingFixture(opts)
     -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
     -- above for why. Must load before client/wellbeing.lua, which reads the
     -- `K9Compat` global inside the removed Mood ox_target registrar (fired below
-    -- via the captured onResourceStart handler, when MoodSystem is on).
+    -- via the captured onResourceStart handler).
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/target.lua', env)
 
@@ -517,9 +499,9 @@ end
 
 -- ----------------------------------------------------------------------
 -- SECTION B -- THE INJURYLIMPING OWN-DEATH GUARD, THIS TASK'S TOP
--- PRIORITY. Thread order at file-load time with InjuryLimping=true (and
+-- PRIORITY. Thread order at file-load time (and
 -- every other flag false): the on-demand snapshot thread is created FIRST
--- (its own gate ORs in InjuryLimping), the InjuryLimping control-block
+-- the control-block
 -- thread SECOND, and the (always-registering) native sprint stamina assist
 -- thread THIRD -- threads[1] / threads[2] / threads[3] respectively,
 -- verified by reading the file top-to-bottom. The third thread is a no-op
@@ -649,38 +631,6 @@ t.test('wellbeingUpdate: source left nil (a bare local TriggerEvent() carrying n
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION E -- "Care for K9" (MoodSystem), the MOOD MERGE (this pass,
--- coder-backend): what used to be two separate ox_target options, "Pet K9"
--- and "Feed K9", is now the one 'qbx_k9unit:careForK9' option, resolving
--- between the two former server callbacks via the removed care-for-K9 request. The two
--- former onSelect bodies themselves survive as the removed pet-K9 request/
--- the removed feed-K9 request, tested directly below (SECTION E2) rather than through
--- a `def.name` lookup that no longer exists -- see client/wellbeing.lua's
--- own "HIDDEN ALIASES" header note.
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
--- SECTION E2 -- the surviving hidden-alias globals, the removed pet-K9 request/
--- the removed feed-K9 request: the exact former "Pet K9"/"Feed K9" onSelect bodies,
--- unchanged, no longer wired to their own ox_target table entry but still
--- reachable directly -- see client/wellbeing.lua's own "HIDDEN ALIASES"
--- header note (mirrors client/tracking.lua's StartScentTrack() surviving
--- the identical class of radial-item merge).
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
--- SECTION F -- RequestK9CalmDown / k9calmdown (FearStressSystem). A plain
--- resource-global, always registered as a command regardless of the flag
--- (see section A) -- the flag is checked INSIDE the function, at call
--- time.
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
--- SECTION G -- meat-bait / whistle (DistractionSystem). Deliberately NEVER
--- gated on CanShowK9UI, per this file's own header -- open to any player.
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
 -- SECTION H -- the on-demand snapshot thread (bonus: cheap given the
 -- fixture already built above, exercises the SAME FAIL-CLOSED GUARD
 -- pattern from a second, independent call site).
@@ -760,7 +710,7 @@ end)
 t.test('NATIVE STAMINA ASSIST: FatigueSystem off means the assist never fires, even with a nonzero percentage already configured -- this resource makes no claim about managing stamina at all while the owning flag is off', function()
     local f = newWellbeingFixture() -- FatigueSystem false (default)
     f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
-    f.stepOne(2) -- no flag is true here, so the on-demand thread never registers: 1 = InjuryLimping, 2 = stamina assist
+    f.stepOne(2) -- no flag is true here, so the on-demand thread never registers: 2 = stamina assist
     t.equals(#f.restorePlayerStaminaCalls, 0)
 end)
 
@@ -795,9 +745,4 @@ t.test('NATIVE STAMINA ASSIST: a malformed/non-number wellbeingTunables value is
 end)
 
 -- ========================================================================
--- HUNGER/THIRST (this pass, coder-backend). Config.Features.HungerThirstSystem.
--- Client-side half of server/wellbeing.lua's own new section -- see that
--- file's header for the full design writeup this mirrors.
--- ========================================================================
-
 os.exit(t.summary())

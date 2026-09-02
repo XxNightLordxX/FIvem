@@ -41,7 +41,7 @@
     ======================================================================
     CONFIDENCE GRADING — read before extending this file:
 
-    1. Event relay reuse (Mood/Injury damage decay, FearStress gunfire rise)
+    1. Event relay reuse (the damage-decay and gunfire relays)
        — HIGH confidence on the EVENT NAMES/TRIGGER SEMANTICS themselves:
        server/tracking.lua's own header (read directly, not
        assumed) documents 'qbx_k9unit:server:relayDamageEvent' and
@@ -103,7 +103,7 @@
        `IsFlashbangImmune(citizenid)`, a resource-global accessor mirroring
        `IsHesitating`/`IsDistracted`'s exact established contract (self-only
        citizenid lookup, type-checked, gated on
-       Config.Features.DistractionSystem, zero cross-player influence — it
+       its own feature flag, zero cross-player influence — it
        reads only static config plus its own string argument). DEVELOPER_REFERENCE.md
        §13.4.3.4's reality check still stands UNCHANGED for the other half:
        nothing in this codebase, and no confirmed third-party flashbang/stun
@@ -153,7 +153,7 @@
        elsewhere (four unregistered-native gates on IsEntityDead/
        IsPedDeadOrDying found and fixed in a sibling pass) applies to any
        native this Fatigue rest-source path calls. `GetPlayers()` (used
-       throughout `TickWellbeing` and `applyK9Distraction` below) is
+       throughout `TickWellbeing` below) is
        DELIBERATELY not in that list — it has no `native-decls` page at all
        (confirmed 404) because it is not a raw native, it is the standard
        FXServer Lua-runtime helper wrapping
@@ -236,7 +236,7 @@
       unlisted or human one. ResolveK9Ped below now answers "(actually
       dog-modeled OR holds the K9 role, server/appearance.lua's HasK9Role)
       AND HasK9Access" — every one of the six gates that read its `isK9`
-      result (damage decay, petK9, feedK9, calmDownK9, applyK9Distraction,
+      result (damage decay and every other mutating entry point,
       the main TickWellbeing loop) inherits both fixes from that one
       function, with no other change needed in this file. The
       AgilityBasicJump/AgilityAdvanced comparison above no longer applies:
@@ -415,7 +415,7 @@
     them from a threshold this file's OWN Config.Wellbeing tables already
     define for a real mechanical consequence (Fatigue's
     speedPenaltyThreshold, Mood's performancePenaltyThreshold,
-    FearStress's hesitationThreshold, Injury's sprintBlockThreshold,
+    the hesitation and sprint-block thresholds,
     Hunger/Thirst's lowThreshold) -- never a new number invented for this
     feature. The words a handler reads always agree with the mechanics
     already governing their own dog's behavior; retuning one of those
@@ -777,7 +777,7 @@ local HandlerConditionCache = {}
 --- server/wellbeing.lua's own load from this line onward and taking
 --- RestoreInjury/IsHesitating/IsDistracted/IsFlashbangImmune (every one of
 --- this file's resource-global exports, all defined below this point) down
---- with it, silently disabling Fatigue/Mood/FearStress/Distraction/Injury
+--- with it, silently disabling every wellbeing stat
 --- resource-wide over one operator typo. Resolved with
 --- ResolveConfiguredThresholdMs (CLAMP AND WARN, never abort) rather than a
 --- hard `assert`, for the identical reason cooldowns.lua's own header
@@ -832,7 +832,7 @@ end
 --- below (the flush thread, the eviction sweep, EnsureStats' own load
 --- path) must agree on the same numbers, never independently re-derive
 --- them. CONFIG-DEFENSIVE, and SILENT when the whole sub-block is simply
---- ABSENT -- exactly GetResolvedHungerThirstConfig's own "an inert
+--- ABSENT -- exactly the since-removed resolver's own "an inert
 --- default is never an activation" convention (this file's header), not
 --- TICK_INTERVAL_MS's own "always warn, this field has shipped for a long
 --- time" one: `Config.Wellbeing.Persistence` is newer than the fields
@@ -983,7 +983,7 @@ end
 --- unavailable OR genuinely returns no row does this fall back to the
 --- SAME hardcoded-default construction this function has always used:
 --- Fatigue/Mood/Injury default to their own `max` (a K9 starts fresh, not
---- exhausted/miserable/injured); FearStress defaults to 0 (calm);
+--- exhausted); the stress stat defaulted to 0 (calm);
 --- distractedUntil/hesitatingUntil/hesitationEpisodeStartedAt/
 --- injuryDeathEpisodeStartedAt default to 0 (inactive) -- see this file's
 --- header "DATABASE PERSISTENCE" point 3 for why the two branches below
@@ -1255,8 +1255,7 @@ end
 -- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
 -- header says to read it before writing another variant) -- parameterized
 -- by featureName here since this file gates FIVE independent
--- Config.Features flags (FatigueSystem/MoodSystem/FearStressSystem/
--- DistractionSystem/InjuryLimping) through the identical shape.
+-- Config.Features flags through the identical shape.
 --
 -- THE CALL MADE HERE, STATED PLAINLY (this pass's own explicit instruction
 -- to be careful in this file, and to say what was decided): a block on a
@@ -1284,7 +1283,7 @@ end
 -- risk (this file's own header, "SECURITY FINDING B") against one specific
 -- victim, without needing to wait for that K9's own fearStress to decay.
 --- @param citizenid string
---- @param featureName string -- exact Config.Features key: 'FatigueSystem' | 'MoodSystem' | 'FearStressSystem' | 'DistractionSystem' | 'InjuryLimping'
+--- @param featureName string -- an exact Config.Features key, e.g. 'FatigueSystem'
 --- @return boolean allowed
 local function IsWellbeingFeaturePermittedForCitizenId(citizenid, featureName)
     -- Soft dependency, this resource's established convention -- see
@@ -1383,7 +1382,7 @@ end
 --- table.concat below turns into this feature's own change-detection
 --- key) — NOT a severity ranking, just a stable order matching this
 --- file's own six-stat documentation order throughout (Fatigue, Mood,
---- FearStress, Injury, Hunger, Thirst).
+--- and its siblings at the time).
 ---
 --- THE CLOSED LIST OF EVERYTHING THIS FUNCTION CAN EVER RETURN: exactly
 --- zero or more of 'tired'/'unhappy'/'stressed'/'injured'/'hungry'/
@@ -1820,14 +1819,13 @@ end)
 
 -- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend) -- this thread
 -- used to be wrapped in `if Config.Features.FatigueSystem or
--- Config.Features.MoodSystem or Config.Features.FearStressSystem or
--- Config.Features.DistractionSystem or Config.Features.InjuryLimping then
+-- any other wellbeing flag then
 -- CreateThread(...) end`, a boot-time snapshot of five flags read exactly
 -- once, at this file's own load time. server/runtimecontrol.lua's own
 -- FEATURE_TIERS registers all five as `tier = 'live'` (ApplyFeatureOverride
 -- mutates Config.Features.* immediately, no restart), so an operator could
 -- boot with all five off and flip ONE on live from the tablet in one click:
--- every client-facing entry point (petK9/feedK9/applyK9Distraction/
+-- every client-facing entry point (
 -- calmDownK9/relayDamageEvent/relayWeaponFire) re-checks its OWN flag fresh
 -- and would start mutating WellbeingStats for real immediately, but the
 -- ONLY thread that ever ticks decay/regen or pushes a `wellbeingUpdate`
@@ -1851,7 +1849,7 @@ end)
 -- tests/wellbeing_spec.lua on two counts, and only one of them was a reason
 -- to touch the spec rather than the code:
 --   1. The DISCREPANCY test pinning exactly ONE CreateThread call at file
---      load with every flag off (DistractionCooldown's own always-on
+--      load with every flag off (the cooldown's own always-on
 --      sweep, the only thread that existed pre-fix) went red. This one WAS
 --      a reason to update the test, not revert the code -- a test that
 --      keeps asserting "exactly one CreateThread call with everything off"
@@ -1901,8 +1899,7 @@ end)
 -- THE HONEST STATE, FOR THE TIER TABLE: checked directly against
 -- server/runtimecontrol.lua as it stands right now (coordinated with the
 -- agent actively editing that file for an unrelated feature, before
--- touching this comment) -- FatigueSystem/MoodSystem/FearStressSystem/
--- DistractionSystem/InjuryLimping's own FEATURE_TIERS entries are still
+-- touching this comment) -- FatigueSystem's own FEATURE_TIERS entry is still
 -- bare `{ tier = 'live' }`, no `note` field, and no test anywhere requires
 -- one to exist. The disclosure this file's OLD text above said had been
 -- "reported to server/runtimecontrol.lua's owner... as a FEATURE_TIERS
@@ -2059,7 +2056,7 @@ end)
 -- does while configuring a server -- discarded WellbeingStats wholesale,
 -- and the next boot reloaded each citizenid's last-flushed row from
 -- k9_wellbeing. Up to Config.Wellbeing.Persistence.flushIntervalMs of
--- drift (60 seconds by default) in Fatigue, Mood, FearStress, Injury,
+-- drift (60 seconds by default) in every persisted stat,
 -- Hunger and Thirst, for every online K9 and handler, silently reverted to
 -- an older but entirely plausible-looking value. No error, no warning, and
 -- nothing on screen to distinguish it from the stats simply not having
