@@ -6,16 +6,12 @@
     server/wellbeing.lua chain into one sandbox (the fxmanifest.lua
     server_scripts order), and drives it through:
 
-      - the real captured lib.callback.register handlers (petK9, feedK9,
-        applyK9Distraction, getWellbeingSnapshot),
-      - the real captured RegisterNetEvent/AddEventHandler handlers
-        (relayDamageEvent, relayWeaponFire, calmDownK9, playerDropped),
+      - the real captured lib.callback.register handler
+        (getWellbeingSnapshot),
+      - the real captured AddEventHandler handler (playerDropped),
       - the shared TickWellbeing maintenance thread (stepped via
         fixtures/sandbox.lua's coroutine thread runner, same technique
-        defense_spec.lua/tenure_spec.lua already established),
-      - the resource-global accessors (IsHesitating, IsDistracted,
-        IsFlashbangImmune, RestoreInjury), called directly since none of
-        them is `local`.
+        tenure_spec.lua already established).
 
     server/certifications/ is DELIBERATELY NOT loaded here -- only
     IsConfiguredK9Model is stubbed directly, same "stub, don't load, a
@@ -36,43 +32,18 @@
     instead of an unregistered-global error -- not a claim that path is
     covered. Recorded here as a disclosed gap, not silently skipped.
 
-    calmDownK9 (FearStress's self-only "Calm Down" action) is only
-    covered indirectly (it is one of the three RegisterNetEvent names the
-    sanity check below counts) -- its own cooldown/notify behavior is not
-    separately exercised, since the task's four points do not name it and
-    its shape (a single self-only cooldowned decrement, no target
-    resolution) is materially simpler than anything covered below.
-
-    WHAT THIS FILE PROVES, mapped to the task's four points:
-      1. petK9 and feedK9 share ONE cooldown INSTANCE (not merely the same
-         threshold value) per (interactor source, target citizenid) pair --
-         alternating the two calls on the same pair grants exactly one
-         mood tick per petCooldownMs window, in both directions
-         (pet-then-feed and feed-then-pet), while a different target or a
-         different interactor is genuinely unaffected.
-      2. The tick thread: one TickWellbeing pass per step() after priming
-         (interval honored), playerDropped resets ONLY `lastCoords` (never
-         mood/fatigue/fearStress/injury, which persist across a disconnect
-         within the same session, re-observable under a brand-new source
-         id for the same citizenid), and distractedUntil is a real
-         absolute timestamp that lapses on its own.
-      3. HESITATION_MAX_CONTINUOUS_MS forces recovery: a hostile source
-         that reports fresh gunfire on EVERY single tick, without ever
-         stopping, still cannot keep a K9 hesitating forever -- pinned with
-         exact tick-by-tick math against the real shipped config numbers
-         (hesitationThreshold=85, risePerNearbyShotPerTick=3.0,
-         hesitationDurationMs=8000, the documented "8 renewal-cycles'
-         worth" cap).
-      4. relayDamageEvent/relayWeaponFire: reporting-source validation
-         (non-K9 source, disconnected/ped==0 source, unresolved citizenid
-         all no-op), the ingest cooldown genuinely gating a NEW entry at
-         ingestion (not merely relying on TickWellbeing's own later
-         per-tick distinct-source dedup -- proven with a far-then-near
-         same-source double-report technique for relayWeaponFire), the
-         ingest cooldown being per-source, and that extra/garbage call
-         arguments on these payload-less events are ignored (only the
-         reporting player's own server-resolved position/model/citizenid
-         is ever used).
+    WHAT THIS FILE PROVES:
+      1. The tick thread: one TickWellbeing pass per step() after priming
+         (interval honored), and playerDropped resets ONLY `lastCoords`,
+         never `fatigue`, which persists across a disconnect within the
+         same session and is re-observable under a brand-new source id for
+         the same citizenid.
+      2. Database persistence: the dirty-flag/periodic-flush/write-on-
+         disconnect design, the boot-order schema gate, and eviction only
+         once a change is confirmed written.
+      3. The handler condition badge: resolved server-side from the K9's
+         own partnership, sent on change only, and explicitly cleared on
+         every path that can make it go stale.
 ]]
 
 local t = dofile('testkit.lua')
@@ -117,102 +88,12 @@ local function baselineWellbeingConfig()
             speedPenaltyMultiplier = 0.90,
             sprintSpeedThreshold   = 4.0,
         },
-        Mood = {
-            max                          = 100,
-            damageDecayAmount            = 15,
-            petRegenAmount               = 10,
-            petCooldownMs                = 30000,
-            feedRegenAmount              = 20,
-            feedItemName                 = 'k9_treat',
-            passiveRegenPerTick          = 1.0,
-            performancePenaltyThreshold  = 25,
-            performancePenaltyMultiplier = 0.95,
-        },
-        FearStress = {
-            max                      = 100,
-            gunfireRadius            = 20.0,
-            gunfireLookbackSeconds   = 15,
-            risePerNearbyShotPerTick = 3.0,
-            passiveDecayPerTick      = 1.0,
-            hesitationThreshold      = 85,
-            hesitationDurationMs     = 8000,
-            calmDownReduceAmount     = 40,
-            calmDownCooldownMs       = 15000,
-        },
-        Distraction = {
-            flashbangImmune     = true,
-            meatBaitItemName    = 'k9_meat_bait',
-            meatBaitDurationMs  = 6000,
-            meatBaitRadius      = 8.0,
-            whistleItemName     = 'k9_ultrasonic_whistle',
-            whistleDurationMs   = 4000,
-            whistleRadius       = 15.0,
-            perTargetCooldownMs = 20000,
-        },
-        Injury = {
-            max                    = 100,
-            sprintBlockThreshold   = 30,
-            jumpBlockThreshold     = 20,
-            speedPenaltyMultiplier = 0.80,
-            damageDecayAmount      = 10,
-            -- RAISED 0.1 -> 1.0 (this task's own recommendation, reported to
-            -- the task owner for config.lua -- see server/wellbeing.lua's
-            -- header, STUCK-K9 SOFTLOCK FIX item 1, for the full arithmetic).
-            -- config.lua itself still ships 0.1 as of this pass (not owned
-            -- by this task) -- this fixture encodes the RECOMMENDED value so
-            -- the bounded-ticks tests below prove the fix that should ship,
-            -- not the bug that currently does. See the dedicated
-            -- "CURRENTLY-SHIPPED 0.1 RATE" section further down for tests
-            -- pinned against the OLD value instead, documenting the
-            -- QA-reported bug's own exact arithmetic.
-            passiveRegenPerTick    = 1.0,
-            -- NEW FIELD (this task, reported to the task owner for
-            -- config.lua -- see server/wellbeing.lua's header, STUCK-K9
-            -- SOFTLOCK FIX item 2). 100 = Injury.max = a full reset on
-            -- death/respawn, this task's own chosen default. Set to 0 to
-            -- disable (an operator preferring "still limping after
-            -- respawn," a genuine supported no-op per server/wellbeing.lua's
-            -- own `restoreAmount > 0` guard).
-            deathRespawnRestoreAmount = 100,
-        },
-        -- HUNGER/THIRST (this pass, coder-backend) -- shipped defaults, same
-        -- arithmetic as this task's own report: decayPerTick tuned so a
-        -- full-to-empty drain takes ~90 minutes (Hunger) / ~60 minutes
-        -- (Thirst) at tickIntervalMs=5000 if never fed/watered.
-        Hunger = {
-            max                    = 100,
-            decayPerTick           = 0.093,
-            lowThreshold           = 30,
-            speedPenaltyMultiplier = 0.95,
-            feedItemName           = 'k9_food',
-            feedRegenAmount        = 35,
-            feedCooldownMs         = 120000,
-        },
-        Thirst = {
-            max                    = 100,
-            decayPerTick           = 0.139,
-            lowThreshold           = 30,
-            speedPenaltyMultiplier = 0.95,
-            drinkItemName          = 'k9_water',
-            drinkRegenAmount       = 35,
-            drinkCooldownMs        = 90000,
-            -- Shipped default is {'water_bowl'} -- emptied here by default,
-            -- same "not exercised unless a test opts in" convention this
-            -- file's own header already establishes for Fatigue.restSources;
-            -- the dedicated drinkFromBowl tests further down override this
-            -- per-fixture via wellbeingCfg.
-            bowlSources            = {},
-            bowlRegenAmount        = 15,
-            bowlCooldownMs         = 60000,
-            bowlInteractRange      = 2.0,
-        },
     }
 end
 
 local function baselineFeatures(overrides)
-    -- Only FatigueSystem survives here: MoodSystem, FearStressSystem,
-    -- DistractionSystem, InjuryLimping and HungerThirstSystem were removed
-    -- on 2026-09-02. Default stays false so "every flag off" tests keep
+    -- Only FatigueSystem survives here; the other wellbeing stats were
+    -- removed on 2026-09-02. Default stays false so "every flag off" tests keep
     -- meaning what they say.
     local features = {
         FatigueSystem = false,
@@ -300,7 +181,7 @@ local function newWellbeingFixture(opts)
     -- the reverse-direction lookup server/wellbeing.lua's own
     -- ResolveOnlineSourceForCitizenid needs. Derived from the SAME
     -- `citizenidBySource` table setPlayer/clearPlayer already maintain
-    -- (mirrors the removed handler-down-defense spec's/the removed recall spec's own
+    -- (mirrors this suite's own
     -- identical fixture pattern for this exact export) -- never a second,
     -- independently-maintained table that could drift out of sync with it.
     local function qbxGetPlayerByCitizenId(_self, citizenid)
@@ -312,7 +193,7 @@ local function newWellbeingFixture(opts)
 
     -- HANDLER CONDITION BADGE (this pass) -- server/partnership.lua's real
     -- GetActivePartnerCitizenId accessor, stubbed. ABSENT from `env` by
-    -- default (mirrors the removed recall spec's/the removed handler-down-defense spec's own
+    -- default (mirrors this suite's own
     -- "server/partnership.lua module absent" soft-dependency convention) --
     -- every PRE-EXISTING test in this file never wires this fixture up at
     -- all, so `type(GetActivePartnerCitizenId) == 'function'` stays false
@@ -396,9 +277,9 @@ local function newWellbeingFixture(opts)
         return 'WEAPON_PISTOL'
     end
 
-    -- HUNGER/THIRST -- drinkFromBowl's own netId -> entity resolution goes
-    -- through the REAL, unmodified server/entities.lua's ResolveNetworkEntity
-    -- (loaded below), which itself calls these three raw natives. Keyed by
+    -- netId -> entity resolution goes through the REAL, unmodified
+    -- server/entities.lua's ResolveNetworkEntity (loaded below), which
+    -- itself calls these three raw natives. Keyed by
     -- a plain opaque netId/entity number this fixture controls entirely via
     -- setNetworkEntity below -- no relationship to pedBySource/coordsByPed's
     -- own numbering, exactly like every other entity-handle table in this
@@ -474,8 +355,7 @@ local function newWellbeingFixture(opts)
         NotifyPlayer         = NotifyPlayer,
         lib                  = lib,
         -- COMPAT-LAYER MIGRATION (this pass): server/wellbeing.lua's
-        -- GetItemCount/RemoveItem calls (Mood petK9/feedK9, Distraction
-        -- meatBait/whistle) are now routed through `K9Compat.Get('inventory')`
+        -- GetItemCount/RemoveItem calls are now routed through `K9Compat.Get('inventory')`
         -- -- shared/compat/inventory.lua's BuildOxInventoryServer requires
         -- ALL SEVEN server-realm methods present as callable exports before
         -- it returns ANYTHING. `Items` stays a direct, un-routed
@@ -597,9 +477,9 @@ local function newWellbeingFixture(opts)
         setHasK9Access = function(source, v) hasK9AccessBySource[source] = v end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         setHealth = function(ped, hp) healthByPed[ped] = hp end,
-        -- HUNGER/THIRST -- registers a fake world object entity behind a
-        -- netId, for drinkFromBowl's own ResolveNetworkEntity(netId, 3) call.
-        -- `entityType` defaults to 3 (object), matching a real bowl prop;
+        -- Registers a fake world object entity behind a netId, for
+        -- ResolveNetworkEntity(netId, 3).
+        -- `entityType` defaults to 3 (object), matching a real world prop;
         -- pass 1/2 to exercise ResolveNetworkEntity's own ped/vehicle
         -- type-mismatch reject. Model/coords for `entity` are set the
         -- ordinary way (setModel/setCoords above), since GetEntityModel/
@@ -667,10 +547,6 @@ local function newWellbeingFixture(opts)
             primeIfNeeded()
             threadRunner.step()
         end,
-        isHesitating = function(citizenid) return env.IsHesitating(citizenid) end,
-        isDistracted = function(citizenid) return env.IsDistracted(citizenid) end,
-        isFlashbangImmune = function(citizenid) return env.IsFlashbangImmune(citizenid) end,
-        restoreInjury = function(citizenid, amount) return env.RestoreInjury(citizenid, amount) end,
         -- HANDLER CONDITION BADGE (this pass) helpers --------------------
         setPartner = setPartner,
         clearPartner = clearPartner,
@@ -691,7 +567,7 @@ t.test('server/wellbeing.lua registers at least one playerDropped handler', func
     t.isTrue(f.eventHandlerCount('playerDropped') >= 1, "this file's own lastCoords-reset handler, plus every cooldown tracker's own RegisterPlayerDropped()")
 end)
 
-t.test('No TickWellbeing activity when every one of the five wellbeing feature flags is false -- stepping produces zero wellbeingUpdate events', function()
+t.test('No TickWellbeing activity when the wellbeing feature flag is false -- stepping produces zero wellbeingUpdate events', function()
     local f = newWellbeingFixture() -- all features false by default
     f.setOnline({ 1 })
     f.setPlayer(1, 'K9-CID')
@@ -704,7 +580,7 @@ t.test('No TickWellbeing activity when every one of the five wellbeing feature f
     t.equals(#f.clientEvents, 0)
 end)
 
-t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at file load, even when every one of the six wellbeing feature flags is false -- exactly four threads always exist now, and idling over an all-off Config.Features costs nothing observable", function()
+t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at file load, even when the wellbeing feature flag is false -- exactly three threads always exist now, and idling over an all-off Config.Features costs nothing observable", function()
     -- INVERTED ON PURPOSE (this pass, coder-backend). This test used to be
     -- titled "DISCREPANCY: ..." and asserted exactly ONE CreateThread call
     -- with every flag off, pinning server/wellbeing.lua's OWN then-true
@@ -732,35 +608,19 @@ t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at 
     -- would reopen the exact unbounded-staleness gap the LIVE-FLIP FIX test
     -- below exists to prove closed.
     local f = newWellbeingFixture() -- all features false
-    -- UPDATED THIS PASS (coder-backend, DATABASE PERSISTENCE): the count
-    -- moved from 4 to 6. Named exhaustively, so nobody has to re-derive
-    -- this later:
-    -- (1) DistractionCooldown's own always-on sweep (pre-existing),
-    -- (2) the now-unconditional TickWellbeing loop (pre-existing),
-    -- (3) HungerFeedCooldown's own always-on sweep (pre-existing),
-    -- (4) ThirstReliefCooldown's own always-on sweep (pre-existing),
-    -- (5) WellbeingLastSeenOnline's own always-on :StartSweep (NEW, this
-    --     pass -- bounds that tracker's own table the same proven way
-    --     every other sweep in this list already does; see
-    --     EvictStaleWellbeingEntries' own doc comment in server/wellbeing.lua
-    --     for why this is a SEPARATE tracker from WellbeingStats itself),
-    -- (6) the new periodic persistence-flush thread (NEW, this pass --
-    --     mirrors server/webhook.lua's own FlushQueue thread shape; see
-    --     this file's header "DATABASE PERSISTENCE" section for the full
-    --     "why a periodic flush" writeup).
-    -- Both new threads run unconditionally at file load, same as every
-    -- other entry in this list -- see PersistenceCfg's own doc comment for
-    -- why an all-off Config.Wellbeing.Persistence (the sub-block does not
-    -- even need to exist) still costs nothing observable while idle.
-    -- (7) AffectionCooldown's own sweep and (8) CalmDownCooldown's own
-    --     sweep (QA finding, this pass). Both trackers used to be keyed on
-    --     a connection `source` and bounded by .RegisterPlayerDropped(),
-    --     which is what made a relog clear them -- they are now keyed on
-    --     the actor's durable citizenid and bounded by a TTL sweep instead,
-    --     exactly like HungerFeedCooldown/ThirstReliefCooldown above. Two
-    --     more always-on threads is the whole cost of that fix, and it is
-    --     the same cost the other sweeps in this list already pay.
-    t.equals(f.createThreadCallCount(), 3, "three CreateThread calls happen at file-load time even with every feature off -- the shared tick loop, WellbeingLastSeenOnline's own sweep, and the persistence-flush thread. This was eight until 2026-09-02: the AffectionCooldown and CalmDownCooldown citizenid-keyed sweeps went with MoodSystem and FearStressSystem, and the other removed subsystems took their own sweeps with them. The PROPERTY this pins is unchanged -- every one of these starts unconditionally at file load, so a live toggle-on reaches an already-connected client with no restart")
+    -- THE THREE THREADS, NAMED EXHAUSTIVELY so nobody has to re-derive
+    -- this later: (1) the unconditional TickWellbeing loop, (2)
+    -- WellbeingLastSeenOnline's own always-on :StartSweep -- bounds that
+    -- tracker's own table the same proven way every other sweep in this
+    -- resource does; see EvictStaleWellbeingEntries' own doc comment in
+    -- server/wellbeing.lua for why this is a SEPARATE tracker from
+    -- WellbeingStats itself -- and (3) the periodic persistence-flush
+    -- thread, mirroring server/webhook.lua's own FlushQueue thread shape.
+    -- All three run unconditionally at file load; see PersistenceCfg's own
+    -- doc comment for why an all-off Config.Wellbeing.Persistence (the
+    -- sub-block does not even need to exist) still costs nothing
+    -- observable while idle.
+    t.equals(f.createThreadCallCount(), 3, "three CreateThread calls happen at file-load time even with every feature off -- the shared tick loop, WellbeingLastSeenOnline's own sweep, and the persistence-flush thread. This was eight until 2026-09-02, when the removed subsystems took their own per-citizenid cooldown sweeps with them. The PROPERTY this pins is unchanged -- every one of these starts unconditionally at file load, so a live toggle-on reaches an already-connected client with no restart")
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
     t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
@@ -770,14 +630,12 @@ end)
 -- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend): the shared
 -- TickWellbeing thread -- the ONLY place any wellbeing stat is ever
 -- ticked/decayed/regenerated or pushed to a client -- used to only ever
--- start if one of FatigueSystem/MoodSystem/FearStressSystem/
--- DistractionSystem/InjuryLimping was ALREADY true at this file's own load
--- time. server/runtimecontrol.lua's FEATURE_TIERS registers all five as
+-- start if a wellbeing feature flag was ALREADY true at this file's own
+-- load time. server/runtimecontrol.lua's FEATURE_TIERS registers it as
 -- `tier = 'live'` (ApplyFeatureOverride mutates Config.Features.*
--- immediately, no restart), so an operator could boot with all five off,
--- flip ONE on live from the tablet, and get a fully live petK9/feedK9/
--- applyK9Distraction/calmDownK9/relayDamageEvent/relayWeaponFire (each
--- re-checks its own flag fresh) writing real WellbeingStats mutations, with
+-- immediately, no restart), so an operator could boot with it off, flip it
+-- on live from the tablet, and get live mutation handlers (each re-checks
+-- its own flag fresh) writing real WellbeingStats mutations, with
 -- the one thread that would ever tick/push any of it never having started
 -- -- an already-connected client's stat snapshot stuck stale forever, not
 -- merely one tick interval. This is the exact property this section proves
@@ -786,119 +644,8 @@ end)
 -- loaded.
 -- ========================================================================
 
--- ========================================================================
--- POINT 1: petK9 and feedK9 share ONE cooldown per (interactor, target).
--- ========================================================================
-
--- ========================================================================
--- RELOG BYPASS, CLOSED (QA finding, this pass). AffectionCooldown and
--- CalmDownCooldown were keyed on the actor's connection `source` and
--- bounded by .RegisterPlayerDropped(), so disconnecting wiped the very
--- entry that was throttling that player, and reconnecting handed them a
--- fresh source that had never been stamped. A cooldown a relog clears is
--- not a cooldown -- the same wording server/certifications/ and
--- server/medkit.lua already use for this exact mistake, and the discipline
--- HungerFeedCooldown/ThirstReliefCooldown in this same file already
--- followed. Both are now keyed on the actor's durable citizenid and
--- bounded by a TTL sweep instead.
---
--- These tests reconnect the SAME character on a DIFFERENT source, which is
--- what a real relog looks like to the server: the connection number is new,
--- the citizenid is not.
--- ========================================================================
--- ========================================================================
--- POINT 2: the tick thread -- interval honored, per-player state cleaned
--- on playerDropped, distractedUntil/hesitatingUntil are absolute
--- timestamps that must eventually lapse (distractedUntil here;
--- hesitatingUntil in the HESITATION_MAX_CONTINUOUS_MS section below).
--- ========================================================================
-
--- ========================================================================
--- POINT 3: HESITATION_MAX_CONTINUOUS_MS forces recovery even under a
--- continuously-refreshed forged/real gunfire signal.
--- ========================================================================
-
--- ========================================================================
--- POINT 4: relayDamageEvent / relayWeaponFire -- source validation, ingest
--- cooldowns, nothing client-supplied trusted without re-derivation.
--- ========================================================================
-
--- ========================================================================
--- STUCK-K9 SOFTLOCK FIX (this task) -- three points, verified against a QA
--- finding: (A) the recommended Injury.passiveRegenPerTick raise reaches
--- both hard-block thresholds in a bounded, asserted number of ticks;
--- (B) the new death/respawn reset actually fires, only on a genuine
--- transition, and respects the configured amount (including a configured
--- "disabled"); (C) the new resource-start item-existence validation warns
--- (and never throws) on a missing placeholder item, covering all four
--- single-item-name placeholders this resource depends on
--- (Config.K9Medkit.itemName included, even though that field belongs to
--- server/medkit.lua -- see server/wellbeing.lua's own header for why that
--- check lives here).
--- ========================================================================
-
-
-
 -- ------------------------------------------------------------------------
--- POINT A: the RECOMMENDED regen rate (passiveRegenPerTick 0.1 -> 1.0,
--- baked into baselineWellbeingConfig() above -- see that table's own
--- comment) reaches both hard-block thresholds, and a full recovery, in a
--- bounded, exactly-asserted number of ticks.
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- POINT B: death/respawn reset. GetEntityHealth(ped) <= 100
--- (PED_DEAD_HEALTH_THRESHOLD, a local constant in server/wellbeing.lua,
--- mirroring server/combat.lua's/server/medkit.lua's own identical constant)
--- is the death SAMPLE -- IsEntityDead has no FXServer server registration
--- (see server/wellbeing.lua's own header for the citation), so this
--- fixture's GetEntityHealth stub (default 200, set via f.setHealth) is what
--- actually drives this behavior, not a separate IsEntityDead stub.
---
--- THIS IS A HEURISTIC, NOT AN EVENT -- read server/wellbeing.lua's own
--- header (STUCK-K9 SOFTLOCK FIX item 2) before "simplifying" any of this
--- section's arithmetic. A single observed health crossing of the threshold
--- is NOT sufficient to qualify for a restore (a red-team pass found this
--- paid out on an ORDINARY COMBAT HEAL, not just a genuine death) -- a
--- candidate episode (a continuous stretch observed at/below the threshold)
--- must span at least MIN_DEATH_EPISODE_DURATION_MS
--- (`math.max(Config.Wellbeing.tickIntervalMs * 3, 60000)`, a LOCAL constant
--- in server/wellbeing.lua) between the tick it starts and the tick it ends
--- before it qualifies. At this fixture's own shipped tickIntervalMs(5000),
--- that evaluates to 60000ms -- exactly 12 tick intervals.
--- ------------------------------------------------------------------------
-
-
-
-
--- ------------------------------------------------------------------------
--- REGRESSION (found empirically against the live resource, fixed this
--- pass, FOLLOW-UP FIX #1): injuryDeathEpisodeStartedAt (originally a plain
--- boolean, `injuryDiedWhileTracked`, before FOLLOW-UP FIX #2 redesigned it
--- into a timestamp) is a TRANSIENT, ped-instance-scoped observation ("was
--- THIS ped last seen dead, and since when"), not a persisted value -- but
--- it shipped living in the same table this file's own header documents as
--- deliberately surviving a disconnect, and was NOT reset by either of the
--- two places that already reset lastCoords (the model-switch-away branch
--- inside TickWellbeing, and playerDropped). That let a K9 disconnect WHILE
--- DEAD and reconnect to a fresh, always-alive ped -- misread by the very
--- next tick as a genuine revival, paying a full deathRespawnRestoreAmount
--- for free, no revive/ambulance/medkit/delay required, repeatably. See
--- server/wellbeing.lua's own header, STUCK-K9 SOFTLOCK FIX item 2's
--- FOLLOW-UP FIX #1 note, and the WellbeingStats struct comment's
--- category-1-vs-2 split, for the full writeup this section's two tests
--- below prove against. Both tests below use a deliberately LONG
--- (10-minute) real-world gap while offline/non-K9-modeled, specifically
--- because a longer gap makes the bug WORSE, not better, under the
--- duration-gated design FOLLOW-UP FIX #2 introduced -- an un-reset
--- timestamp read against a much-later `now` looks even MORE like a
--- genuine long down episode, so the fix must make the gap's length
--- irrelevant entirely, not merely short enough to accidentally miss the
--- boundary.
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- POINT C: startup validation for every placeholder ox_inventory item name
+-- STARTUP VALIDATION for every placeholder ox_inventory item name
 -- this resource depends on (Config.K9Medkit.itemName included -- see
 -- server/wellbeing.lua's own header for why that check lives here despite
 -- belonging, in spirit, to server/medkit.lua).
@@ -1201,23 +948,12 @@ t.test('STAMINA OVERRIDE WIRING: a malformed return value (not a table, or a non
     end
 end)
 
--- ========================================================================
--- HUNGER/THIRST (this pass, coder-backend). Config.Features.HungerThirstSystem.
--- See server/wellbeing.lua's header "HUNGER/THIRST" section for the full
--- design writeup this section proves.
--- ========================================================================
-
 t.test('EVERY tracker in server/wellbeing.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, citizenid-keyed ones sweep, and none has neither', function()
     -- Same "read the file's own text, not a runtime accessor" technique
-    -- tests/mainserver_spec.lua/tests/combat_spec.lua/the removed recall spec/
+    -- tests/mainserver_spec.lua/tests/combat_spec.lua/
     -- tests/partnership_spec.lua already established for the identical
-    -- invariant in their own files -- extended to server/wellbeing.lua for
-    -- the first time this pass, specifically because this task added THREE
-    -- new NewCooldown()/NewNestedCooldown() declarations
-    -- (HungerFeedCooldown/ThirstReliefCooldown; AffectionCooldown already
-    -- existed) and the task's own instructions call out this exact defect
-    -- class by name. A tracker with NEITHER strategy leaks for the whole
-    -- uptime of the server.
+    -- invariant in their own files. A tracker with NEITHER strategy leaks
+    -- for the whole uptime of the server.
     local handle = assert(io.open('../server/wellbeing.lua', 'r'))
     local text = handle:read('*a')
     handle:close()
@@ -1228,10 +964,8 @@ t.test('EVERY tracker in server/wellbeing.lua has a cleanup strategy -- source-k
     end
     -- FLOOR LOWERED 5 -> 1 on 2026-09-02, and the reason matters because the
     -- message below says not to lower it lightly. The four trackers this
-    -- floor was written around -- AffectionCooldown (Mood), CalmDownCooldown
-    -- (FearStress), HungerFeedCooldown and ThirstReliefCooldown -- were
-    -- deleted along with the subsystems that owned them, at the owner's
-    -- request. The floor exists to catch the PATTERN going stale (a rename
+    -- floor was written around were deleted along with the subsystems that
+    -- owned them, at the owner's request. The floor exists to catch the PATTERN going stale (a rename
     -- of NewCooldown/NewNestedCooldown would silently match nothing and this
     -- test would pass while checking zero trackers), so it still has to be
     -- above zero -- but it can only ever be as high as the number of
@@ -1247,28 +981,6 @@ t.test('EVERY tracker in server/wellbeing.lua has a cleanup strategy -- source-k
     end
 end)
 
-
--- ------------------------------------------------------------------------
--- PASSIVE DECAY
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- feedK9Hunger — self-only, item-based
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- giveK9Water — self-only, item-based (same shape as feedK9Hunger)
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- drinkFromBowl — self-only, world-prop, NO item consumed
--- ------------------------------------------------------------------------
-
--- ------------------------------------------------------------------------
--- CONFIG-DEFENSIVENESS -- this file does not own config.lua; Config.Wellbeing
--- .Hunger/.Thirst may not exist yet on a server whose config.lua has not
--- landed them.
--- ------------------------------------------------------------------------
 
 -- ========================================================================
 -- HANDLER CONDITION BADGE (this pass) -- see server/wellbeing.lua's own
@@ -1420,19 +1132,11 @@ end)
 -- THRESHOLD-TO-WORD PINS -- "coarse, not numeric," derived from the
 -- EXISTING per-stat threshold, never a new number. Each test sets its
 -- OWN stat's threshold to EXACTLY the stat's known starting value (see
--- EnsureStats above -- Fatigue/Mood/Injury/Hunger/Thirst all start at
--- their own `.max`; FearStress starts at 0) so the tag's own boundary
--- comparison (`<=`/`>=`) is pinned on ONE deterministic real tick, with
--- every OTHER stat's owning flag left off so only the one tag under test
--- can ever appear. Hunger/Thirst additionally zero their own
--- decayPerTick for this one fixture so passive decay cannot move the
--- stat off its known starting value before the tag is evaluated --
--- every other stat's own first-tick arithmetic already lands back on
--- its exact starting value with no override needed (Fatigue: lastCoords
--- is nil on tick 1, so no sprint/rest branch runs at all; Mood/Injury:
--- passive REGEN clamps at max, a no-op starting already at max;
--- FearStress: passive DECAY clamps at its own floor, 0, a no-op starting
--- already at 0).
+-- EnsureStats above -- Fatigue starts at its own `.max`) so the tag's own
+-- boundary comparison (`<=`/`>=`) is pinned on ONE deterministic real
+-- tick. Fatigue's own first-tick arithmetic already lands back on its
+-- exact starting value with no override needed: lastCoords is nil on tick
+-- 1, so no sprint/rest branch runs at all.
 -- ------------------------------------------------------------------
 
 --- @param f table
@@ -1676,7 +1380,7 @@ t.test('BOOT-ORDER SETTLEMENT: a not-yet-settled schema check skips the database
     -- Seeds a REAL, legitimate row first -- the strongest possible control:
     -- if this test passed merely because there was nothing to load anyway,
     -- it would prove nothing about the gate actually skipping the read.
-    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+    ctl.seedRow('K9-CID', { fatigue = 50 })
 
     local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, k9Store = k9Store })
     f.setPlayer(1, 'K9-CID')
@@ -1692,7 +1396,7 @@ end)
 t.test('BOOT-ORDER SETTLEMENT control (the positive case, proving the gate does not just always skip): once the schema check has settled, EnsureStats performs its real read exactly as before and picks up the legitimate persisted row', function()
     local k9Store, ctl = newFakeK9Store()
     ctl.setSchemaSettled(true) -- explicit, even though this is the default -- this test is ABOUT this value
-    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+    ctl.seedRow('K9-CID', { fatigue = 50 })
 
     local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, k9Store = k9Store })
     f.setPlayer(1, 'K9-CID')
@@ -1741,8 +1445,7 @@ end)
 --
 -- What it cost: `restart qbx_k9unit` discarded WellbeingStats wholesale
 -- and the next boot reloaded each citizenid's LAST-FLUSHED row, silently
--- reverting up to flushIntervalMs (60s by default) of Fatigue, Mood,
--- FearStress, Injury, Hunger and Thirst drift for every online K9 and
--- handler, to a value that looks entirely plausible.
+-- reverting up to flushIntervalMs (60s by default) of drift for every
+-- online K9 and handler, to a value that looks entirely plausible.
 -- ========================================================================
 os.exit(t.summary())
