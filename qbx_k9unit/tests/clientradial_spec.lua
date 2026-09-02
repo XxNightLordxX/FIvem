@@ -270,14 +270,13 @@ local function newRadialFixture(opts)
     local function lib_notify(payload) notifyCalls[#notifyCalls + 1] = payload end
 
     -- lib.callback.await stub -- SHARED FOUND MARKER / RADIAL JOIN ENTRY
-    -- POINT (this pass): the 'k9_sar_call_join_nearest' item is the FIRST
     -- item in this whole file to await a server callback directly from its
     -- own onSelect (every other item either records a plain cross-file
     -- global call, per `record`/`queryFn` above, or fires TriggerServerEvent
     -- directly) -- see client/radial.lua's own comment on that item for why
     -- it is self-contained rather than routed through a new
-    -- client/sarcalls.lua resource-global. Same controllable-response-queue
-    -- + FAIL-CLOSED-throw shape as tests/clientsarcalls_spec.lua's own
+    -- the removed SAR-calls client file resource-global. Same controllable-response-queue
+    -- + FAIL-CLOSED-throw shape as the removed SAR-calls client spec's own
     -- callbackAwait fixture, trimmed to what this one item needs (no
     -- reentrancy/generation concerns here -- this item never awaits twice in
     -- flight the way RequestStartSarCall's own in-flight guard has to worry
@@ -760,14 +759,13 @@ t.test('this spec\'s baseline flags: Bark, Leash, Vehicle, Utility (Phase 1 + re
         'k9_sit', -- moved into 'k9unit_utility', see above
         'k9_track_certified',
         'k9_bite_hold', 'k9_takedown', 'k9_drag',
-        'k9_break_partnership', 'k9_partner_up', 'k9_recall', 'k9_defense',
+        'k9_break_partnership', 'k9_partner_up',
         'k9_fetch',
         -- k9_prop_attachment/k9_open_inventory/k9_treat_nearest also MOVED
         -- into 'k9unit_utility' (Job 3) -- structurally never a direct
         -- 'k9unit' child anymore, regardless of their own feature flags;
         -- see the dedicated 'k9unit_utility' presence tests below.
         'k9_prop_attachment', 'k9_open_inventory', 'k9_treat_nearest',
-        'k9_sar_call', 'k9_sar_call_join_nearest', 'k9_training',
         'k9_thermal_vision', -- gated on ThermalVision, pinned false in this file's own baseline above
         'k9_night_vision', -- gated on NightVision, pinned false in this file's own baseline above
         'k9_vision_cycle', -- gated on NightVision/ThermalVision, both pinned false in this file's own baseline above
@@ -823,8 +821,8 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
         'k9_open_tablet', 'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
         'k9_partner_up', 'k9_break_partnership',
         'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_scent_vision', 'k9_camera_feed', 'k9_vision_cycle',
-        'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
-        'k9_fetch', 'k9_kennel', 'k9_sar_call', 'k9_sar_call_join_nearest', 'k9_training',
+        'k9_bite_hold', 'k9_takedown', 'k9_drag',
+        'k9_fetch', 'k9_kennel',
     }) do
         t.isNotNil(order[id], ('%s must be present'):format(id))
     end
@@ -858,30 +856,20 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
     t.isTrue(order.k9_camera_feed < order.k9_vision_cycle, 'Cycle Vision stays last in the family, as the catch-all convenience it has always been')
     t.isTrue(order.k9_vision_cycle < order.k9_bite_hold, 'the whole Perception family must precede Combat')
 
-    -- Combat/Emergency family is grouped together, ending on Recall (the
-    -- universal "call it off" action for any of the three engagement types
-    -- immediately before it).
+    -- Combat family, grouped together. NARROWED 2026-09-02: this used to end
+    -- on Recall, with Handler-Down Defense and Danger Warn between Drag and
+    -- it, and then the SAR-call pair and Training after Kennel. All five of
+    -- those items were removed with their features, so the family now ends
+    -- at Drag and Kennel is last. The ordering PROPERTY this test exists for
+    -- -- related items stay adjacent, in a deliberate order, rather than
+    -- accreting -- is unchanged and still asserted across every item that
+    -- remains.
     t.isTrue(order.k9_bite_hold < order.k9_takedown)
     t.isTrue(order.k9_takedown < order.k9_drag)
-    t.isTrue(order.k9_drag < order.k9_defense)
-    t.isTrue(order.k9_defense < order.k9_dangerwarn)
-    t.isTrue(order.k9_dangerwarn < order.k9_recall)
-    t.isTrue(order.k9_recall < order.k9_fetch, 'Recall is the hinge back to the lighter, non-combat items after it')
+    t.isTrue(order.k9_drag < order.k9_fetch, 'Combat precedes the lighter, non-combat items after it')
 
-    -- Recreational/logistics pair, then the Search & Rescue Call pair
-    -- (unchanged relative order), then Training last.
+    -- Recreational/logistics pair, now last.
     t.isTrue(order.k9_fetch < order.k9_kennel)
-    t.isTrue(order.k9_kennel < order.k9_sar_call)
-    t.isTrue(order.k9_sar_call < order.k9_sar_call_join_nearest, 'starting a call must precede its own no-argument join convenience')
-    t.isTrue(order.k9_sar_call_join_nearest < order.k9_training, 'Training (practice, never live-duty) stays last')
-end)
-
-t.test('DISPLAY ORDER fail-safe: Training (the last id named in K9_SUBMENU_DISPLAY_ORDER) still lands as the actual last item when every id ordered after it is absent -- proves an explicitly-ordered id is never dropped, just placed', function()
-    local f = newRadialFixture({ features = { TrainingMode = true } })
-    local items = f.findMenu('k9unit')
-    local order = idOrder(items)
-    t.isNotNil(order.k9_training)
-    t.equals(order.k9_training, #items, 'Training must be the last item in the menu when nothing ordered after it is present')
 end)
 
 -- ----------------------------------------------------------------------
@@ -922,7 +910,6 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     { flag = 'BiteAndHold', itemId = 'k9_bite_hold' },
     { flag = 'NonLethalTakedown', itemId = 'k9_takedown' },
     { flag = 'PropDragging', itemId = 'k9_drag' },
-    { flag = 'Recall', itemId = 'k9_recall' },
     -- MOVED into 'k9unit_utility' (Job 3 regrouping) -- `menu` overrides the
     -- default 'k9unit' target below for these three only.
     { flag = 'PropAttachments', itemId = 'k9_prop_attachment', menu = 'k9unit_utility' },
@@ -934,14 +921,12 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     { flag = 'K9Inventory', itemId = 'k9_open_inventory', menu = 'k9unit_utility' },
     { flag = 'K9Medkit', itemId = 'k9_treat_nearest', menu = 'k9unit_utility' },
     -- RESOLVED this pass: closed the exact disclosed gap
-    -- client/sarcalls.lua's own header used to name ("not wired into
+    -- the removed SAR-calls client file's own header used to name ("not wired into
     -- client/radial.lua by this pass") -- same generic mechanism, nothing
     -- special-cased.
-    { flag = 'SARCalls', itemId = 'k9_sar_call' },
     -- RADIAL JOIN ENTRY POINT (this pass) -- same flag gates BOTH the
     -- toggle above and this new item, since joining is using the same
     -- feature starting one is.
-    { flag = 'SARCalls', itemId = 'k9_sar_call_join_nearest' },
 }
 
 for _, case in ipairs(FALSE_BY_DEFAULT_SINGLE_ITEM_CASES) do
@@ -1134,26 +1119,6 @@ end)
 -- HandlerDownDefense -- gates a whole SEPARATE registerRadial('k9unit_defense')
 -- submenu (two terminal actions) PLUS the k9_defense link item inside k9unit.
 -- ----------------------------------------------------------------------
-
-t.test('HandlerDownDefense explicitly false: neither the k9unit_defense submenu nor its k9unit link item exists', function()
-    local f = newRadialFixture()
-    t.isNil(f.findMenu('k9unit_defense'))
-    t.isNil(f.findInMenu('k9unit', 'k9_defense'))
-end)
-
-t.test('HandlerDownDefense true: registers k9unit_defense with exactly k9_defense_bite and k9_defense_takedown, linked from k9unit', function()
-    local f = newRadialFixture({ features = { HandlerDownDefense = true } })
-    local link = f.findInMenu('k9unit', 'k9_defense')
-    t.isNotNil(link)
-    t.equals(link.menu, 'k9unit_defense')
-    t.isNil(link.onSelect, 'a pure navigation link must carry no onSelect')
-
-    local items = f.findMenu('k9unit_defense')
-    t.isNotNil(items)
-    t.equals(#items, 2)
-    t.isNotNil(f.findInMenu('k9unit_defense', 'k9_defense_bite'))
-    t.isNotNil(f.findInMenu('k9unit_defense', 'k9_defense_takedown'))
-end)
 
 -- ----------------------------------------------------------------------
 -- FetchMechanic -- same nested-submenu shape as HandlerDownDefense above.
@@ -1379,8 +1344,8 @@ end)
 
 -- ----------------------------------------------------------------------
 -- onSelect targets: the `type(fn) == 'function'` guard -- present for
--- every item wired to client/partnership.lua, client/recall.lua,
--- client/defense.lua, client/fetch.lua, client/propattachment.lua,
+-- every item wired to client/partnership.lua, the removed recall client file,
+-- the removed handler-down-defense client file, client/fetch.lua, client/propattachment.lua,
 -- client/kennel.lua, client/inventory.lua, client/medkit.lua (per this
 -- file's own header: "Every cross-file global added after this file's own
 -- initial Phase 1 pass is called behind a type(fn) == 'function' runtime
@@ -1399,16 +1364,6 @@ t.test('k9_break_partnership: guarded -- absent BreakPartnership does not throw;
     fPresent.findInMenu('k9unit', 'k9_break_partnership').onSelect()
     t.equals(#fPresent.calls.BreakPartnership, 1)
     t.equals(fPresent.canShowK9UICallCount(), 0, 'must never even ask CanShowK9UI -- termination action')
-end)
-
-t.test('k9_recall: guarded -- absent RequestRecall does not throw; present RequestRecall is called, UNGATED', function()
-    local fAbsent = newRadialFixture({ features = { Recall = true }, omit = { 'RequestRecall' }, canShowK9UI = false })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_recall'))
-
-    local fPresent = newRadialFixture({ features = { Recall = true }, canShowK9UI = false })
-    fPresent.findInMenu('k9unit', 'k9_recall').onSelect()
-    t.equals(#fPresent.calls.RequestRecall, 1)
-    t.equals(fPresent.canShowK9UICallCount(), 0, 'Recall is a TERMINATION action -- must never be gated, per client/recall.lua\'s own header quoted in this file')
 end)
 
 t.test('k9_partner_up: guarded -- absent RequestPartnerUp does not throw when a candidate is found; present RequestPartnerUp is called with the found candidate serverId, GATED on CanShowK9UI', function()
@@ -1447,7 +1402,7 @@ end)
 -- UPDATED (three-surfaces-agree pass, this pass): this test used to pin
 -- the exact bug it was meant to prevent. It asserted the submenu REFUSES
 -- when CanShowK9UI() is false and never reaches ConfirmHandlerDownDefense.
--- But ConfirmHandlerDownDefense() (client/defense.lua) was itself widened
+-- But the removed handler-down-defense confirm function (the removed handler-down-defense client file) was itself widened
 -- to HasK9Access() alone earlier today, matching server/combat.lua's
 -- shared ValidateCombatRequest (the same widening already proven above for
 -- Bite & Hold/Non-Lethal Takedown/Drag, and elsewhere in this file for
@@ -1460,36 +1415,8 @@ end)
 --
 -- What this test pins now: BOTH sub-items always reach the callee
 -- regardless of CanShowK9UI() -- the callee alone is trusted to apply its
--- own, now-correct HasK9Access() gate. tests/clientdefense_spec.lua owns
--- proving ConfirmHandlerDownDefense()'s own gate itself.
-t.test('k9_defense_bite / k9_defense_takedown: guarded -- absent ConfirmHandlerDownDefense does not throw; both ALWAYS reach the callee with their own actionType regardless of CanShowK9UI (removed pre-check) -- a bypass holder and an ordinary certified K9 alike', function()
-    local fAbsent = newRadialFixture({ features = { HandlerDownDefense = true }, omit = { 'ConfirmHandlerDownDefense' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_defense', 'k9_defense_bite'))
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_defense', 'k9_defense_takedown'))
-
-    -- THE FIX: a bypass holder (HasK9Access true, CanShowK9UI false --
-    -- exactly a High Command/autoAccessGrade grant with no model/role of its
-    -- own) now reaches the callee through BOTH items, never denied by this
-    -- file's own removed pre-check.
-    local fBypass = newRadialFixture({ features = { HandlerDownDefense = true }, hasK9Access = true, canShowK9UI = false })
-    fBypass.findInMenu('k9unit_defense', 'k9_defense_bite').onSelect()
-    fBypass.findInMenu('k9unit_defense', 'k9_defense_takedown').onSelect()
-    t.equals(fBypass.denyCallCount(), 0, 'the radial item itself must never deny -- that decision belongs to the (already-widened) callee alone now')
-    t.equals(#fBypass.calls.ConfirmHandlerDownDefense, 2)
-    t.equals(fBypass.calls.ConfirmHandlerDownDefense[1][1], 'bite')
-    t.equals(fBypass.calls.ConfirmHandlerDownDefense[2][1], 'takedown')
-
-    -- CONTROL: an ordinary certified K9 (both true, this fixture's own
-    -- default) still reaches the callee too -- proves this fix did not
-    -- accidentally turn the items into a no-op for the common case.
-    local fGranted = newRadialFixture({ features = { HandlerDownDefense = true } })
-    fGranted.findInMenu('k9unit_defense', 'k9_defense_bite').onSelect()
-    fGranted.findInMenu('k9unit_defense', 'k9_defense_takedown').onSelect()
-    t.equals(#fGranted.calls.ConfirmHandlerDownDefense, 2)
-    t.equals(fGranted.calls.ConfirmHandlerDownDefense[1][1], 'bite')
-    t.equals(fGranted.calls.ConfirmHandlerDownDefense[2][1], 'takedown')
-end)
-
+-- own, now-correct HasK9Access() gate. the removed handler-down-defense client spec owns
+-- proving the removed handler-down-defense confirm function's own gate itself.
 -- UPDATED: this test used to pin the exact bug it was meant to prevent.
 -- It asserted that the vest item REFUSES when CanShowK9UI() is false and
 -- never reaches RequestToggleK9PropAttachment. But that function is the one
@@ -1611,127 +1538,25 @@ end)
 
 -- ----------------------------------------------------------------------
 -- RESOLVED this pass: Search & Rescue Call -- closes the exact disclosed
--- gap client/sarcalls.lua's own header used to name. Same context-sensitive
+-- gap the removed SAR-calls client file's own header used to name. Same context-sensitive
 -- toggle shape as Leash/Bite & Hold/Drag -- full treatment mirrors those.
 -- ----------------------------------------------------------------------
 
-t.test('k9_sar_call: guarded triple (IsSarCallActive/RequestAbandonSarCall/RequestStartSarCall) -- all three absent does not throw either branch', function()
-    local fAbsent = newRadialFixture({ features = { SARCalls = true }, omit = { 'IsSarCallActive', 'RequestAbandonSarCall', 'RequestStartSarCall' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_sar_call'))
-end)
-
-t.test('k9_sar_call: while a call is active, selecting it abandons -- UNGATED, never consults CanShowK9UI', function()
-    local f = newRadialFixture({ features = { SARCalls = true }, canShowK9UI = false })
-    f.setState('isSarCallActive', true)
-    f.findInMenu('k9unit', 'k9_sar_call').onSelect()
-    t.equals(#f.calls.RequestAbandonSarCall, 1)
-    t.isNil(f.calls.RequestStartSarCall)
-    t.equals(f.canShowK9UICallCount(), 0, 'abandoning a call must never even ask CanShowK9UI -- see client/sarcalls.lua\'s own "UNCONDITIONAL, never gated" doc comment')
-end)
-
 -- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
--- finding, this pass) -- server/sarcalls.lua's requestSarCall callback
+-- finding, this pass) -- the removed SAR-calls server file's requestSarCall callback
 -- gates on HasK9Access(source) alone. `hasK9Access = false` (not
 -- `canShowK9UI = false`) is therefore the real denial case now.
-t.test('k9_sar_call: while no call is active, HasK9Access() false denies (never calls RequestStartSarCall, with the specific combat.no_access reason); HasK9Access() true calls through', function()
-    local fDenied = newRadialFixture({ features = { SARCalls = true }, hasK9Access = false, canShowK9UI = false })
-    fDenied.findInMenu('k9unit', 'k9_sar_call').onSelect()
-    t.equals(fDenied.denyCallCount(), 1)
-    t.equals(fDenied.lastDenyReason(), 'combat.no_access')
-    t.isNil(fDenied.calls.RequestStartSarCall)
-
-    -- THE WIDENING ITSELF: a High Command/autoAccessGrade-bypass holder --
-    -- HasK9Access() true, CanShowK9UI() false (HasK9Role() deliberately
-    -- excludes that exact bypass) -- must now be offered the call, not
-    -- silently denied by THIS file's own gate. RESIDUAL, DISCLOSED GAP:
-    -- client/sarcalls.lua's own RequestStartSarCall() (not loaded/exercised
-    -- by this isolated spec) still internally re-gates on CanShowK9UI() as
-    -- of this same pass -- see client/radial.lua's own comment on this item
-    -- for the full writeup; this test only proves THIS file's own half.
-    local fBypass = newRadialFixture({ features = { SARCalls = true }, hasK9Access = true, canShowK9UI = false })
-    fBypass.findInMenu('k9unit', 'k9_sar_call').onSelect()
-    t.equals(fBypass.denyCallCount(), 0)
-    t.equals(#fBypass.calls.RequestStartSarCall, 1)
-
-    local fGranted = newRadialFixture({ features = { SARCalls = true } })
-    fGranted.findInMenu('k9unit', 'k9_sar_call').onSelect()
-    t.equals(#fGranted.calls.RequestStartSarCall, 1)
-    t.equals(fGranted.findInMenu('k9unit', 'k9_sar_call').label, pendingLocale('radial.sar_call_toggle_label'))
-end)
-
 -- ----------------------------------------------------------------------
--- RADIAL JOIN ENTRY POINT (this pass) -- 'k9_sar_call_join_nearest'.
 -- '/k9sarcall join <serverId>' was the ONLY way to join someone else's
 -- call; a radial item cannot take an argument, so this item resolves the
--- NEAREST joinable call server-side (server/sarcalls.lua's own
--- findNearestJoinableSarCall, exercised directly in tests/sarcalls_spec.lua
+-- NEAREST joinable call server-side (the removed SAR-calls server file's own
+-- findNearestJoinableSarCall, exercised directly in the removed SAR-calls spec
 -- -- this file only proves THIS item's own half: gating, the await, and
 -- what it does with the result). This is the FIRST item in this whole file
 -- to await a server callback directly rather than delegate through a
--- client/sarcalls.lua resource-global -- see client/radial.lua's own
+-- the removed SAR-calls client file resource-global -- see client/radial.lua's own
 -- comment on the item for the full "why self-contained" writeup.
 -- ----------------------------------------------------------------------
-
-t.test('k9_sar_call_join_nearest: guarded IsSarCallActive absent does not throw -- falls through to the join attempt exactly as "not currently active" would', function()
-    local fAbsent = newRadialFixture({ features = { SARCalls = true }, omit = { 'IsSarCallActive' } })
-    fAbsent.queueCallbackResponse({ targetServerId = nil })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_sar_call_join_nearest'))
-end)
-
-t.test('k9_sar_call_join_nearest: while a call is already active, selecting it notifies already_active and never even asks HasK9Access or awaits the server', function()
-    local f = newRadialFixture({ features = { SARCalls = true } })
-    f.setState('isSarCallActive', true)
-    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
-
-    t.equals(f.hasK9AccessCallCount(), 0, 'already active locally -- must never even ask HasK9Access')
-    t.equals(f.callbackCallCount(), 0, 'already active locally -- must never even await the lookup')
-    t.equals(#f.triggerServerEventCalls, 0)
-    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.already_active'))
-end)
-
-t.test('k9_sar_call_join_nearest: HasK9Access() false denies with the specific combat.no_access reason, and never awaits the lookup callback', function()
-    local f = newRadialFixture({ features = { SARCalls = true }, hasK9Access = false })
-    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
-
-    t.equals(f.denyCallCount(), 1)
-    t.equals(f.lastDenyReason(), 'combat.no_access')
-    t.equals(f.callbackCallCount(), 0)
-    t.equals(#f.triggerServerEventCalls, 0)
-end)
-
-t.test('k9_sar_call_join_nearest: HasK9Access() true awaits findNearestJoinableSarCall, and when a target is found fires requestJoinSarCall with EXACTLY that target', function()
-    local f = newRadialFixture({ features = { SARCalls = true } })
-    f.queueCallbackResponse({ targetServerId = 42 })
-    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
-
-    t.equals(f.denyCallCount(), 0)
-    t.equals(f.callbackCallCount(), 1)
-    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:findNearestJoinableSarCall')
-    t.equals(#f.triggerServerEventCalls, 1, 'exactly the SAME event the /k9sarcall join <id> command path sends')
-    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:requestJoinSarCall')
-    t.equals(f.triggerServerEventCalls[1].args[1], 42)
-    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_request_sent'))
-end)
-
-t.test('k9_sar_call_join_nearest: no eligible nearby call -- notifies join_no_nearby_call and never fires requestJoinSarCall', function()
-    local f = newRadialFixture({ features = { SARCalls = true } })
-    f.queueCallbackResponse({ targetServerId = nil })
-    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
-
-    t.equals(#f.triggerServerEventCalls, 0)
-    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_no_nearby_call'))
-end)
-
-t.test('k9_sar_call_join_nearest: FAIL-CLOSED -- lib.callback.await throwing (timeout/rejection) degrades to the SAME "no nearby call" notify, never crashes the click', function()
-    local f = newRadialFixture({ features = { SARCalls = true } })
-    f.setThrowNextCallback()
-    local item = f.findInMenu('k9unit', 'k9_sar_call_join_nearest')
-
-    local ok = pcall(item.onSelect)
-    t.isTrue(ok, 'onSelect itself must not throw even though the awaited callback did')
-    t.equals(#f.triggerServerEventCalls, 0)
-    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_no_nearby_call'))
-end)
 
 -- ----------------------------------------------------------------------
 -- RESOLVED this pass: Training -- closes the exact disclosed gap that used
@@ -1740,71 +1565,6 @@ end)
 -- same treatment shape as FetchMechanic above (presence/absence of the
 -- whole submenu, then guard + gating + happy-path per item).
 -- ----------------------------------------------------------------------
-
-t.test('TrainingMode explicitly false: neither the k9unit_training submenu nor its k9unit link item exists', function()
-    local f = newRadialFixture()
-    t.isNil(f.findMenu('k9unit_training'))
-    t.isNil(f.findInMenu('k9unit', 'k9_training'))
-end)
-
-t.test('TrainingMode true: registers k9unit_training with exactly the toggle + both drills, linked from k9unit', function()
-    local f = newRadialFixture({ features = { TrainingMode = true } })
-    local link = f.findInMenu('k9unit', 'k9_training')
-    t.isNotNil(link)
-    t.equals(link.menu, 'k9unit_training')
-    t.equals(link.label, pendingLocale('radial.training_menu_label'))
-
-    local items = f.findMenu('k9unit_training')
-    t.equals(#items, 3)
-    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_toggle'))
-    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_search'))
-    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_bite'))
-end)
-
-t.test('k9_training_toggle: guarded triple (IsTrainingModeActive/RequestSetTrainingMode) -- both absent does not throw either branch', function()
-    local fAbsent = newRadialFixture({ features = { TrainingMode = true }, omit = { 'IsTrainingModeActive', 'RequestSetTrainingMode' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_toggle'))
-end)
-
-t.test('k9_training_toggle: while training, selecting it requests OFF -- UNGATED, never consults HasK9Access', function()
-    local f = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = false })
-    f.setState('isTrainingModeActive', true)
-    f.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
-    t.equals(#f.calls.RequestSetTrainingMode, 1)
-    t.equals(f.calls.RequestSetTrainingMode[1][1], false)
-    t.equals(f.hasK9AccessCallCount(), 0, 'stopping training must never even ask HasK9Access -- "no unbounded trap"')
-    t.equals(f.denyCallCount(), 0)
-end)
-
-t.test('k9_training_toggle: while NOT training, gated on HasK9Access() DIRECTLY, NOT CanShowK9UI() -- mirrors the Fetch Throw branch\'s own carve-out', function()
-    local fDenied = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = false, canShowK9UI = true })
-    fDenied.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
-    t.equals(fDenied.denyCallCount(), 1)
-    t.isNil(fDenied.calls.RequestSetTrainingMode)
-
-    local fGranted = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = true, canShowK9UI = false })
-    fGranted.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
-    t.equals(#fGranted.calls.RequestSetTrainingMode, 1)
-    t.equals(fGranted.calls.RequestSetTrainingMode[1][1], true)
-    t.equals(fGranted.canShowK9UICallCount(), 0, 'this item must never even ask CanShowK9UI')
-end)
-
-t.test('k9_training_search / k9_training_bite: guarded -- absent RequestTrainingSearchDrill/RequestTrainingBiteDrill does not throw', function()
-    local fAbsent = newRadialFixture({ features = { TrainingMode = true }, omit = { 'RequestTrainingSearchDrill', 'RequestTrainingBiteDrill' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_search'))
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_bite'))
-end)
-
-t.test('k9_training_search / k9_training_bite: carry NO access gate of their own -- call straight through even with CanShowK9UI/HasK9Access both forced false, matching the command path', function()
-    local f = newRadialFixture({ features = { TrainingMode = true }, canShowK9UI = false, hasK9Access = false })
-    f.findInMenu('k9unit_training', 'k9_training_search').onSelect()
-    f.findInMenu('k9unit_training', 'k9_training_bite').onSelect()
-    t.equals(#f.calls.RequestTrainingSearchDrill, 1)
-    t.equals(#f.calls.RequestTrainingBiteDrill, 1)
-    t.equals(f.canShowK9UICallCount(), 0)
-    t.equals(f.hasK9AccessCallCount(), 0)
-    t.equals(f.denyCallCount(), 0)
-end)
 
 -- ----------------------------------------------------------------------
 -- HEADER/CODE DRIFT FIX (dependency-verification pass): Sit, Leash,
@@ -2198,99 +1958,6 @@ t.test('An unrelated resource starting neither registers nor re-registers anythi
     local ok = pcall(f.fireResourceStart, 'some_other_resource')
     t.isTrue(ok, "an unrelated resource's own start must never touch this file's registration at all")
     t.isNil(f.findMenu('k9unit'), 'confirms the wipe really took effect and the unrelated start did not silently re-populate it')
-end)
-
-t.test('ox_lib restarting (simulated: its own file-local menus/menuItems wiped, then its OWN onResourceStart fires) re-registers every menu this resource owns', function()
-    local f = newRadialFixture({ features = {
-        HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true, TrainingMode = true,
-    } })
-
-    -- Sanity: everything is present before the simulated restart.
-    t.isNotNil(f.findMenu('k9unit'))
-    t.isNotNil(f.findMenu('k9unit_bark'))
-    t.isNotNil(f.findMenu('k9unit_defense'))
-    t.isNotNil(f.findMenu('k9unit_fetch'))
-    t.isNotNil(f.findMenu('k9unit_training'))
-    t.isNotNil(f.findRootItem('k9unit_open'))
-
-    -- Simulates ox_lib's OWN restart: its file-local `menus`/`menuItems`
-    -- tables get reconstructed from scratch, empty -- nothing else in
-    -- ox_lib re-populates them.
-    f.wipeOxLibRadialState()
-    t.isNil(f.findMenu('k9unit'), 'sanity: the wipe genuinely cleared the live model')
-    t.isNil(f.findRootItem('k9unit_open'))
-
-    -- ox_lib's OWN start firing is what client/radial.lua's dispatcher
-    -- listens for (in addition to this resource's own start) -- this is
-    -- the actual fix under test.
-    f.fireResourceStart('ox_lib')
-
-    t.isNotNil(f.findMenu('k9unit'), 'the top-level k9unit submenu must be re-registered')
-    t.isNotNil(f.findMenu('k9unit_bark'), 'the nested bark variants submenu must be re-registered')
-    t.isNotNil(f.findMenu('k9unit_defense'), 'the nested defense submenu must be re-registered')
-    t.isNotNil(f.findMenu('k9unit_fetch'), 'the nested fetch submenu must be re-registered')
-    t.isNotNil(f.findMenu('k9unit_training'), 'the nested training submenu must be re-registered')
-    t.isNotNil(f.findRootItem('k9unit_open'), 'the single root opener must be re-registered')
-    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'the re-registered opener must still navigate into the re-registered k9unit submenu')
-end)
-
-t.test('ox_lib restart re-registration preserves ORDERING: every submenu is registered before the item that navigates into it via `menu`, even on the re-registration pass, not just the first', function()
-    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true, TrainingMode = true } })
-
-    f.wipeOxLibRadialState()
-    f.fireResourceStart('ox_lib')
-
-    local order = f.registerRadialOrder()
-    local indexOf = {}
-    for i, id in ipairs(order) do indexOf[id] = i end
-
-    t.isNotNil(indexOf.k9unit_defense, 'k9unit_defense must have been (re-)registered')
-    t.isNotNil(indexOf.k9unit_fetch, 'k9unit_fetch must have been (re-)registered')
-    t.isNotNil(indexOf.k9unit_training, 'k9unit_training must have been (re-)registered')
-    t.isNotNil(indexOf.k9unit, 'k9unit must have been (re-)registered')
-    t.isTrue(indexOf.k9unit_defense < indexOf.k9unit, 'k9unit_defense (referenced via a `menu` field from inside k9unit) must be registered BEFORE k9unit itself, on the re-registration pass too -- violating this order is exactly what makes ox_lib\'s showRadial hard-error on an unregistered id')
-    t.isTrue(indexOf.k9unit_fetch < indexOf.k9unit, 'k9unit_fetch must likewise be registered before k9unit on the re-registration pass')
-    t.isTrue(indexOf.k9unit_training < indexOf.k9unit, 'k9unit_training must likewise be registered before k9unit on the re-registration pass')
-
-    -- The link items themselves must still correctly point at those
-    -- already-registered ids after the re-registration.
-    t.equals(f.findInMenu('k9unit', 'k9_defense').menu, 'k9unit_defense')
-    t.equals(f.findInMenu('k9unit', 'k9_fetch').menu, 'k9unit_fetch')
-    t.equals(f.findInMenu('k9unit', 'k9_training').menu, 'k9unit_training')
-end)
-
-t.test('Re-registering with NO wipe in between (this resource\'s own start firing twice, or ox_lib\'s restart happening twice back to back) does not duplicate any item -- verified against ox_lib\'s own real dedup semantics (registerRadial is a keyed table write; addRadialItem replaces an existing id in place)', function()
-    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true, TrainingMode = true } })
-
-    local idsBefore = f.allIds()
-    local countBefore = #idsBefore
-
-    -- Fire the SAME trigger again with no wipe in between -- exactly what
-    -- ox_lib's real registerRadial/addRadialItem are idempotent against
-    -- (unlike, e.g., ox_inventory's registerHook, which has no such
-    -- built-in dedup -- see tests/inventory_spec.lua's own "CONTRACT
-    -- DEPENDENCY" test for that contrasting case).
-    f.fireResourceStart('qbx_k9unit')
-
-    local idsAfter = f.allIds()
-    t.equals(#idsAfter, countBefore, 'no new ids should have appeared, and none should have vanished')
-
-    local seen = {}
-    for _, id in ipairs(idsAfter) do
-        t.isNil(seen[id], ('duplicate radial item id found after a redundant re-registration: %s'):format(tostring(id)))
-        seen[id] = true
-    end
-
-    -- Also confirm the ROOT opener specifically stayed a single entry --
-    -- the one item registered via lib.addRadialItem (registerRadial's
-    -- dedup is structural/by-construction via a keyed table write, but
-    -- addRadialItem's dedup is an explicit id-scan this pass verified
-    -- against ox_lib's real source, so it deserves its own direct check).
-    local openerCount = 0
-    for _, id in ipairs(idsAfter) do
-        if id == 'k9unit_open' then openerCount = openerCount + 1 end
-    end
-    t.equals(openerCount, 1, 'the root opener must appear exactly once, never duplicated by a redundant re-registration')
 end)
 
 t.test('Re-registering (via a simulated ox_lib restart) rebuilds fresh onSelect closures that still function correctly -- not stale/broken references into a torn-down state', function()

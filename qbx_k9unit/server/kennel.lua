@@ -739,7 +739,7 @@ end
 --- requestPutDownKennel, requestEnterKennel, requestExitKennel,
 --- cancelKennelPlacement, the playerDropped handler, or the onResourceStop
 --- sweep, all of which are this feature's own "no unbounded trap" exit
---- paths and must keep working exactly as server/recall.lua's own header
+--- paths and must keep working exactly as the removed recall server file's own header
 --- documents for the identical reason.
 ---   2. an explicit block.DeployableKennel grant -> DENY
 ---   3. DeployableKennel listed in RequireGrant -> ALLOW only with an
@@ -869,7 +869,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
         -- Distance read by plain `.x`/`.y`/`.z` field access, deliberately
         -- NOT the `#(a - b)` vector-subtraction idiom this file's own
         -- requestEnterKennel/requestPickupKennel call sites use elsewhere --
-        -- see server/sarcalls.lua's own header "NATIVE/GLOBAL VERIFICATION"
+        -- see the removed SAR-calls server file's own header "NATIVE/GLOBAL VERIFICATION"
         -- section for why this is the more portable idiom (works whether
         -- GetEntityCoords hands back a real vector3 or a bare table, no
         -- metatable dependency either way).

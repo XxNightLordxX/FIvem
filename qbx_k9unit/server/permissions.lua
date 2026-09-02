@@ -2479,7 +2479,7 @@ end
 -- printed half of it, matching this resource's established convention
 -- for an unmissable, actionable operator warning (identical shape to
 -- server/combat.lua's PropDragging override warning and
--- server/defense.lua's HandlerDownDefense override warning -- both
+-- the removed handler-down-defense server file's HandlerDownDefense override warning -- both
 -- `AddEventHandler('onResourceStart', ...)`, both filtered to THIS
 -- resource's own restart via `GetCurrentResourceName() ~= resourceName`,
 -- both a single loud `print`, never an `assert`, because turning a

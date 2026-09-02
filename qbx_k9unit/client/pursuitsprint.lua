@@ -80,7 +80,7 @@
 
     ======================================================================
     NO UNBOUNDED TRAP -- THE LOAD-BEARING INVARIANT THIS FILE EXISTS TO
-    SATISFY (mirrors server/recall.lua's own header framing for its
+    SATISFY (mirrors the removed recall server file's own header framing for its
     equivalent termination path). The code path that ENDS a burst (natural
     timeout, death, or this resource stopping) below:
       - is NEVER gated on CanShowK9UI()/HasK9Access()/any certification
@@ -89,7 +89,7 @@
         from that family at all. A K9 that loses certification, or has its
         server-side role revoked, MID-BURST still has the multiplier reset
         on schedule -- the ability to end an effect must never depend on
-        still holding the permission that started it (server/recall.lua's
+        still holding the permission that started it (the removed recall server file's
         own documented invariant, applied here to a different mechanic).
       - fires even if this resource restarts mid-burst (the onResourceStop
         handler below), and even if the K9 dies mid-burst (the end-timer's

@@ -80,7 +80,7 @@
     etc.) that an external resource driving them directly would bypass.
     This also names the self-initiated actions added by the six features
     audited below (same exclusion, not a new category):
-    `RequestRecall` (client/recall.lua — a termination action deliberately
+    `RequestRecall` (the removed recall client file — a termination action deliberately
     ungated on CanShowK9UI, but still self-initiated by the calling player
     for their own partner K9; excluding it here does not reopen the "must
     never gate the termination path" question that file's own header
@@ -88,7 +88,7 @@
     about whether an unrelated external resource should be able to trigger
     it on a player's behalf), `RequestThrowFetchBall`/`ReleaseFetchBall`/
     `RequestRecallFetchBall` (client/fetch.lua), `ConfirmHandlerDownDefense`
-    (client/defense.lua — the manual confirm step; note its own read-only
+    (the removed handler-down-defense client file — the manual confirm step; note its own read-only
     preconditions, `HasFreshDefensePrompt`/`GetDefenseSuggestedTargetNetId`,
     ARE exported below, only the action that consumes them is not), and
     `RequestToggleK9PropAttachment` (client/propattachment.lua). None of
@@ -337,10 +337,10 @@ exports('IsDragEngaged', function()
 end)
 
 -- ======================================================================
--- HANDLER-DOWN DEFENSE STATE (wraps client/defense.lua)
+-- HANDLER-DOWN DEFENSE STATE (wraps the removed handler-down-defense client file)
 -- (Config.Features.HandlerDownDefense, still `false` by default). Both
 -- exports below are zero-argument reads of PendingDefensePrompt, a plain
--- in-memory Lua table local to client/defense.lua with no game-state
+-- in-memory Lua table local to the removed handler-down-defense client file with no game-state
 -- counterpart (see that file's own header: "no onResourceStop handler...
 -- this file applies NO native side effect to any entity, ever") — exactly
 -- the same "read this file's own already-computed local state" shape as
@@ -349,7 +349,7 @@ end)
 -- its own alert UI on top of an already-active handler-down prompt, the
 -- same way it already reasonably would for CanShowK9UI(). Neither export
 -- gates on Config.Features.HandlerDownDefense beyond what the wrapped
--- global itself already does — client/defense.lua returns entirely,
+-- global itself already does — the removed handler-down-defense client file returns entirely,
 -- defining neither global, when that flag is off, so the `type(...) ==
 -- 'function'` guard below already degrades correctly on its own.
 -- Deliberately NOT exported: ConfirmHandlerDownDefense(actionType) — the

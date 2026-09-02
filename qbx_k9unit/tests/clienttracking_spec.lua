@@ -336,7 +336,7 @@ local function newTrackingFixture(opts)
     end
 
     -- CLAMP-AND-WARN CAPTURE -- same convention as
-    -- tests/scenttrail_spec.lua's/tests/sarcalls_spec.lua's own printLog
+    -- the removed scent-trail spec's/the removed SAR-calls spec's own printLog
     -- captures for this exact class of guard (proves a bad config value
     -- actually warns, not just "doesn't crash").
     local printLog = {}

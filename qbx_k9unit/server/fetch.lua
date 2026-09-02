@@ -289,7 +289,7 @@ end
 --- reportFetchCarrierDown): those either merely confirm/complete an
 --- already-approved action or are the "let go" half of this file's own "no
 --- unbounded trap" guarantee and must keep working exactly as
---- server/recall.lua's own header documents for the identical reason.
+--- the removed recall server file's own header documents for the identical reason.
 ---   2. an explicit block.FetchMechanic grant -> DENY
 ---   3. FetchMechanic listed in RequireGrant -> ALLOW only with an active
 ---      feature.FetchMechanic grant

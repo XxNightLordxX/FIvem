@@ -25,7 +25,7 @@
          RequestDrag() now refuse while client/vehicle.lua reports the K9 as
          currently tucked into a vehicle (IsInK9Vehicle()).
     Both guards are a `type(fn) == 'function' and fn()` SOFT DEPENDENCY (this
-    resource's established convention — see client/defense.lua's identical
+    resource's established convention — see the removed handler-down-defense client file's identical
     guard on IsBiteHoldEngaged, and client/agility.lua's/client/movement.lua's
     own `IsInK9Vehicle and IsInK9Vehicle()` guards on that exact global) —
     each direction is therefore tested BOTH with the other file's global

@@ -899,12 +899,6 @@ local function CheckWorldPropScans()
         end
     end
 
-    if Config.Features.HungerThirstSystem == true and type(Config.Wellbeing.Thirst) == 'table' then
-        local matches, modelCount = ScanForConfiguredWorldModels(Config.Wellbeing.Thirst.bowlSources)
-        if matches ~= nil then
-            out[#out + 1] = ('Config.Wellbeing.Thirst.bowlSources (%d configured model name(s)): %d currently-spawned/networked object or vehicle entity match(es) found in THIS ONE SCAN, just now. Same caveats as the Fatigue.restSources line above -- a single scan, and static map scenery is invisible to this scan either way.'):format(modelCount, matches)
-        end
-    end
 
     return out
 end
@@ -946,19 +940,6 @@ local function CheckItemExistence()
 
     if Config.Features.K9Medkit == true and type(Config.K9Medkit) == 'table' then
         CheckOne(Config.K9Medkit.itemName, 'Config.K9Medkit.itemName', 'Config.Features.K9Medkit')
-    end
-    if Config.Features.MoodSystem == true and type(Config.Wellbeing) == 'table' and type(Config.Wellbeing.Mood) == 'table' then
-        CheckOne(Config.Wellbeing.Mood.feedItemName, 'Config.Wellbeing.Mood.feedItemName', 'Config.Features.MoodSystem')
-    end
-    if Config.Features.DistractionSystem == true and type(Config.Wellbeing) == 'table' and type(Config.Wellbeing.Distraction) == 'table' then
-        CheckOne(Config.Wellbeing.Distraction.meatBaitItemName, 'Config.Wellbeing.Distraction.meatBaitItemName', 'Config.Features.DistractionSystem')
-        CheckOne(Config.Wellbeing.Distraction.whistleItemName, 'Config.Wellbeing.Distraction.whistleItemName', 'Config.Features.DistractionSystem')
-    end
-    if Config.Features.HungerThirstSystem == true and type(Config.Wellbeing) == 'table' then
-        local hungerCfg = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger or {}
-        local thirstCfg = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst or {}
-        CheckOne(hungerCfg.feedItemName, 'Config.Wellbeing.Hunger.feedItemName', 'Config.Features.HungerThirstSystem')
-        CheckOne(thirstCfg.drinkItemName, 'Config.Wellbeing.Thirst.drinkItemName', 'Config.Features.HungerThirstSystem')
     end
 
     return findings

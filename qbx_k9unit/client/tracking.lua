@@ -1169,7 +1169,7 @@ end)
 -- millisecond value must never silently mean something dangerous" rule —
 -- server/cooldowns.lua's own header names the sibling risk for a cooldown
 -- threshold; the risk here is a Wait(0)-or-worse poll loop). Resolved ONCE
--- at file load, mirroring client/scenttrail.lua's own PULSE_MAX_INTERVAL_MS
+-- at file load, mirroring the removed scent-trail client file's own PULSE_MAX_INTERVAL_MS
 -- precedent exactly (read before writing this), rather than re-validated on
 -- every poll.
 local SCENT_VISION_POLL_INTERVAL_MS_DEFAULT = 1500
@@ -1301,7 +1301,7 @@ end
 --- @type boolean
 local scentVisionActive = false
 --- In-flight/staleness token — same shape/reasoning as this file's own
---- `trackRequestGeneration` above and client/scenttrail.lua's
+--- `trackRequestGeneration` above and the removed scent-trail client file's
 --- `huntGeneration`: bumped by every toggle so a poll loop started before a
 --- toggle-off can never keep acting past it.
 --- @type number
@@ -1437,7 +1437,7 @@ DrawScentVisionPoints = function()
 end
 
 --- Poll loop — same pcall/generation-staleness shape as this file's own
---- StartTrack() above and client/scenttrail.lua's
+--- StartTrack() above and the removed scent-trail client file's
 --- EnsureHuntPollThreadRunning (read before writing this, per this pass's
 --- own instruction to extend an established pattern rather than invent a
 --- new one). Runs on an INTERVAL, never per-frame — all per-frame work is
@@ -1462,7 +1462,7 @@ local function EnsureScentVisionPollThreadRunning()
             end
 
             -- FAIL-CLOSED GUARD — same reasoning/precedent as StartTrack()
-            -- above and client/scenttrail.lua's own poll loop:
+            -- above and the removed scent-trail client file's own poll loop:
             -- lib.callback.await throws rather than returning nil on a
             -- timeout/rejection. Uncaught here, a throw would abort this
             -- whole CreateThread body, silently killing the poll loop with
@@ -1545,7 +1545,7 @@ end
 ---
 --- TERMINATION IS NEVER GATED — turning the ability OFF always works,
 --- unconditionally, per this resource's standing "no unbounded trap" rule
---- (the same rule StopTracking()/StopScentHunt() above and elsewhere in
+--- (the same rule StopTracking()/the removed scent-hunt stop above and elsewhere in
 --- this resource already document for themselves). Toggling off does NOT
 --- clear `scentVisionSnapshot` — see this section's own header for why
 --- that omission IS the "delay before markers go away" mechanism, not a

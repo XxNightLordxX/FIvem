@@ -78,7 +78,8 @@ t.test('SANITY: the real config.lua actually produced a real, non-empty Config.F
     local env = loadRealConfig()
     local count = 0
     for _ in pairs(env.Config.FeaturesBeforeGrouping) do count = count + 1 end
-    t.isTrue(count >= 56, ('expected at least 56 keys in Config.FeaturesBeforeGrouping, saw %d'):format(count))
+    -- FLOOR LOWERED 2026-09-02: twelve features were removed at the owner's request (61 -> 49 Config.Features keys), so the old floor could never be met again. It stays well above zero because its job is to catch an extraction pattern going stale and silently checking nothing -- not to pin the catalogue size.
+    t.isTrue(count >= 45, ('expected at least 45 keys in Config.FeaturesBeforeGrouping, saw %d'):format(count))
 end)
 
 t.test('NO-OP ON DEFAULTS: every single real Config.Features key resolves, under the REAL shipped Config.FeatureGroups, to EXACTLY its own pristine pre-grouping value -- the whole restructure is provably a no-op on defaults', function()
@@ -220,7 +221,7 @@ t.test('CORRECTION ON RECORD: BoneSweepDevTool ships true (gated instead by a se
     t.isTrue(env.Config.Features.BoneSweepDevTool)
 end)
 
-t.test('REMOVED: ScentTrailHunt is genuinely absent from Config.Features (owner-approved removal, not merely folded) -- reads nil, which is what makes server/scenttrail.lua\'s own untouched top-level gate correctly inert', function()
+t.test('REMOVED: ScentTrailHunt is genuinely absent from Config.Features (owner-approved removal, not merely folded) -- reads nil, which is what makes the removed scent-trail server file\'s own untouched top-level gate correctly inert', function()
     local env = loadRealConfig()
     t.isNil(env.Config.Features.ScentTrailHunt)
     t.isNil(env.Config.FeaturesBeforeGrouping.ScentTrailHunt)
@@ -245,12 +246,6 @@ t.test('DRIFT GUARD: every real Config.Features key is accounted for by exactly 
         end
     end
     t.equals(#unaccounted, 0, 'unaccounted-for key(s): ' .. table.concat(unaccounted, ', '))
-end)
-
-t.test('DRIFT GUARD, THE OTHER DIRECTION: HungerThirstSystem specifically -- the real key that landed mid-session and proved this guard works -- is present and correctly homed under Wellbeing', function()
-    local env = loadRealConfig()
-    t.isNotNil(env.Config.FeaturesBeforeGrouping.HungerThirstSystem, 'HungerThirstSystem must exist in the real, shipped config.lua for this test to mean anything')
-    t.equals(env.GetFeatureGroupFamily('HungerThirstSystem'), 'Wellbeing')
 end)
 
 -- ========================================================================
@@ -308,8 +303,11 @@ t.test('PARENT OFF FORCES CHILDREN OFF: Config.FeatureGroups.Combat.enabled = fa
     t.isFalse(env.Config.Features.NonLethalTakedown)
     t.isFalse(env.Config.Features.PropDragging)
     t.isFalse(env.Config.Features.PursuitSprint)
-    t.isFalse(env.Config.Features.HandlerDownDefense)
-    t.isFalse(env.Config.Features.DangerWarn) -- already false by default -- must STAY false, not somehow flip
+    -- HandlerDownDefense and DangerWarn were Combat children until
+    -- 2026-09-02, when both were removed at the owner's request. The four
+    -- above are the family's full membership now, and the property this
+    -- test pins -- a parent's false beats a child's explicit true -- is
+    -- asserted across every one of them.
 end)
 
 t.test('PARENT OFF FORCES CHILDREN OFF prints exactly which children it forced, naming the family -- the actionable warning this whole mechanism exists to surface', function()
@@ -444,18 +442,6 @@ t.test('BASE COLLAPSE: Detection.enabled directly IS the resolved ScentTracking 
     env.ResolveFeatureGroups()
     t.isFalse(env.Config.Features.ScentTracking)
     t.isFalse(env.Config.Features.BloodTracking, 'a Detection child with no override in Config.FeatureGroups must also be forced off by the parent')
-end)
-
-t.test('STANDALONE FLAGS ARE NEVER GATED BY ANY FAMILY: Recall stays true even while Combat (its former display grouping\'s sibling, and the very capability it is the escape hatch for) is entirely disabled', function()
-    local env = loadRealConfig()
-    env.Config.FeatureGroups.Combat.enabled = false
-    env.Config.FeatureGroups.Movement.enabled = false -- Recall's own former, wrong, display grouping
-
-    env.ResolveFeatureGroups()
-
-    t.isTrue(env.Config.Features.Recall, 'Recall must never be forced off by ANY family switch -- see FEATURE_STRUCTURE_SPEC.md §3.2')
-    t.isFalse(env.Config.Features.BiteAndHold) -- sanity: Combat really is off
-    t.isFalse(env.Config.Features.LeashMechanics) -- sanity: Movement really is off
 end)
 
 t.test('STANDALONE FLAGS: an explicit standalone override is applied directly, with no parent to consult at all', function()

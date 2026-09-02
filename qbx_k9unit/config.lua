@@ -242,7 +242,7 @@ Config.Features = {
     -- redundant... remove it" -- see FEATURE_STRUCTURE_SPEC.md §2.2.1 and
     -- OVERHAUL_PLAN.md's "Stage 7" for the full reasoning and the
     -- dependency check that cleared it). Was `ScentTrailHunt`, gating
-    -- client/scenttrail.lua + server/scenttrail.lua ("follow your nose" --
+    -- the removed scent-trail client file + the removed scent-trail server file ("follow your nose" --
     -- PROJECT_HISTORY.md §2): the K9 sets off after a hidden, made-up spot,
     -- guided only by a growl that pulses faster as they get warmer.
     -- Judged genuinely redundant, not merely thin: it duplicates
@@ -251,7 +251,7 @@ Config.Features = {
     -- destination instead of a real one, feeds no other system (no XP, no
     -- search/contraband/rescue tie-in), and owns no database table (this
     -- was a live, in-memory session only -- nothing was left behind to
-    -- preserve). Neither client/scenttrail.lua nor server/scenttrail.lua
+    -- preserve). Neither the removed scent-trail client file nor the removed scent-trail server file
     -- was touched or deleted -- both files are untouched, inert, and fully
     -- intact; they already no-op correctly the instant this key reads
     -- `nil` (their own top-level `if not Config.Features.ScentTrailHunt
@@ -301,8 +301,8 @@ Config.Features = {
     -- unblocks) are each independently gated by their OWN flags above.
     -- At the time this paragraph was written both of those remained
     -- unimplemented regardless of this flag's value; that is no longer
-    -- true -- HandlerDownDefense (server/defense.lua) and Recall
-    -- (server/recall.lua) are both implemented, and both flags ship `true`
+    -- true -- HandlerDownDefense (the removed handler-down-defense server file) and Recall
+    -- (the removed recall server file) are both implemented, and both flags ship `true`
     -- above, same as this one.
     -- DEFAULT ONCE DIVERGED FROM DEVELOPER_REFERENCE.md §12.0 item 7 point 5's
     -- OWN "recommended default true" text -- that was deliberate at the
@@ -1936,12 +1936,12 @@ Config.K9Specializations = {
 -- TrackableLog.scent, fed by the ox_inventory swapItems hook) -- is
 -- DELIBERATELY ABSENT from this table and can NEVER be listed here. It is
 -- the BASE capability every K9-access handler already has today, not a
--- narcotics-detection mechanic, and it is what client/sarcalls.lua's
--- Search & Rescue calls and client/scenttrail.lua's Scent Trail Hunt
+-- narcotics-detection mechanic, and it is what the removed SAR-calls client file's
+-- Search & Rescue calls and the removed scent-trail client file's Scent Trail Hunt
 -- narratively share the word "scent" with (though, confirmed by reading
 -- both files directly, neither one actually calls into this file's
 -- findTrackableSource/TrackableLog.scent at all -- they are fully separate
--- minigames with their own server/sarcalls.lua and server/scenttrail.lua
+-- minigames with their own the removed SAR-calls server file and the removed scent-trail server file
 -- session state). Listing 'scent' under any specialization here would gate
 -- a base capability behind a narrow one for no reason connected to what
 -- 'scent' actually is -- do not "fix" this by adding it back.
@@ -2883,7 +2883,7 @@ Config.XP = {
         -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
         -- this one is wired too.
         takedownSuccess       = 30,
-        -- server/sarcalls.lua, on a genuine find only -- never on a timeout
+        -- the removed SAR-calls server file, on a genuine find only -- never on a timeout
         -- or an abandon. THE ARITHMETIC: the 10-minute per-person cooldown
         -- on REQUESTING a call caps this at six completions an hour, so
         -- 6 x 30 = 180 XP/hr is the most this feature can add, well under
@@ -3693,21 +3693,21 @@ Config.Vision = {
 --       * PropDragging shipped -- see Config.Combat.PropDragging below,
 --         plus client/combat.lua and server/combat.lua.
 --       * HandlerDownDefense shipped -- see Config.Combat.HandlerDownDefense
---         below, plus server/defense.lua and client/defense.lua. Its stated
+--         below, plus the removed handler-down-defense server file and the removed handler-down-defense client file. Its stated
 --         blocker (DEVELOPER_REFERENCE.md §12.0 item 7, "who is this K9's handler")
 --         was resolved by the HandlerPartnership registry landing.
 --         NOTE, because the spec was WRONG about this and a future editor
 --         will otherwise re-derive it: §12.3 assumed HandlerDownDefense
 --         could reuse an attacker identity from `relayDamageEvent`. That
 --         event is deliberately PAYLOAD-LESS -- there is no attacker field
---         to reuse. server/defense.lua therefore carries its own, explicitly
+--         to reuse. the removed handler-down-defense server file therefore carries its own, explicitly
 --         low-trust hint channel, and no server-authoritative consequence
 --         depends on that hint; the K9's confirmation is re-validated from
 --         scratch by ValidateCombatRequest.
 --     Both features shipped `false` at that point, per this resource's
 --     convention that a newly-landed mechanic stays off until its own
 --     go-live review. That review has SINCE happened for both:
---     server/defense.lua's own header documents HandlerDownDefense being
+--     the removed handler-down-defense server file's own header documents HandlerDownDefense being
 --     flipped to `true` by the config owner after its go-live review, and
 --     server/combat.lua's red-team trust-boundary pass covers PropDragging
 --     the same way it covers BiteAndHold/NonLethalTakedown above. Both
@@ -3908,8 +3908,8 @@ Config.Combat = {
         toggleKeybind = 'Y',
     },
 
-    -- DEVELOPER_REFERENCE.md §12.5.3, implemented in server/defense.lua +
-    -- client/defense.lua. Per §12.0 item 2 this is a UI/auto-targeting
+    -- DEVELOPER_REFERENCE.md §12.5.3, implemented in the removed handler-down-defense server file +
+    -- the removed handler-down-defense client file. Per §12.0 item 2 this is a UI/auto-targeting
     -- CONVENIENCE, never an AI takeover — the K9 never acts on its own; a
     -- prompt is surfaced faster and the player still confirms.
     --
@@ -3933,7 +3933,7 @@ Config.Combat = {
         triggerRadius            = 15.0,  -- how close the partner K9 must be to be prompted
         hostileLookbackSeconds   = 10,    -- how far back an attacker hint stays relevant
         pollIntervalMs           = 1000,
-        retriggerCooldownMs      = 30000, -- anti-spam; stamped at send, not at retry (see server/defense.lua)
+        retriggerCooldownMs      = 30000, -- anti-spam; stamped at send, not at retry (see the removed handler-down-defense server file)
         promptTtlMs              = 10000, -- client-local clock, see that file's CLOCK-DOMAIN note
         attackerReportCooldownMs = 500,
         confirmKey               = 'G',   -- always rebindable client-side
@@ -4067,8 +4067,8 @@ Config.Combat = {
 -- wired to it. That is no longer true, and this note is kept only so the
 -- progression is legible: both mechanics DEVELOPER_REFERENCE.md 12.0 item 7 named as
 -- blocked on this registry existing are now built and consuming it --
--- HandlerDownDefense's trigger (server/defense.lua) and the Recall actor
--- (server/recall.lua, Config.Recall below). Both call
+-- HandlerDownDefense's trigger (the removed handler-down-defense server file) and the Recall actor
+-- (the removed recall server file, Config.Recall below). Both call
 -- `GetActivePartnerCitizenId`/`IsActivePartnerOf` directly rather than
 -- re-deriving their own partner lookup, per this registry's accessor
 -- contract (see server/partnership.lua's header). A third consumer,

@@ -38,7 +38,7 @@
     client/movement.lua's `qbx_k9unit:toggleCamera`,
     client/vision.lua's `qbx_k9unit:toggleCameraFeed`/
     `qbx_k9unit:toggleThermalVision`/`qbx_k9unit:toggleNightVision`, and
-    client/defense.lua's `qbx_k9unit:confirmHandlerDownDefense`) onto this
+    the removed handler-down-defense client file's `qbx_k9unit:confirmHandlerDownDefense`) onto this
     resource's own `qbx_k9unit:` namespace prefix instead -- a `:` character,
     and for four of the seven, camelCase letters too, BOTH outside the old
     character class. The old pattern silently skipped every one of them on
@@ -190,13 +190,10 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = 'fetch',
     k9dropfetchball = 'fetch',
     k9recallfetchball = 'fetch',
-    -- family #4: training (3 -> 1, 'k9train') -- client/training.lua.
+    -- family #4: training (3 -> 1, 'k9train') -- the removed training client file.
     -- Same interim shape as fetch's three -- real COMMAND_REFERENCE
     -- entries exist today (confirmed by reading html/tablet.js), not yet
     -- removed.
-    k9training = 'training',
-    k9trainsearch = 'training',
-    k9trainbite = 'training',
     -- family #5: kennel (ADDITIVE, 'k9kennel') -- client/kennel.lua +
     -- client/keybinds.lua. k9deploykennel/k9exitkennel keep their own
     -- registration forever (see tests/commandsuggestions_spec.lua's own

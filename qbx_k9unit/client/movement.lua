@@ -2166,8 +2166,8 @@ local K9_DOOR_SCRATCH_DEFAULT_SCENARIO = 'WORLD_DOG_BARKING_SHEPHERD' -- fallbac
 -- 'qbx_k9unit_sounds' ships with this resource, or ever has), but that
 -- comment stopped being the whole story once client/audio.lua's real NUI
 -- audio bridge (PlayK9Sound) shipped: client/main.lua's playBark handler,
--- client/search.lua's contraband-alert receiver, client/scenttrail.lua,
--- client/sarcalls.lua and client/findalert.lua ALL dual-path every one of
+-- client/search.lua's contraband-alert receiver, the removed scent-trail client file,
+-- the removed SAR-calls client file and client/findalert.lua ALL dual-path every one of
 -- their sound cues through PlaySoundOnNetworkEntity, which tries the dead
 -- native call AND client/audio.lua's PlayK9Sound (the one path that can
 -- actually produce sound today, once an operator drops a matching .ogg into
@@ -2242,7 +2242,7 @@ local function ScratchAtDoor(entity)
     -- Routed through the shared PlaySoundOnNetworkEntity (client/main.lua)
     -- rather than a direct PlaySoundFromEntity call — see
     -- DOOR_SCRATCH_SOUND_NAME's own comment above for why. Own netId, same
-    -- pattern as client/sarcalls.lua's PlayOwnPedSound/client/scenttrail.lua's
+    -- pattern as the removed SAR-calls client file's PlayOwnPedSound/the removed scent-trail client file's
     -- PlayPulse (both play a one-shot cue on THIS client's own ped).
     PlaySoundOnNetworkEntity(NetworkGetNetworkIdFromEntity(ped), DOOR_SCRATCH_SOUND_NAME)
 

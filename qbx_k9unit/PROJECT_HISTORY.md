@@ -285,7 +285,7 @@ later removed (owner-approved, judged redundant with Detection's own
 "walk toward a fading signal" interaction shape — see
 `FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and `config.lua`'s own
 `Config.Features` comment for the full reasoning and how to bring it back).
-`client/scenttrail.lua`/`server/scenttrail.lua` are untouched and still
+`the removed scent-trail client file`/`the removed scent-trail server file` are untouched and still
 correctly go inert the instant that flag reads `nil` — the other four items
 below are unaffected and still ship on by default.
 

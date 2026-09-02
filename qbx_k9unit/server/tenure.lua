@@ -425,7 +425,7 @@
 -- zero code here needs to change for that), and WORK-based accrual
 -- (searches/finds/pursuits/treats together, not just wall-clock time) --
 -- both require hook points in server/search.lua/server/combat.lua/
--- server/sarcalls.lua, none of which this file touches. Full proposals for
+-- the removed SAR-calls server file, none of which this file touches. Full proposals for
 -- both are in the closing comment block, for whoever picks this up next.
 -- ======================================================================
 
@@ -1134,11 +1134,11 @@ local function TickPartnershipTenure()
     end
 end
 
--- CHECKINTERVALMS VALIDATION (mirrors server/defense.lua's own identical
+-- CHECKINTERVALMS VALIDATION (mirrors the removed handler-down-defense server file's own identical
 -- PollIntervalMs finding for the identical failure shape): a raw,
 -- unchecked Config.Partnership.TenureBonus.checkIntervalMs value used to
 -- feed a bare Wait() call below on EVERY loop iteration (this file
--- re-reads tenureCfg fresh every pass, unlike server/defense.lua's own
+-- re-reads tenureCfg fresh every pass, unlike the removed handler-down-defense server file's own
 -- PollIntervalMs, which is captured once at file-load time and asserted
 -- there before its own thread is ever created). The OLD type check alone
 -- (`type(...) == 'number'`) did NOT reject 0, a negative number, or NaN --
@@ -1147,11 +1147,11 @@ end
 -- and silently kills this shared thread forever, disabling every future
 -- tenure-milestone grant for the rest of this resource's uptime with
 -- nothing more than a generic Lua traceback to explain why -- the exact
--- same failure mode server/defense.lua's own PollIntervalMs assert exists
+-- same failure mode the removed handler-down-defense server file's own PollIntervalMs assert exists
 -- to catch. Unlike that file's hard resource-start assert (appropriate
 -- there since PollIntervalMs is captured once, before its thread is ever
 -- created), this file re-reads the value every iteration, so a soft
--- fallback + warning (mirroring server/recall.lua's own
+-- fallback + warning (mirroring the removed recall server file's own
 -- RequestCooldownMs = 0 footgun fix) is the fix that fits this file's own
 -- per-iteration re-read design without changing it. A MISSING config value
 -- (nil -- the "TenureBonus schema/config not landed on this server yet"
@@ -1374,7 +1374,7 @@ end
        just wall-clock time -- the owner's own "reflect what the pair
        actually did" ask). NOT built here: every candidate event
        (server/search.lua's contraband-find success, server/combat.lua's
-       bite-hold/takedown success, server/sarcalls.lua's call-completed
+       bite-hold/takedown success, the removed SAR-calls server file's call-completed
        success) lives in a file not touched here. Proposed hook shape,
        sized to need exactly ONE new line per site (mirrors how those same
        three files already call `AwardXP` from their own success paths,

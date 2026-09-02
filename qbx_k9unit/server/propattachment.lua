@@ -382,7 +382,7 @@ if Config.Features.PropAttachments then
 --- branch (already active -> take it off), which runs BEFORE this check and
 --- must stay unconditional: a handler taking their own vest off is this
 --- feature's "no unbounded trap" exit path, the identical posture
---- server/recall.lua's header documents for detaching a leash/dropping a
+--- the removed recall server file's header documents for detaching a leash/dropping a
 --- ball/exiting a kennel/ending training.
 ---   2. an explicit block.PropAttachments grant -> DENY
 ---   3. PropAttachments listed in RequireGrant -> ALLOW only with an active
@@ -432,9 +432,9 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     -- conditioned on anything"), server/kennel.lua's requestExitKennel/
     -- requestPutDownKennel ("NEVER gated on Config.Features.DeployableKennel
     -- or any cooldown"), server/main.lua's detachLeash,
-    -- server/training.lua's setTrainingMode(false) ("OFF IS
-    -- UNCONDITIONAL"), server/sarcalls.lua's abandonSarCall,
-    -- server/scentlineup.lua's k9lineupcancel, server/scenttrail.lua's
+    -- the removed training server file's setTrainingMode(false) ("OFF IS
+    -- UNCONDITIONAL"), the removed SAR-calls server file's abandonSarCall,
+    -- the removed scent-lineup server file's k9lineupcancel, the removed scent-trail server file's
     -- stopScentHunt, and server/combat.lua's releaseBiteHold/
     -- releaseTakedown/releaseDrag.
     -- BUG FIX: the Config.Features.PropAttachments check used to run FIRST,

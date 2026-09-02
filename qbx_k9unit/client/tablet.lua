@@ -1408,7 +1408,7 @@ local TABLET_STRING_KEYS = {
     -- Integration-sweep fix (this pass): seven REAL, working keybind
     -- commands (RegisterCommand + RegisterKeyMapping, confirmed in
     -- client/agility.lua, client/pursuitsprint.lua, client/movement.lua,
-    -- client/vision.lua, client/defense.lua) that had ZERO
+    -- client/vision.lua, the removed handler-down-defense client file) that had ZERO
     -- COMMAND_REFERENCE entry in html/tablet.js before this pass -- see
     -- tests/commandreferenceregistry_spec.lua's own header "WIDENED, THIS
     -- PASS" for why the drift guard never caught this, and
@@ -1600,7 +1600,7 @@ end
 --- DISCIPLINE and, for the two arguments themselves, "CROSS-RESOURCE FOCUS
 --- INTEROP" above. No access/state check beyond "is it open" -- a
 --- close/termination path must never be gated (this codebase's "no
---- unbounded trap" rule; see client/recall.lua's header) -- that rule is
+--- unbounded trap" rule; see the removed recall client file's header) -- that rule is
 --- unchanged and unconditional; only WHICH two booleans this one call
 --- passes depends on `tabletHadForeignFocusOnOpen`, captured once per open
 --- by OpenTablet() below. `true` -- another resource already held focus
@@ -2269,7 +2269,7 @@ local FEATURE_TRIGGERS = {
         return true
     end,
     -- NOT YET in client/radial.lua (client/wellbeing.lua's own header:
-    -- "a future radial menu entry should call this"). RequestK9CalmDown()
+    -- "a future radial menu entry should call this"). the removed calm-down request
     -- is FULLY self-gating internally -- call straight through.
     FearStressSystem = function()
         if type(RequestK9CalmDown) == 'function' then RequestK9CalmDown() end

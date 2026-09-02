@@ -606,26 +606,25 @@ end)
 -- ======================================================================
 
 t.test('B2: an enabled feature whose configured item name does not exist in ox_inventory is a FINDING', function()
+    -- REPOINTED 2026-09-02: this used HungerThirstSystem's two item names
+    -- until that feature was removed. K9Medkit is now the only feature whose
+    -- configured item name debugdump validates, so it is what B2 has to be
+    -- tested against -- the CHECK is unchanged, only the feature it runs on.
     local f = newFixture()
-    f.Config.Features.HungerThirstSystem = true
-    f.Config.Wellbeing.Hunger = { feedItemName = 'k9_food' }
-    f.Config.Wellbeing.Thirst = { drinkItemName = 'k9_water' }
-    f.setItemExists('k9_food', true)
-    f.setItemExists('k9_water', false)
+    f.Config.Features.K9Medkit = true
+    f.Config.K9Medkit = { itemName = 'k9_medkit' }
+    f.setItemExists('k9_medkit', false)
     f.setPlayer(7, 'ABC123')
     local content = runCommandAndGetLastDump(f, 7)
     t.contains(content, '[B2]')
-    t.contains(content, 'k9_water')
-    t.notContains(content, 'k9_food" ') -- crude check that k9_food (the OK one) was not flagged
+    t.contains(content, 'k9_medkit')
 end)
 
 t.test('B2: every configured item existing produces no findings', function()
     local f = newFixture()
-    f.Config.Features.HungerThirstSystem = true
-    f.Config.Wellbeing.Hunger = { feedItemName = 'k9_food' }
-    f.Config.Wellbeing.Thirst = { drinkItemName = 'k9_water' }
-    f.setItemExists('k9_food', true)
-    f.setItemExists('k9_water', true)
+    f.Config.Features.K9Medkit = true
+    f.Config.K9Medkit = { itemName = 'k9_medkit' }
+    f.setItemExists('k9_medkit', true)
     f.setPlayer(7, 'ABC123')
     local content = runCommandAndGetLastDump(f, 7)
     t.notContains(content, '[B2]')

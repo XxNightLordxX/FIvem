@@ -660,7 +660,7 @@ end
 --
 -- Soft dependency, `type(...) == 'function'` runtime existence guard — this
 -- resource's established convention for an optional cross-file read (see
--- client/defense.lua's identical guard on THIS file's own
+-- the removed handler-down-defense client file's identical guard on THIS file's own
 -- IsBiteHoldEngaged, and client/agility.lua's/client/movement.lua's own
 -- `IsInK9Vehicle and IsInK9Vehicle()` guards on this exact global). Not
 -- purely a load-order concern (client/vehicle.lua loads before this file in

@@ -78,7 +78,7 @@
     as this task required.
 
     XP: ZERO, by construction, same decision and same reasoning
-    server/training.lua's own "THE XP DECISION" header already applies to a
+    the removed training server file's own "THE XP DECISION" header already applies to a
     much LOWER-friction action than this one. This file contains NO call to
     AwardXP or AwardXPDirect, and reads no field of Config.XP -- verifiable
     by grep. Arithmetic, stated explicitly per this task's own demand: even
@@ -327,7 +327,7 @@ local function ResolveConfiguredPositiveNumber(value, fallback, keyName, require
 end
 
 -- speedMultiplier and requestRangeMeters have no relationship to any other
--- field here (unlike server/sarcalls.lua's radius/distance groups) -- each
+-- field here (unlike the removed SAR-calls server file's radius/distance groups) -- each
 -- is resolved independently. Resolved values are written BACK into
 -- Config.PursuitSprint so every later read in this file (requestRangeMeters
 -- is re-read directly off Config, not captured to a local, in the request

@@ -70,7 +70,7 @@ rule.
 `server/runtimecontrol.lua`, and the tests. The ~200 call sites that read a
 flat `Config.Features.X` key today live in files this task must not touch
 (several — `server/tracking.lua`, `client/tracking.lua`,
-`server/scentlineup.lua`, `client/scenttrail.lua`, `client/radial.lua`,
+`the removed scent-lineup server file`, `the removed scent-trail client file`, `client/radial.lua`,
 `server/tablet.lua`, `client/tablet.lua` — are explicitly off-limits and/or
 hot right now). That means **true behavioural retirement — deleting the
 `if Config.Features.X` check from the code that implements it — is out of
@@ -117,7 +117,7 @@ key itself keeps existing internally, unchanged, because the ~200 call
 sites still read it. This is a real, meaningful retirement (one less thing
 in the owner's head) — it is just not a code deletion. Anywhere below that
 says "retire", this is what it means. Full behavioural folding (e.g.
-actually merging `client/scenttrail.lua`'s hunt logic into the tracking
+actually merging `the removed scent-trail client file`'s hunt logic into the tracking
 query) is named explicitly as separate, larger, future work outside this
 file scope.
 
@@ -137,7 +137,7 @@ places below):**
   all — see that file's own comment at the old key's former position for
   the full record and for exactly how to restore it (as-is, or as a
   Training-family drill) if a future owner wants it back. Neither
-  `client/scenttrail.lua` nor `server/scenttrail.lua` was deleted; both
+  `the removed scent-trail client file` nor `the removed scent-trail server file` was deleted; both
   are untouched and simply go inert with the key absent, same as any
   other feature file reading a missing flag as off.
 - **The Sensory/Vision recommendation below (`NightVision`/`ThermalVision`
@@ -178,8 +178,8 @@ reasoning on the other two.
 >
 > - **`ScentTrailHunt`: removed.** The owner signed off and the removal
 >   shipped. `Config.Features.ScentTrailHunt` no longer exists at all, so
->   the key reads `nil` and `client/scenttrail.lua` /
->   `server/scenttrail.lua` return at the top — both files are kept intact
+>   the key reads `nil` and `the removed scent-trail client file` /
+>   `the removed scent-trail server file` return at the top — both files are kept intact
 >   and inert on purpose, so restoring it is a one-line config change.
 >   See `Config.Features`' own "REMOVED" block, `README.md`, and
 >   `tests/featureflagexistence_spec.lua`, which allowlists this key as
@@ -415,7 +415,7 @@ family" does not match the display split. **Correction: `Detection` pulls
 
 ### 3.2 `movement` holds `Recall`, which is Combat's escape hatch
 
-`Recall` (`server/recall.lua`) ends whatever active effect a partnered K9
+`Recall` (`the removed recall server file`) ends whatever active effect a partnered K9
 holds — bite, takedown, *or* drag — "generalised beyond §12.5.1's bite-only
 text... a strictly worse unbounded-trap posture" per its own header. It
 lives in `movement` for display purposes only. If `Movement.enabled` forced
@@ -820,7 +820,7 @@ New/updated in `tests/` (Phase 2):
 ## 14. Explicitly out of scope for Phase 2, named so nobody assumes it happened
 
 - Actual behavioural folding of `ScentTrailHunt` into the tracking query
-  (needs `client/scenttrail.lua`, off-limits).
+  (needs `the removed scent-trail client file`, off-limits).
 - Folding `DangerWarn` into the bark radial (needs `client/radial.lua`,
   off-limits/hot).
 - The shared `ox_target` registration helper the coordinator flagged as a
@@ -851,7 +851,7 @@ New/updated in `tests/` (Phase 2):
    groups.
 3. Confirm the §1 scope limit (owner-facing retirement only, not code
    deletion) is acceptable for `ScentTrailHunt`, given the alternative is
-   waiting for `client/scenttrail.lua` to come off the do-not-touch list.
+   waiting for `the removed scent-trail client file` to come off the do-not-touch list.
 4. Confirm §11's restart-only scope limit for `family.enabled` is
    acceptable, given the alternative is a `server/tablet.lua`/
    `html/tablet.js` change this task cannot make.

@@ -179,9 +179,9 @@
                     handler re-checks the flag inside itself afterward.
       rawtoplevel -- FetchMechanic (server/fetch.lua: "the entire file is
                     inert... while the flag is off", its own words),
-                    HandlerDownDefense (server/defense.lua: "this file must
+                    HandlerDownDefense (the removed handler-down-defense server file: "this file must
                     never flip it", config.lua's own words, referring to
-                    exactly this file-top gate), Recall (server/recall.lua
+                    exactly this file-top gate), Recall (the removed recall server file
                     -- the one termination path in this resource, see "A
                     NOTE ON Recall" below), PropAttachments
                     (server/propattachment.lua wraps its entire back half
@@ -416,7 +416,7 @@
       dependencies; this file may load before either.
     - THIS FILE MUST load before every `onstart`/`rawtoplevel`-tier file
       named above (server/admin.lua, server/bonetool.lua,
-      server/fetch.lua, server/defense.lua, server/recall.lua,
+      server/fetch.lua, the removed handler-down-defense server file, the removed recall server file,
       server/propattachment.lua, server/permissions.lua, and in practice
       every other server/*.lua feature file) for the "persisted override
       survives a restart" property described above to hold for the
@@ -619,22 +619,22 @@ local FEATURE_TIERS = {
     K9Leaderboard          = { tier = 'rawtoplevel', note = 'server/leaderboard.lua opens with "if not (Config.Features and Config.Features.K9Leaderboard == true) then return end" before its own RegisterCommand(\'k9stats\', ...) -- the command is never registered at all when the flag is off at load time.' },
     PursuitSprint          = { tier = 'rawtoplevel', note = 'server/pursuitsprint.lua opens with "if not Config.Features.PursuitSprint then return end" before its own config asserts and RegisterNetEvent(\'qbx_k9unit:server:requestPursuitSprint\', ...) -- the net event is never registered at all when the flag is off at load time.' },
     -- ADDED 2026-08-26 (coder-backend, DangerWarn handover items 1-4):
-    -- confirmed by direct read of server/dangerwarn.lua's own first
+    -- confirmed by direct read of the removed danger-warn server file's own first
     -- executable line, same verification standard as the six-entry batch
     -- immediately above -- same shape as HandlerDownDefense above it,
     -- carrying its own note (unlike that entry, which predates this
     -- file's "quote the exact opening line" convention) so a future reader
-    -- does not have to go re-read server/dangerwarn.lua to confirm this
+    -- does not have to go re-read the removed danger-warn server file to confirm this
     -- classification themselves.
     -- ADDED 2026-08-27, alongside the Config.Features key itself, which had
     -- never existed (see that key's own comment in config.lua for why a
     -- fully-built, keybound, tested feature shipped with no switch anywhere).
     -- CLASSIFIED 'live' BY READING BOTH FILES, not by trusting
-    -- server/announce.lua's own header claim: neither server/announce.lua nor
-    -- client/announce.lua has any file-level early return on the flag, and
+    -- the removed apprehension-announcement server file's own header claim: neither the removed apprehension-announcement server file nor
+    -- the removed apprehension-announcement client file has any file-level early return on the flag, and
     -- RegisterCommand('k9announce'), RegisterKeyMapping('k9announce', ... 'M')
     -- and both net events register UNCONDITIONALLY. Every read of the flag
-    -- sits inside a handler body -- IsApprehensionWarned() and the
+    -- sits inside a handler body -- the removed apprehension-warned check and the
     -- announceApprehensionWarning handler's own opening line -- so a tablet
     -- flip takes effect on the very next bite/takedown validation in either
     -- direction, no restart, exactly like BiteAndHold/NonLethalTakedown whose
@@ -906,7 +906,7 @@ end
 --     see e.g. EndActiveEffectForHolder's own doc comment in that same
 --     file), NEVER trusted to exist (runtime-existence-guarded +
 --     pcall-wrapped exactly like every other soft cross-file dependency in
---     this resource -- see server/recall.lua's own EndActiveEffectForHolder
+--     this resource -- see the removed recall server file's own EndActiveEffectForHolder
 --     guard for the identical shape) so this file's own test sandbox
 --     (tests/runtimecontrol_spec.lua, which loads ONLY
 --     server/cooldowns.lua + server/runtimecontrol.lua by that spec's own
@@ -920,7 +920,7 @@ end
 --     this task's own brief named ("a training drill running"). Checked
 --     against the real code before deciding, not taken from the brief:
 --     TrainingMode is `tier = 'rawtoplevel'` (see FEATURE_TIERS' own entry
---     above) -- server/training.lua's ENTIRE file is gated by a single
+--     above) -- the removed training server file's ENTIRE file is gated by a single
 --     `if not Config.Features.TrainingMode then return end` at its own
 --     top level, executed once, when that file itself loads. If it was
 --     true at boot (the ordinary case), every one of that file's handlers
@@ -1172,7 +1172,7 @@ local TUNABLE_REGISTRY = {
     -- The four ScentTrailHunt.* tunables that used to live here were
     -- removed alongside the feature's own FEATURE_TIERS entry above and
     -- Config.Features.ScentTrailHunt itself (config.lua's own comment
-    -- there has the full writeup) -- server/scenttrail.lua's own top-level
+    -- there has the full writeup) -- the removed scent-trail server file's own top-level
     -- flag check now returns before Config.ScentTrailHunt's values (still
     -- intact, untouched, see that table's own comment in config.lua) are
     -- ever read, so a live tuning slider for them would have controlled
@@ -1245,13 +1245,13 @@ local TUNABLE_REGISTRY = {
     ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = ResolveMaxSpeedScentMultiplier(), integer = false },
     ['PursuitSprint.durationMs']                = { path = { 'PursuitSprint', 'durationMs' },                     min = 500,   max = 30000,     integer = true },
 
-    -- server/sarcalls.lua (Config.Features.SARCalls, rawtoplevel).
+    -- the removed SAR-calls server file (Config.Features.SARCalls, rawtoplevel).
     -- `local tuning = Config.SARCalls` is a live reference; RollSarTarget/
     -- TierForDistance/the tick loop all read straight off `tuning` every
     -- call. startCooldownMs is EXCLUDED (NewCooldown constructor default).
     -- revealDurationMs/missingPersonPedModel/lostPropertyPropModel are
     -- EXCLUDED -- this file's own CONFIG-SAFETY GUARD comment states outright
-    -- those three "are read and validated by client/sarcalls.lua alone --
+    -- those three "are read and validated by the removed SAR-calls client file alone --
     -- this file never touches them."
 
     -- server/combat.lua (Config.Features.BiteAndHold / NonLethalTakedown /
@@ -1294,7 +1294,7 @@ local TUNABLE_REGISTRY = {
     ['Combat.PropDragging.maxDragDistance']     = { path = { 'Combat', 'PropDragging', 'maxDragDistance' },      min = 5.0,   max = 200.0,     integer = false },
     ['Combat.PropDragging.maxDragDurationMs']   = { path = { 'Combat', 'PropDragging', 'maxDragDurationMs' },    min = 5000,  max = 60000,     integer = true },
 
-    -- server/defense.lua (Config.Features.HandlerDownDefense, live).
+    -- the removed handler-down-defense server file (Config.Features.HandlerDownDefense, live).
     -- handlerHealthThreshold/triggerRadius/hostileLookbackSeconds are each
     -- read directly off Config.Combat.HandlerDownDefense inline, inside
     -- IsHandlerDown/TryNotifyPartnerK9, called fresh every maintenance-tick
@@ -1511,7 +1511,7 @@ local TUNABLE_REGISTRY = {
     -- ALL EXCLUDED on purpose -- these are the exact values this file's own
     -- header documents as the live, disclosed, FORGEABLE lever behind a
     -- real combat-lockout interaction (a forged relayWeaponFire chain
-    -- driving IsHesitating(), which server/combat.lua's
+    -- driving the removed hesitation check, which server/combat.lua's
     -- ValidateCombatRequest checks): loosening any one of them shifts the
     -- balance of an already-tricky, already-documented security tradeoff,
     -- which this pass is not confident stating a universally safe range
@@ -1588,31 +1588,10 @@ local TUNABLE_REGISTRY = {
     -- edit reaches an already-connected K9 within one
     -- Config.Wellbeing.tickIntervalMs, same as every sibling entry below.
     ['Wellbeing.Fatigue.nativeStaminaRestorePercent'] = { path = { 'Wellbeing', 'Fatigue', 'nativeStaminaRestorePercent' }, min = 0.0, max = 1.0, integer = false },
-    ['Wellbeing.Mood.damageDecayAmount']        = { path = { 'Wellbeing', 'Mood', 'damageDecayAmount' },         min = 1,     max = 100,       integer = true },
-    ['Wellbeing.Mood.petCooldownMs']            = { path = { 'Wellbeing', 'Mood', 'petCooldownMs' },             min = 1000,  max = 120000,    integer = true },
-    ['Wellbeing.Mood.petRegenAmount']           = { path = { 'Wellbeing', 'Mood', 'petRegenAmount' },            min = 1,     max = 100,       integer = true },
-    ['Wellbeing.Mood.feedRegenAmount']          = { path = { 'Wellbeing', 'Mood', 'feedRegenAmount' },           min = 1,     max = 100,       integer = true },
-    ['Wellbeing.Mood.passiveRegenPerTick']      = { path = { 'Wellbeing', 'Mood', 'passiveRegenPerTick' },       min = 0.1,   max = 20.0,      integer = false },
-    ['Wellbeing.Mood.performancePenaltyThreshold']  = { path = { 'Wellbeing', 'Mood', 'performancePenaltyThreshold' },  min = 1,   max = 99,  integer = false },
-    ['Wellbeing.Mood.performancePenaltyMultiplier'] = { path = { 'Wellbeing', 'Mood', 'performancePenaltyMultiplier' }, min = 0.1, max = 1.0, integer = false },
-    ['Wellbeing.FearStress.calmDownReduceAmount'] = { path = { 'Wellbeing', 'FearStress', 'calmDownReduceAmount' }, min = 1,  max = 100,       integer = true },
-    ['Wellbeing.FearStress.calmDownCooldownMs'] = { path = { 'Wellbeing', 'FearStress', 'calmDownCooldownMs' },  min = 1000,  max = 120000,    integer = true },
-    ['Wellbeing.FearStress.passiveDecayPerTick'] = { path = { 'Wellbeing', 'FearStress', 'passiveDecayPerTick' }, min = 0.1,  max = 20.0,      integer = false },
-    ['Wellbeing.Injury.damageDecayAmount']      = { path = { 'Wellbeing', 'Injury', 'damageDecayAmount' },       min = 1,     max = 100,       integer = true },
-    ['Wellbeing.Injury.passiveRegenPerTick']    = { path = { 'Wellbeing', 'Injury', 'passiveRegenPerTick' },     min = 0.1,   max = 20.0,      integer = false },
-    ['Wellbeing.Injury.sprintBlockThreshold']   = { path = { 'Wellbeing', 'Injury', 'sprintBlockThreshold' },    min = 1,     max = 99,        integer = false },
-    ['Wellbeing.Injury.jumpBlockThreshold']     = { path = { 'Wellbeing', 'Injury', 'jumpBlockThreshold' },      min = 1,     max = 99,        integer = false },
-    ['Wellbeing.Injury.speedPenaltyMultiplier'] = { path = { 'Wellbeing', 'Injury', 'speedPenaltyMultiplier' },  min = 0.1,   max = 1.0,       integer = false },
     -- config.lua's own comment on this exact field: "CONFIGURABLE: set to 0
     -- to disable entirely... or any value in [0, Injury.max]" -- the [0,100]
     -- bound below is not this pass's own judgment call, it is that comment's
     -- explicitly documented safe range, transcribed.
-    ['Wellbeing.Injury.deathRespawnRestoreAmount'] = { path = { 'Wellbeing', 'Injury', 'deathRespawnRestoreAmount' }, min = 0, max = 100,      integer = true },
-    ['Wellbeing.Distraction.meatBaitRadius']    = { path = { 'Wellbeing', 'Distraction', 'meatBaitRadius' },     min = 1.0,   max = 30.0,      integer = false },
-    ['Wellbeing.Distraction.meatBaitDurationMs'] = { path = { 'Wellbeing', 'Distraction', 'meatBaitDurationMs' }, min = 1000, max = 60000,     integer = true },
-    ['Wellbeing.Distraction.whistleRadius']     = { path = { 'Wellbeing', 'Distraction', 'whistleRadius' },      min = 1.0,   max = 50.0,      integer = false },
-    ['Wellbeing.Distraction.whistleDurationMs'] = { path = { 'Wellbeing', 'Distraction', 'whistleDurationMs' },  min = 1000,  max = 60000,     integer = true },
-    ['Wellbeing.Distraction.perTargetCooldownMs'] = { path = { 'Wellbeing', 'Distraction', 'perTargetCooldownMs' }, min = 1000, max = 120000, integer = true },
 
     -- server/bonetool.lua (Config.Features.BoneSweepDevTool, onstart --
     -- ALSO requires the qbx_k9unit_enable_bone_dev_tool convar, checked once

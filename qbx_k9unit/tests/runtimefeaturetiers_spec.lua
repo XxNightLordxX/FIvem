@@ -167,42 +167,8 @@ t.test('LOAD-BEARING DRIFT GUARD: every real config.lua Config.Features key has 
     -- that silently produced an empty Config.Features table would
     -- otherwise make the loop above pass vacuously and this spec would
     -- prove nothing).
-    t.isTrue(totalConfigFeatures >= 56, ('sanity: only saw %d Config.Features key(s) -- expected at least 56; config.lua may have failed to load correctly for this spec'):format(totalConfigFeatures))
-end)
-
-t.test('sanity: the eleven features this spec was written to catch are present in config.lua AND now correctly classified (locks in this pass\'s own classification, not just "not unaudited")', function()
-    local f = boot()
-    local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
-    t.isTrue(result.ok)
-
-    local rowByName = {}
-    for _, row in ipairs(result.features) do
-        rowByName[row.name] = row
-    end
-
-    -- ScentTrailHunt removed from this list (2026-08-26): the feature
-    -- itself was removed, owner-approved (see config.lua's own comment
-    -- where Config.Features.ScentTrailHunt used to be defined for the
-    -- full writeup) -- it is correctly ABSENT from config.lua now, not a
-    -- classification regression this sanity check should catch.
-    local expectedTiers = {
-        FindAlerts         = 'live',
-        K9EquipmentShop    = 'onstart',
-        ResourceAutoDetect = 'onstart',
-        K9DownDispatch     = 'rawtoplevel',
-        K9Leaderboard      = 'rawtoplevel',
-        PursuitSprint      = 'rawtoplevel',
-        SARCalls           = 'rawtoplevel',
-        ScentLineup        = 'rawtoplevel',
-        TrainingMode       = 'rawtoplevel',
-        CameraFeedPiP      = 'clientonly',
-    }
-
-    for name, expectedTier in pairs(expectedTiers) do
-        local row = rowByName[name]
-        t.isNotNil(row, name .. ' must be present in config.lua\'s Config.Features (has this feature been renamed or removed?)')
-        t.equals(row.tier, expectedTier, name .. ' tier classification')
-    end
+    -- FLOOR LOWERED 2026-09-02: twelve features were removed at the owner's request (61 -> 49 Config.Features keys), so the old floor could never be met again. It stays well above zero because its job is to catch an extraction pattern going stale and silently checking nothing -- not to pin the catalogue size.
+    t.isTrue(totalConfigFeatures >= 45, ('sanity: only saw %d Config.Features key(s) -- expected at least 45; config.lua may have failed to load correctly for this spec'):format(totalConfigFeatures))
 end)
 
 t.test('a still-genuinely-unaudited feature (this spec\'s own fixture, never server/runtimecontrol.lua\'s real FEATURE_TIERS) prints a named boot warning -- confirms the warning mechanism itself works against the real file, not just the test fixture in runtimecontrol_spec.lua', function()

@@ -167,6 +167,7 @@
         "drag_target_notice": "A K9 is dragging you — your movement is slowed.",
         "drag_holder_status": "Dragging — this releases automatically in %ds unless you let go sooner.",
         "target_restraint_ended": "You're no longer restrained.",
+        "already_engaged": "You are already engaged with another target.",
         "already_held": "That target is already held by another K9.",
         "blocked_by_vehicle": "Not available while your K9 is loaded into a vehicle.",
         "blocked_while_searching": "Not available while your K9 is searching.",
@@ -218,14 +219,6 @@
         "k9_feature_blocked": "High Command has blocked this ability for you.",
         "no_k9_access_unknown": "You cannot use K9 features right now. Make sure you're an on-duty, certified K9 handler and try again -- if this seems wrong, ask a High Command officer or an admin.",
         "no_k9_role_or_access": "You must be an on-duty K9 handler with an active K9 certification (or access grant) to do that -- if you believe this is wrong, ask a High Command officer or an admin."
-    },
-    "defense": {
-        "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",
-        "no_active_alert": "No active handler-down alert.",
-        "alert_expired": "That handler-down alert has already timed out -- too much time passed since your handler was attacked. If they still need help, go find them; a fresh alert will appear if they're attacked again.",
-        "already_engaged": "You are already engaged with another target.",
-        "no_hostile_detected": "No hostile detected -- select a target from the radial menu instead.",
-        "confirm_keybind_label": "K9 Handler-Down Defense (confirm pre-selected target)"
     },
     "fetch": {
         "prop_load_failed": "Fetch ball prop failed to load -- try again, and if it keeps happening, tell an admin.",
@@ -1753,58 +1746,6 @@
         "night_vision_label": "Night Vision",
         "vision_cycle_label": "Cycle Vision"
     },
-    "recall": {
-        "keybind_label": "K9: Recall Partner",
-        "not_engaged": "Your K9 is not currently engaged with a target.",
-        "not_partnered_to_recall": "You are not currently partnered with a K9 to recall.",
-        "partner_not_online": "Your K9 partner is not currently online.",
-        "partnership_unavailable": "Handler partnership is not available on this server.",
-        "recall_issued": "Recall issued -- your K9 has been called back.",
-        "recalled_notice": "You have been recalled by your handler."
-    },
-    "sar": {
-        "already_active": "You already have an active search-and-rescue call. Abandon it first.",
-        "request_cooldown": "You need to rest before taking another search-and-rescue call.",
-        "call_started": "Dispatch has a search-and-rescue call for you. Start searching the area -- your dog will react as you get closer.",
-        "call_abandoned": "You abandoned the search-and-rescue call.",
-        "call_timeout": "Time ran out. Nobody found the missing person or property in time.",
-        "found_person": "Good dog! You found the missing person -- they're safe.",
-        "found_property": "Good dog! You found the lost property.",
-        "hint_cold": "Your dog loses interest.",
-        "hint_warm": "Your dog picks up a scent.",
-        "hint_hot": "Your dog's ears perk up. Getting warmer.",
-        "hint_burning": "Your dog is pulling hard, right on top of something!",
-        "feature_disabled": "Search-and-rescue calls are turned off on this server right now -- this is not about you personally, there is nothing to request.",
-        "blocked": "High Command has individually blocked you from taking search-and-rescue calls. This is not a missing grant -- ask them why.",
-        "not_granted": "Search-and-rescue calls have not been granted to you individually. Ask a high command officer to grant you 'SAR Calls' access.",
-        "found_by_teammate": "Your teammate already found what you were both searching for -- good work either way.",
-        "left_call": "You left the search-and-rescue call.",
-        "ownership_transferred": "The officer who started this search-and-rescue call disconnected -- you're now running it.",
-        "join_request_sent": "Request to join their search-and-rescue call sent.",
-        "join_pending_request_exists": "That officer already has a pending join request.",
-        "join_request_declined": "Your request to join the search-and-rescue call was declined.",
-        "join_request_no_longer_valid_initiator": "Your join request is no longer valid.",
-        "join_request_no_longer_valid_self": "That join request is no longer valid.",
-        "join_request_expired_initiator": "The officer you asked did not respond in time, so your request to join their search-and-rescue call has expired. Feel free to ask again if you still want to help.",
-        "join_request_expired_target": "You did not respond to a search-and-rescue join request in time, so it has expired. If you still want their help, they are welcome to ask again.",
-        "join_invalid_target": "Invalid officer to ask -- they need an active search-and-rescue call for you to join.",
-        "join_too_far": "You need to be closer to that officer to join their search-and-rescue call.",
-        "call_full": "That search-and-rescue call already has as many officers on it as it can take.",
-        "joined_call": "You joined the search-and-rescue call. Your dog will react as you get closer.",
-        "member_joined": "Another officer joined your search-and-rescue call.",
-        "join_request_header": "Join Search & Rescue Call",
-        "join_request_content": "%s wants to join your search-and-rescue call. Accept?",
-        "join_no_nearby_call": "No nearby officer has a search-and-rescue call for you to join right now."
-    },
-    "scenttrail": {
-        "already_active": "You're already following a scent — stop the current hunt first.",
-        "cooldown": "Give it a moment before starting another hunt.",
-        "expired": "The trail went cold. Try starting a fresh hunt.",
-        "hunt_started": "Scent hunt started -- follow your nose.",
-        "feature_disabled": "Scent trail hunts are turned off on this server right now -- this is not about you personally, there is nothing to request.",
-        "blocked": "High Command has individually blocked you from starting scent trail hunts. This is not a missing grant -- ask them why.",
-        "not_granted": "Scent trail hunts have not been granted to you individually. Ask a high command officer to grant you 'Scent Trail Hunt' access."
-    },
     "pursuitsprint": {
         "activated": "Pursuit sprint! Closing the distance.",
         "no_target_nearby": "No suspect nearby to chase.",
@@ -1820,41 +1761,6 @@
         "denied_not_wanted": "Pursuit sprint only works on a flagged suspect.",
         "denied_on_cooldown": "Pursuit sprint is still recovering.",
         "denied_fallback": "Pursuit sprint request denied."
-    },
-    "scentlineup": {
-        "feature_disabled": "Scent Lineup is disabled on this server.",
-        "no_grant": "You don't have permission to run a Scent Lineup.",
-        "blocked": "High Command has individually blocked you from running a Scent Lineup. This is not a missing grant -- ask them why.",
-        "not_granted": "Scent Lineup has not been granted to you individually. Ask a high command officer to grant you 'Scent Lineup' access.",
-        "identity_unresolved": "Your account could not be verified for this action right now. Try again in a moment, or contact an admin if it persists.",
-        "on_cooldown": "You just ran a lineup -- wait before starting another one.",
-        "usage_start": "Usage: /k9lineup <serverId1> <serverId2> ...> (%d-%d other players)",
-        "too_few_participants": "A lineup needs at least %d other player(s).",
-        "too_many_participants": "A lineup can have at most %d other player(s).",
-        "duplicate_participant": "You listed the same player more than once.",
-        "invalid_participant": "Player #%d is not a valid, connected player.",
-        "cannot_invite_self": "You can't put yourself in your own lineup.",
-        "already_running": "You're already tied up in a Scent Lineup. Cancel it first with /k9lineupcancel.",
-        "target_busy": "%s can't join a lineup right now.",
-        "invite_sent_summary": "Lineup invites sent to %d player(s). Waiting for everyone to accept...",
-        "invite_header": "Scent Lineup Invite",
-        "invite_received": "%s wants you to stand in a Scent Lineup. (expires in %d seconds)",
-        "invite_accepted_progress": "%s accepted your lineup invite (%d/%d).",
-        "invite_declined_self": "You declined the lineup invite.",
-        "no_pending_invite": "You don't have a pending Scent Lineup invite.",
-        "lineup_ready_conductor": "Lineup ready -- %s. Commit your read with /k9lineuppick <1-%d>.",
-        "lineup_ready_participant": "The lineup is ready. The K9 is working the line.",
-        "not_locked_yet": "The lineup hasn't finished forming yet.",
-        "usage_pick": "Usage: /k9lineuppick <1-%d>",
-        "invalid_pick_index": "%d is not a valid lineup position.",
-        "pick_result_correct": "Correct! The real match was %s.",
-        "pick_result_incorrect": "Not quite. The real match was %s.",
-        "pick_result_reveal": "The Scent Lineup is over. The real match was %s.",
-        "cancelled_generic": "The Scent Lineup was cancelled.",
-        "cancelled_participant_left": "%s left, so the lineup was cancelled.",
-        "cancelled_timeout": "The Scent Lineup timed out and was cancelled.",
-        "not_in_lineup": "You're not currently in a Scent Lineup.",
-        "left_lineup_self": "You left the Scent Lineup."
     },
     "search": {
         "nothing_to_search": "Nothing there to search.",
@@ -1895,25 +1801,6 @@
         "scent_vision_mode_off": "Scent vision is turned off on this server.",
         "scent_vision_mode_always_notice": "Scent vision is always on for you here — there's nothing to toggle.",
         "scent_vision_disabled_live": "Scent vision was just turned off."
-    },
-    "training": {
-        "usage": "Usage: /k9training — stand inside a training area and run it again to toggle Training Mode.",
-        "on": "Training Mode ON — nothing you do in here affects live duty, and it awards no XP.",
-        "off": "Training Mode OFF — %s rep(s) completed this session.",
-        "not_training": "You are not in Training Mode.",
-        "no_access": "You are not certified to use the K9 training ground.",
-        "no_zones_configured": "No training areas are set up on this server.",
-        "too_far": "You have to be inside a training area to do that.",
-        "action_denied": "That training drill isn't available right now — wait for the current one to finish.",
-        "search_result_found": "Training rep complete — the dummy flagged as a FIND.",
-        "search_result_clean": "Training rep complete — the dummy came back CLEAN.",
-        "bite_hold_complete": "Training rep complete — bite and hold released on command.",
-        "search_progress_label": "Practice searching...",
-        "bite_hold_progress_label": "Practice bite-and-hold...",
-        "banner_text": "TRAINING MODE — no XP, no live effect (reps: %s)",
-        "usage_k9train": "/k9train by itself turns Training Mode on if it's off, or off if it's on. Use /k9train search or /k9train bite for a specific drill. (Old names /k9training on|off, /k9trainsearch and /k9trainbite still work too.)",
-        "contextual_turning_on": "Turning Training Mode ON.",
-        "contextual_turning_off": "Turning Training Mode OFF."
     },
     "vehicle": {
         "no_vehicle_nearby": "No K9 vehicle nearby.",
@@ -1999,10 +1886,6 @@
         "onboarding_body": "You have K9 gear waiting. Type /k9tablet to open your tablet, then read the Help tab — it lists every key and command you now have.",
         "onboarding_dismiss_hint": "Press %s to dismiss this reminder."
     },
-    "announce": {
-        "keybind_label": "K9: Warn Before Apprehending",
-        "warning_received": "A police K9 handler is warning you — a dog will be released if you do not comply. Give yourself up now."
-    },
     "dogcharacter": {
         "usage_setdog": "Usage: /k9setdog [citizen id] [dog model]. This makes that character a K9 permanently — they will come back as the same dog every time they log in, until you undo it with /k9removedog.",
         "set_success": "%s is now a K9 character, using the %s model. They will load in as that dog from now on.",
@@ -2018,17 +1901,6 @@
     },
     "leashvisual": {
         "rope_textures_unavailable": "Leash rope textures failed to load — the leash still works, but no rope will be visible this session."
-    },
-    "dangerwarn": {
-        "denied_no_access": "You are not certified to use K9 danger warnings.",
-        "on_cooldown": "Your K9 needs a moment before it can warn again.",
-        "no_partner": "You have no partnered handler to alert -- Partner Up first.",
-        "handler_offline": "Your partnered handler is not currently online.",
-        "denied_blocked": "High Command has individually blocked you from using danger warnings. This is not a missing grant -- ask them why.",
-        "denied_not_granted": "Danger warnings have not been granted to you individually. Ask a high command officer to grant you 'Danger Warn' access.",
-        "handler_alert_Alert": "Your K9 is alerting -- something seems off %s of it, %s. Worth a look.",
-        "handler_alert_Threat": "Your K9 is barking at a real threat %s of it, %s! Approach with caution.",
-        "keybind_label": "K9: Danger Warning (Alert)"
     },
     "debugdump": {
         "cooldown": "Please wait a few seconds before running /k9debug again.",

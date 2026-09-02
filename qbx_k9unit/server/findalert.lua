@@ -108,7 +108,7 @@
     for the ENTIRE resource (unlike the genuinely swappable
     inventory/target/dispatch/ambulance systems), and every other feature
     file that needs this exact lookup today -- server/progression.lua's
-    AwardXP/AwardXPDirect, server/recall.lua, server/partnership.lua,
+    AwardXP/AwardXPDirect, the removed recall server file, server/partnership.lua,
     server/appearance.lua -- calls
     `exports.qbx_core:GetPlayerByCitizenId(citizenid).PlayerData.source`
     directly, unconditionally, right now, with no pcall wrapping at that
@@ -285,7 +285,7 @@ local function DispatchFindAlertReaction(targetSrc, alertTier)
     -- citizenid` resolution shape. Fails CLOSED (no reaction) when the
     -- citizenid cannot be resolved at all -- a per-person check with no
     -- resolvable person to check can never be answered "allow", same
-    -- reasoning server/scentlineup.lua's own CanUseScentLineup gives for
+    -- reasoning the removed scent-lineup server file's own CanUseScentLineup gives for
     -- itself. UNRESOLVABLE CITIZENID STAYS SILENT (no NotifyPlayer) -- there
     -- is no confirmed identity to attribute a "you need a grant" message to,
     -- and this is a rare/transient edge case (a framework race), not a

@@ -270,7 +270,7 @@ local function newMainFixture(opts)
 
     -- DEATH-DETECTION FIX (this pass) -- K9Compat.Get('ambulance').IsDowned,
     -- the SAME hand-rolled stand-in shape tests/combat_spec.lua's/
-    -- tests/defense_spec.lua's own `fakeK9Compat` already establish (never
+    -- the removed handler-down-defense spec's own `fakeK9Compat` already establish (never
     -- the real shared/compat/core.lua -- see combat_spec.lua's own comment
     -- on why: loading that file would register its own onResourceStart
     -- handlers/command, breaking this file's own handler-count assertions).
@@ -387,7 +387,7 @@ local function newMainFixture(opts)
         -- DEATH-DETECTION FIX (this pass) -- IsLeashPartyDead reuses
         -- Config.Combat.PropDragging.IsPlayerDownedOverride, the SAME
         -- override server/combat.lua's own PropDragging and
-        -- server/defense.lua's own HandlerDownDefense already read (see
+        -- the removed handler-down-defense server file's own HandlerDownDefense already read (see
         -- server/main.lua's own doc comment on IsLeashPartyDead for the
         -- "one shared per-server integration point" rationale). nil by
         -- default (opts.downedOverride, unset for every pre-existing test).
@@ -691,7 +691,7 @@ end)
 -- .RegisterPlayerDropped() nor .StartSweep() -- and since FXServer RECYCLES
 -- server ids, a brand-new player could inherit a stale "still on cooldown"
 -- timestamp from a totally different prior occupant of that id) and
--- server/sarcalls.lua's StartSarCallCooldown (citizenid-keyed, correctly
+-- the removed SAR-calls server file's StartSarCallCooldown (citizenid-keyed, correctly
 -- NOT .RegisterPlayerDropped()'d -- clearing it on disconnect would let a
 -- citizenid dodge its own anti-farm floor by relogging -- but also missing
 -- the .StartSweep() it should have had instead, a pure omission since the
@@ -859,7 +859,16 @@ t.test('EVERY tracker (NewCooldown/NewNestedCooldown/NewMutex) in EVERY server/*
         ::continueFile::
     end
 
-    t.isTrue(totalDeclared >= 75,
+    -- FLOOR LOWERED 75 -> 65 on 2026-09-02, and the message below says not to
+    -- do this lightly, so: ten server files were deleted outright with the
+    -- twelve features the owner removed (scentlineup, sarcalls, training,
+    -- scenttrail, recall, dangerwarn, defense, announce and their halves),
+    -- taking their own trackers with them. The floor's job is to catch the
+    -- DISCOVERY PATTERN going stale -- a rename of NewCooldown/NewMutex
+    -- would match nothing and this test would pass while checking zero
+    -- trackers -- so it must stay well above zero, but it can only ever be
+    -- as high as what the surviving files genuinely declare (71 today).
+    t.isTrue(totalDeclared >= 65,
         ('sanity: only found %d tracker declaration(s) across every server/*.lua file -- the discovery pattern has probably drifted; fix it rather than lowering this floor'):format(totalDeclared))
     t.equals(allowlistMatchedCount, allowlistEntryCount,
         'every ALLOWED_WITHOUT_CLEANUP entry must match a tracker actually declared in the file it names -- a non-matching entry is stale (renamed/removed tracker) and must be deleted, not left to silently do nothing')
@@ -2269,7 +2278,7 @@ end)
 -- work (client/leashvisual.lua's own header). A K9 or handler who died
 -- mid-leash stayed leashed indefinitely; this section pins the new
 -- background poll thread that closes that gap, mirroring
--- server/defense.lua's own already-tested `IsHandlerDown` precedence
+-- the removed handler-down-defense server file's own already-tested `IsHandlerDown` precedence
 -- (override -> K9Compat ambulance adapter -> metadata -> raw health) rather
 -- than re-deriving or re-proving that whole precedence chain a second time
 -- here (defense_spec.lua already owns exhaustive coverage of the identical
@@ -2409,7 +2418,7 @@ t.test('DEATH-DETECTION: `Config.Combat.PropDragging.IsPlayerDownedOverride`, wh
     t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2, 'a configured override wins even when every fallback signal says alive')
 end)
 
-t.test('DEATH-DETECTION: an `IsPlayerDownedOverride` that ERRORS fails CLOSED (treated as NOT down this tick) -- same posture as server/defense.lua\'s IsHandlerDown, safe here because this is a REPEATING poll, never a one-shot', function()
+t.test('DEATH-DETECTION: an `IsPlayerDownedOverride` that ERRORS fails CLOSED (treated as NOT down this tick) -- same posture as the removed handler-down-defense server file\'s IsHandlerDown, safe here because this is a REPEATING poll, never a one-shot', function()
     local f = newMainFixture({ downedOverride = function(_src) error('boom') end })
     setupEligiblePair(f, 1, 2)
     formLeashPair(f, 1, 2, 1)
@@ -2489,7 +2498,7 @@ print('dangling-TODO-header fix that backfill coverage accompanies, and Section 
 print('(10 cases) for the DEATH-DETECTION FIX and its own follow-on LIVE-FLIP FIX:')
 print('no death handler had ever touched LeashPairs before -- either party dying')
 print('mid-leash now ends the pairing via a new background poll thread, reusing')
-print('server/defense.lua\'s own IsHandlerDown precedence (override -> K9Compat')
+print('the removed handler-down-defense server file\'s own IsHandlerDown precedence (override -> K9Compat')
 print('ambulance adapter -> metadata -> raw health) rather than re-deriving it. That')
 print('poll thread now starts UNCONDITIONALLY (LIVE-FLIP FIX, follow-on pass) --')
 print('request-time formation (CheckLeashEligibility) still genuinely gates on')

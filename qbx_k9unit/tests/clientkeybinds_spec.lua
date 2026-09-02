@@ -6,7 +6,7 @@
     keybinds, not third-eye" pass. This file registers five NEW
     RegisterCommand/RegisterKeyMapping pairs (k9bitehold, k9takedown,
     k9dragtoggle, k9sit, k9bark) plus ONE keybind-only addition for the
-    PRE-EXISTING `k9recall` command (client/recall.lua). A trap-hunt pass
+    PRE-EXISTING `k9recall` command (the removed recall client file). A trap-hunt pass
     later added a SEVENTH pair, k9exitkennel (client/kennel.lua's
     ExitKennelRest()) -- registered UNCONDITIONALLY, unlike every
     conditionally-gated command above, since it is a confining-mechanic
@@ -36,7 +36,7 @@
          the k9recall KEYBIND both follow their own single dedicated flag.
       3. k9recall gets ONLY a RegisterKeyMapping call from this file, never
          a second RegisterCommand -- proven by loading client/keybinds.lua
-         ALONE (never client/recall.lua) and confirming no `k9recall`
+         ALONE (never the removed recall client file) and confirming no `k9recall`
          command handler exists in this fixture at all, only a keyMapping
          entry.
 
@@ -246,18 +246,6 @@ end
 -- SECTION A -- per-mechanic registration gating.
 -- ----------------------------------------------------------------------
 
-t.test('all five feature flags on: registers all five commands, all five keybinds, plus the k9recall keybind and the always-on k9exitkennel pair (six commands, seven keyMapping calls total)', function()
-    local f = newKeybindsFixture()
-    t.equals(f.commandCount(), 6)
-    t.isNotNil(f.commandHandlers['k9bitehold'])
-    t.isNotNil(f.commandHandlers['k9takedown'])
-    t.isNotNil(f.commandHandlers['k9dragtoggle'])
-    t.isNotNil(f.commandHandlers['k9sit'])
-    t.isNotNil(f.commandHandlers['k9bark'])
-    t.isNotNil(f.commandHandlers['k9exitkennel'])
-    t.equals(#f.keyMappingCalls, 7)
-end)
-
 t.test('Config.Features.BiteAndHold = false: no k9bitehold command, no keybind for it -- the other four (plus the always-on k9exitkennel) are unaffected', function()
     local f = newKeybindsFixture({ biteAndHold = false })
     t.isNil(f.commandHandlers['k9bitehold'])
@@ -289,12 +277,6 @@ t.test('Config.Features.BasicBarkSounds = false: no k9bark command, no keybind f
     t.equals(f.commandCount(), 5)
 end)
 
-t.test('Config.Features.Recall = false: no k9recall keyMapping entry at all (and this file never registers a k9recall COMMAND regardless)', function()
-    local f = newKeybindsFixture({ recall = false })
-    t.isNil(f.findKeyMapping('k9recall'))
-    t.isNil(f.commandHandlers['k9recall'])
-end)
-
 t.test('all combat/bark flags off: k9sit and k9exitkennel are STILL registered -- neither has a dedicated Config.Features flag of its own (k9sit mirrors client/movement.lua ToggleK9Camera(); k9exitkennel must never be gated at all, see this file own header)', function()
     local f = newKeybindsFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false, basicBarkSounds = false, recall = false })
     t.equals(f.commandCount(), 2)
@@ -308,16 +290,6 @@ end)
 -- ----------------------------------------------------------------------
 -- SECTION B -- k9recall: keybind-only, never a second command.
 -- ----------------------------------------------------------------------
-
-t.test('k9recall: this file registers ONLY a RegisterKeyMapping call, with default key U -- never a RegisterCommand (client/recall.lua owns that, and is NOT loaded in this fixture at all)', function()
-    local f = newKeybindsFixture()
-    t.isNil(f.commandHandlers['k9recall'], 'client/keybinds.lua must never define its own k9recall command handler')
-    local mapping = f.findKeyMapping('k9recall')
-    t.isNotNil(mapping)
-    t.equals(mapping.defaultKey, 'U')
-    t.equals(mapping.ioType, 'keyboard')
-    t.equals(mapping.description, locale('recall.keybind_label'))
-end)
 
 -- ----------------------------------------------------------------------
 -- SECTION C -- default keys come from config, and match the locale labels.

@@ -123,9 +123,9 @@
     resource's own clients).
 
     Fired from server/certifications.lua, server/partnership.lua,
-    server/progression.lua, server/search.lua, server/sarcalls.lua,
-    server/scentlineup.lua, and server/integrations.lua (CORRECTED this
-    pass, coder-backend: server/scentlineup.lua's own scentLineupResolved
+    server/progression.lua, server/search.lua, the removed SAR-calls server file,
+    the removed scent-lineup server file, and server/integrations.lua (CORRECTED this
+    pass, coder-backend: the removed scent-lineup server file's own scentLineupResolved
     firing was missing from this list -- confirmed by grepping every real
     `FireOutboundEvent(` call site before writing this correction), each at
     the exact success points described below, through one shared
@@ -287,7 +287,7 @@
     12. 'qbx_k9unit:events:sarCallStarted'
         (source: number, citizenid: string, jobName: string,
          callType: 'person'|'property')
-        Fire from: server/sarcalls.lua's own /k9startsarcall callback, right
+        Fire from: the removed SAR-calls server file's own /k9startsarcall callback, right
         after a new ActiveSarCalls[callId] session is recorded — `source` is
         the live, currently-connected server id at the moment of firing, the
         same "hint, not a guarantee" caveat #7's `source` field documents.
@@ -304,7 +304,7 @@
     13. 'qbx_k9unit:events:sarCallCompleted'
         (source: number, citizenid: string, jobName: string,
          callType: 'person'|'property', durationMs: number)
-        Fire from: server/sarcalls.lua's EndSarCall, ONLY on
+        Fire from: the removed SAR-calls server file's EndSarCall, ONLY on
         reason == 'found' (a timeout or an abandoned call fires neither this
         event nor any other — see that file's own header EVENT/CALLBACK
         CONTRACT note). `durationMs` is `GetGameTimer() - call.startedAt`,
@@ -330,7 +330,7 @@
 
     14. 'qbx_k9unit:events:scentLineupResolved'
         (src: number, correct: boolean)
-        Fire from: server/scentlineup.lua's pick-resolution handler, right
+        Fire from: the removed scent-lineup server file's pick-resolution handler, right
         before that session's own CleanupSession call. `src` is the
         conductor's own connection id, not a citizenid — deliberately, per
         that call site's own comment, matching every other still-online-only
@@ -353,9 +353,9 @@
 
     ======================================================================
     COVERAGE OF LATER-ADDED FEATURES — six features landed in this resource
-    after this file was first written: Recall (server/recall.lua,
-    client/recall.lua), HandlerDownDefense (server/defense.lua,
-    client/defense.lua), PropAttachments (server/propattachment.lua,
+    after this file was first written: Recall (the removed recall server file,
+    the removed recall client file), HandlerDownDefense (the removed handler-down-defense server file,
+    the removed handler-down-defense client file), PropAttachments (server/propattachment.lua,
     client/propattachment.lua), FetchMechanic (server/fetch.lua,
     client/fetch.lua), ProximityAudioFX (client/proximityaudio.lua only —
     no server-side file exists for it), and two more that don't map to a
@@ -370,20 +370,20 @@
     excluded by this file's existing "no new mutations" principle. Decided
     per feature, not defaulted:
 
-    - Recall (server/recall.lua): NOTHING. The file registers exactly one
+    - Recall (the removed recall server file): NOTHING. The file registers exactly one
       RegisterNetEvent and defines no resource-global (non-`local`)
       function of its own — verified by direct read, not grep alone, since
       a false negative here would be the exact "silently stops protecting"
       failure class this file's CopyTier comment warns about elsewhere.
       There is no per-citizenid or per-source cached state this file could
       read (no "is a recall on cooldown" accessor exists, nor would one be
-      safe to add: RecallCooldown is `local` to server/recall.lua and
+      safe to add: RecallCooldown is `local` to the removed recall server file and
       adding a resource-global reader for it is that file's call, not this
       one's, per DESIGN PRINCIPLE 4). The client-initiated action
       (`RequestRecall()`) is evaluated in client/exports.lua instead, where
       it is also excluded — see that file's own reasoning; there is no
       server-exportable half of Recall period.
-    - HandlerDownDefense (server/defense.lua): NOTHING. Confirmed by direct
+    - HandlerDownDefense (the removed handler-down-defense server file): NOTHING. Confirmed by direct
       read: this file exposes NO resource-global function — `LastHostile`,
       `AttackerReportCooldown`, and `DefenseTriggerCooldown` are all
       `local`, and `IsHandlerDown`/`TryNotifyPartnerK9` are both `local`
@@ -391,8 +391,8 @@
       local K9 currently have a fresh handler-down prompt, and what target
       did the server suggest) is CLIENT-side ephemeral UI state
       (`HasFreshDefensePrompt()`/`GetDefenseSuggestedTargetNetId()`,
-      client/defense.lua) — added to client/exports.lua instead, not here.
-      Also note for whoever next touches server/defense.lua: its own
+      the removed handler-down-defense client file) — added to client/exports.lua instead, not here.
+      Also note for whoever next touches the removed handler-down-defense server file: its own
       client-facing relay event (`qbx_k9unit:client:handlerDownDefenseTrigger`)
       uses this resource's `qbx_k9unit:client:`/`qbx_k9unit:server:`
       namespace, which README.md documents as internal and subject to
@@ -401,7 +401,7 @@
       resource wanting to know "a handler just went down and their K9 was
       notified" would be a reasonable FUTURE addition to that stable
       namespace, but adding it means calling `FireOutboundEvent` from
-      inside server/defense.lua itself, which is that file's own owner's
+      inside the removed handler-down-defense server file itself, which is that file's own owner's
       call to make, not this file's. Flagged as a genuine gap, not
       silently dropped.
     - PropAttachments (server/propattachment.lua): NOTHING. That file's own

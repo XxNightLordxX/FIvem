@@ -28,10 +28,10 @@
         itself, since there's no separate "bark module" file to delegate
         to — server/main.lua's relayBark handler is the other end).
       - client/partnership.lua's BreakPartnership(), RequestPartnerUp(targetServerId).
-      - client/recall.lua's RequestRecall().
-      - client/defense.lua's ConfirmHandlerDownDefense(actionType).
-      - client/dangerwarn.lua's RequestDangerWarn(warnType) -- 'k9unit_dangerwarn'
-        submenu, same shape as client/defense.lua's 'k9unit_defense' immediately
+      - the removed recall client file's RequestRecall().
+      - the removed handler-down-defense client file's ConfirmHandlerDownDefense(actionType).
+      - the removed danger-warn client file's RequestDangerWarn(warnType) -- 'k9unit_dangerwarn'
+        submenu, same shape as the removed handler-down-defense client file's 'k9unit_defense' immediately
         above (see that submenu's own definition, right after
         'k9unit_defense', for the full contract this follows).
       - client/fetch.lua's RequestThrowFetchBall(), ReleaseFetchBall(),
@@ -50,10 +50,10 @@
         each is deliberately gated on HasK9Access() alone, not the full
         CanShowK9UI() combinator (see each item's own comment for why,
         quoting client/fetch.lua's RequestThrowFetchBall()/
-        client/training.lua's RequestSetTrainingMode() verbatim).
-      - client/sarcalls.lua's RequestStartSarCall(), RequestAbandonSarCall(),
+        the removed training client file's RequestSetTrainingMode() verbatim).
+      - the removed SAR-calls client file's RequestStartSarCall(), RequestAbandonSarCall(),
         IsSarCallActive().
-      - client/training.lua's IsTrainingModeActive(),
+      - the removed training client file's IsTrainingModeActive(),
         RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
         RequestTrainingBiteDrill().
       - client/vision.lua's ToggleThermalVision()/ToggleNightVision() --
@@ -221,24 +221,6 @@
 ]]
 
 
--- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
--- Every lib.callback.await in this file previously passed `false` here.
--- Each call is wrapped in a pcall written on the stated assumption that
--- await "THROWS on a timeout" -- but `false` is the timeout argument, and
--- passing it is what disables the timeout. So nothing ever threw: a server
--- callback that does not answer left the caller waiting indefinitely rather
--- than failing cleanly. On the tablet that means a fetch promise that never
--- resolves, which is exactly the "I have to keep clicking Retry on almost
--- everything" the owner reported.
---
--- An explicit number is correct whichever way ox_lib treats `false` (I could
--- not reach its source from this environment to confirm): if false disabled
--- the timeout, this restores it; if false was already ignored, this only
--- makes the value explicit. Ten seconds is far longer than any call here
--- needs -- with Config.Database.enabled false everything is in-memory -- and
--- still bounded, so a wedged callback surfaces as a clear error instead of a
--- hang.
-local K9_CALLBACK_TIMEOUT_MS = 10000
 -- OPEN STRUCTURAL QUESTION resolution: option (b) was chosen — the "K9
 -- Unit" submenu and its sub-items are registered ONCE, unconditionally
 -- (subject to each item's own Config.Features flag at registration time,
@@ -2082,157 +2064,6 @@ local function RegisterK9RadialMenu()
         items = k9UtilitySubmenuItems,
     })
 
-    --- Search & Rescue Call -- closes a real gap: client/sarcalls.lua's
-    --- RequestStartSarCall()/RequestAbandonSarCall() previously had no
-    --- client/radial.lua entry point; until now this feature was reachable
-    --- ONLY via '/k9sarcall [stop]' -- exactly the "reachable only by
-    --- remembering an exact command" shape this resource's own radial menu
-    --- exists to avoid.
-    ---
-    --- A single context-sensitive toggle item, the SAME shape as
-    --- Attach/Detach Leash / Bite & Hold / Drag / Fetch above:
-    --- IsSarCallActive() (client/sarcalls.lua, added specifically for this)
-    --- plays the same role IsLeashed()/IsBiteHoldEngaged()/IsDragEngaged()/
-    --- IsFetchCarryEngaged() do for those toggles -- a pure, no-network
-    --- local-state read, never itself a gate.
-    ---
-    --- Abandon branch is NOT gated on CanShowK9UI() -- same "no unbounded
-    --- trap" requirement as every other release/termination branch above.
-    --- RequestAbandonSarCall()'s own doc comment states this explicitly:
-    --- "UNCONDITIONAL, never gated... a player who loses access, or simply
-    --- wants to give up, must always be able to abandon a call."
-    ---
-    --- START BRANCH WIDENED TO HasK9Access() ALONE (permission audit
-    --- finding, this pass): server/sarcalls.lua's requestSarCall callback
-    --- gates on `HasK9Access(source)` alone -- confirmed by reading it
-    --- directly, no model/role check anywhere in that callback. RESIDUAL
-    --- GAP CLOSED (permission audit follow-up, this pass):
-    --- client/sarcalls.lua's own RequestStartSarCall() was ALSO widened from
-    --- CanShowK9UI() to HasK9Access() alone (see that function's own doc
-    --- comment) -- a High Command/autoAccessGrade-bypass holder now reaches
-    --- the server end-to-end through this item, with no narrower re-gate
-    --- left in the middle. RequestAbandonSarCall() above was confirmed to
-    --- already carry no access gate of any kind, so this widening could
-    --- not, and does not, touch it.
-    if Config.Features.SARCalls then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_sar_call',
-            label = locale('radial.sar_call_toggle_label'),
-            icon = 'life-ring',
-            onSelect = function()
-                -- type(...) == 'function' guards -- see k9_sit's identical
-                -- note above for the full HEADER/CODE DRIFT FIX writeup. An
-                -- absent IsSarCallActive() is treated as "no call active"
-                -- (falls through to the Start branch).
-                if type(IsSarCallActive) == 'function' and IsSarCallActive() then
-                    if type(RequestAbandonSarCall) == 'function' then
-                        RequestAbandonSarCall()
-                    end
-                    return
-                end
-
-                if not HasK9Access() then
-                    DenyK9UIAccess('combat.no_access')
-                    return
-                end
-
-                if type(RequestStartSarCall) == 'function' then
-                    RequestStartSarCall()
-                end
-            end,
-        }
-
-        --- Join Nearest SAR Call -- closes the second half of the same gap
-        --- the toggle above closed for STARTING a call: '/k9sarcall join
-        --- <serverId>' was the ONLY way to join someone else's call, and it
-        --- required already knowing a specific colleague's numeric server id
-        --- -- effectively command-console-only in practice. See
-        --- server/sarcalls.lua's own header section "RADIAL JOIN ENTRY
-        --- POINT" for the full design writeup this item is the client half
-        --- of; restated here only as far as THIS file's own share of it.
-        ---
-        --- THE DESIGN PROBLEM: joining needs a TARGET (whose call?) and a
-        --- radial item cannot take an argument. THE ANSWER: join the
-        --- NEAREST joinable active call within
-        --- Config.SARCalls.joinProximityMeters -- needs no argument at all,
-        --- and matches the exact proximity check the server already
-        --- enforces authoritatively at accept time, not a looser rule
-        --- invented just for this item. server/sarcalls.lua's own
-        --- findNearestJoinableSarCall callback (registered alongside
-        --- requestJoinSarCall/respondJoinSarCall) resolves that target
-        --- server-side, from the requester's own live position -- this
-        --- client has no visibility of its own into who else is currently
-        --- running a call, by design (that state has never left
-        --- server/sarcalls.lua).
-        ---
-        --- NEVER A TRUST BOUNDARY OF ITS OWN: findNearestJoinableSarCall
-        --- filters every candidate through CheckSarJoinEligibility (the SAME
-        --- function the real accept step uses), so it can never recommend a
-        --- target the real request would then reject for a reason this
-        --- lookup could have caught first. Whatever serverId it returns is
-        --- fed into the EXACT SAME 'qbx_k9unit:server:requestJoinSarCall'
-        --- event '/k9sarcall join <id>' already sends, which the server
-        --- re-validates from scratch (proximity, access, grants, call-full,
-        --- ownership, TOCTOU at accept time) exactly as before this item
-        --- existed -- a forged or stale answer from the lookup callback
-        --- could not grant anything a modified client already could not
-        --- already attempt directly.
-        ---
-        --- SELF-CONTAINED, DELIBERATELY NOT ROUTED THROUGH A NEW
-        --- client/sarcalls.lua RESOURCE-GLOBAL -- see server/sarcalls.lua's
-        --- own "RADIAL JOIN ENTRY POINT" header section for the full
-        --- reasoning: client/sarcalls.lua's own RequestJoinSarCall stays
-        --- `local` (that file's own header already says to widen it to a
-        --- global "the same day such a call site actually lands," which
-        --- would also need a repo-root .luacheckrc `globals` entry -- a file
-        --- outside THIS pass's own file-ownership boundary). This item
-        --- therefore awaits findNearestJoinableSarCall and fires the join
-        --- request itself, using only natives and globals THIS file already
-        --- calls directly for the toggle item immediately above
-        --- (HasK9Access/DenyK9UIAccess/IsSarCallActive) -- an extension of
-        --- an already-established pattern in this exact file, not a new one.
-        ---
-        --- Gated identically to the toggle above: HasK9Access() checked
-        --- directly (matches server/sarcalls.lua's own requestJoinSarCall
-        --- handler, which gates on HasK9Access(source) alone), and
-        --- IsSarCallActive() guards the same "already busy" case client-side
-        --- before ever bothering the server -- same posture as
-        --- RequestJoinSarCall's own doc comment in client/sarcalls.lua.
-        --- FAIL-CLOSED: lib.callback.await is pcall-wrapped (it throws
-        --- rather than returning nil on a timeout/rejection, same posture as
-        --- client/sarcalls.lua's own RequestStartSarCall), and a thrown or
-        --- empty result degrades to the SAME "no nearby call" notify a
-        --- genuine "found nobody" answer gets -- never a crash, never a
-        --- silent no-op with no feedback at all.
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_sar_call_join_nearest',
-            label = locale('radial.sar_call_join_nearest_label'),
-            icon = 'user-plus',
-            onSelect = function()
-                if type(IsSarCallActive) == 'function' and IsSarCallActive() then
-                    lib.notify({ title = locale('common.notify_title'), description = locale('sar.already_active'), type = 'error' })
-                    return
-                end
-
-                if not HasK9Access() then
-                    DenyK9UIAccess('combat.no_access')
-                    return
-                end
-
-                local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestJoinableSarCall', K9_CALLBACK_TIMEOUT_MS)
-                if not ok or not result or not result.targetServerId then
-                    lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_no_nearby_call'), type = 'error' })
-                    return
-                end
-
-                -- Same event, same payload shape, '/k9sarcall join <id>'
-                -- already sends -- the server re-validates everything from
-                -- scratch regardless of which surface sent it.
-                TriggerServerEvent('qbx_k9unit:server:requestJoinSarCall', result.targetServerId)
-                lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_request_sent'), type = 'info' })
-            end,
-        }
-    end
 
 
     -- ======================================================================
@@ -2317,10 +2148,8 @@ local function RegisterK9RadialMenu()
         'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
         'k9_partner_up', 'k9_break_partnership',
         'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_scent_vision', 'k9_camera_feed', 'k9_vision_cycle',
-        'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
+        'k9_bite_hold', 'k9_takedown', 'k9_drag',
         'k9_fetch', 'k9_kennel',
-        'k9_sar_call', 'k9_sar_call_join_nearest',
-        'k9_training',
     }
     do
         local orderIndex = {}

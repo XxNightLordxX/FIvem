@@ -64,11 +64,9 @@ local EXPECTED_ENFORCED = {
     'SearchZones',       -- server/search.lua (dynamic featureName)
     'ContrabandAlerts',  -- server/search.lua (dynamic featureName)
     'FatigueSystem',     -- server/wellbeing.lua (dynamic featureName)
-    'InjuryLimping',     -- server/wellbeing.lua (dynamic featureName)
     'XPProgression',     -- server/progression.lua
     'K9Inventory',       -- server/inventory.lua
     'K9Leaderboard',     -- server/leaderboard.lua
-    'TrainingMode',      -- server/training.lua
     'AdminAuditCommands',-- server/admin.lua
     'HandlerPartnership',-- server/partnership.lua
     -- K9EquipmentShop -- server/equipmentshop.lua (dynamic featureKey via
@@ -87,7 +85,6 @@ local EXPECTED_ENFORCED = {
 --- "BLOCK ENFORCEMENT CLASSIFICATION" section for the full per-key
 --- reasoning this mirrors.
 local EXPECTED_NOT_ENFORCEABLE = {
-    'Recall',                 -- server/recall.lua: DELIBERATE escape-hatch exclusion, never a gap
     'ResourceAutoDetect',     -- pure infra switch, not a per-citizenid ability
     'HighCommand',            -- pure infra switch
     'PermissionGrants',       -- pure infra switch
@@ -216,18 +213,6 @@ t.test('every one of the twelve client-only features resolves blockEnforcement =
     end
 end)
 
-t.test('Recall resolves blockEnforcement == "not_enforceable" -- the DELIBERATE escape-hatch exclusion, never "merely unimplemented"', function()
-    local f = newFixture()
-    local features = requestFeatures(f, 'TARGET1')
-    t.equals(findRow(features, 'Recall').blockEnforcement, 'not_enforceable')
-end)
-
-t.test('Recall never lands in the client-enforced bucket -- it must never be conflated with the twelve client-only features', function()
-    local f = newFixture()
-    local features = requestFeatures(f, 'TARGET1')
-    t.isFalse(findRow(features, 'Recall').blockEnforcement == 'client_enforced')
-end)
-
 t.test('pure administrative/infrastructure switches (no per-citizenid ability to gate at all) resolve "not_enforceable"', function()
     local f = newFixture()
     local features = requestFeatures(f, 'TARGET1')
@@ -260,7 +245,6 @@ t.test('blockEnforcement is a pure function of the feature key -- identical for 
     local featuresA = requestFeatures(f, 'TARGET-A')
     local featuresB = requestFeatures(f, 'TARGET-B')
     t.equals(findRow(featuresA, 'ThermalVision').blockEnforcement, findRow(featuresB, 'ThermalVision').blockEnforcement)
-    t.equals(findRow(featuresA, 'Recall').blockEnforcement, findRow(featuresB, 'Recall').blockEnforcement)
     t.equals(findRow(featuresA, 'K9Medkit').blockEnforcement, findRow(featuresB, 'K9Medkit').blockEnforcement)
 end)
 

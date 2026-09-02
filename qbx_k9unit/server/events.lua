@@ -4,12 +4,12 @@
     Shared outbound-event helper (FireOutboundEvent), extracted from SIX
     independent, byte-for-byte identical `local function FireOutboundEvent`
     copies: server/certifications.lua, server/search.lua,
-    server/partnership.lua, server/sarcalls.lua, server/progression.lua, and
+    server/partnership.lua, the removed SAR-calls server file, server/progression.lua, and
     server/integrations.lua. Verified by direct grep of every one of those
     six definitions before writing this file -- all six were the exact same
     five-line `pcall(TriggerEvent, eventName, ...)` wrapper.
 
-    server/integrations.lua's and server/sarcalls.lua's own copies of this
+    server/integrations.lua's and the removed SAR-calls server file's own copies of this
     helper each said, verbatim, that duplicating it was a deliberate choice
     at the time, since "that decision belongs to whoever next does a genuine
     cross-file cleanup pass, not to a single new-feature change that does
@@ -54,7 +54,7 @@
     primitive first" order those already established, so no
     `type(FireOutboundEvent) == 'function'` existence guard is needed at
     any consuming file's call sites -- true for the original six and
-    unchanged for server/scentlineup.lua's own call site added afterward
+    unchanged for the removed scent-lineup server file's own call site added afterward
     (see "COUNT WILL DRIFT, NOT MAINTAINED LIVE HERE" below), for the
     identical load-order reason.
 
@@ -77,7 +77,7 @@
     (`grep -rn "^\s*FireOutboundEvent(" server/`, excluding this file's own
     definition and one backtick-quoted mention in a comment in
     server/integrations.lua) found 23 real call sites across SEVEN files
-    (the original six above, plus server/scentlineup.lua, which added its
+    (the original six above, plus the removed scent-lineup server file, which added its
     own new call site after this extraction landed, calling the shared
     global directly rather than ever having had its own duplicate copy). Do
     not trust either number without recounting; this comment will go stale

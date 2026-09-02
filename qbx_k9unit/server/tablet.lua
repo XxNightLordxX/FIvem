@@ -1196,9 +1196,9 @@ local CLIENT_ENFORCED_FEATURES = {
 --- in yet" (that case is the safe 'not_yet_enforced' fallback this
 --- function deliberately does not return for these):
 ---
----   RECALL -- see server/recall.lua's own header "NO UNBOUNDED TRAP":
+---   RECALL -- see the removed recall server file's own header "NO UNBOUNDED TRAP":
 ---   THIS IS A DELIBERATE, LOAD-BEARING DESIGN DECISION, NOT A GAP. DO NOT
----   "FIX" THIS BY WIRING A block.Recall CHECK INTO server/recall.lua.
+---   "FIX" THIS BY WIRING A block.Recall CHECK INTO the removed recall server file.
 ---   Recall is this resource's escape hatch for every non-consensual
 ---   engagement (bite-and-hold, takedown, drag) -- the path that lets a
 ---   handler call their K9 off even if their OWN certification, or their
@@ -1207,7 +1207,7 @@ local CLIENT_ENFORCED_FEATURES = {
 ---   way out -- reopening the exact "termination path silently gated
 ---   behind the same check that gates initiating the thing being escaped"
 ---   bug class this resource has already shipped and fixed once.
----   server/recall.lua's event handler applies exactly three gates
+---   the removed recall server file's event handler applies exactly three gates
 ---   (Config.Features.Recall itself, a per-caller rate limit, and "is the
 ---   caller genuinely this K9's established partner") and NEVER
 ---   HasPermission/block.Recall, on either party, by design. Grouped here
@@ -1457,8 +1457,8 @@ local FEATURE_DOMAINS = {
     -- guarantee, and tests/tabletfeaturedomains_spec.lua's own header,
     -- which only ever asserts the FORWARD direction: every REAL
     -- Config.Features key must resolve to a domain, never the reverse).
-    -- Config.Features.ApprehensionAnnouncement (server/announce.lua +
-    -- client/announce.lua, gated on it and on Config.Combat.
+    -- Config.Features.ApprehensionAnnouncement (the removed apprehension-announcement server file +
+    -- the removed apprehension-announcement client file, gated on it and on Config.Combat.
     -- ApprehensionAnnouncement) has never existed in config.lua at all --
     -- see README.md's own "Known limitations" entry and html/tablet.js's
     -- cmdref_k9announce_needs string for the full disclosure. This entry

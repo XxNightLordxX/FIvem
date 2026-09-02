@@ -10,7 +10,7 @@
     This file has no public API surface at all (a single top-level
     CreateThread loop, gated behind an early `return`) -- reached here via
     tests/fixtures/sandbox.lua's own cooperative thread runner, exactly the
-    way tests/cooldowns_spec.lua/tests/clientsarcalls_spec.lua and others
+    way tests/cooldowns_spec.lua/the removed SAR-calls client spec and others
     already step through a real `while true do ... Wait(x) end` production
     loop one pass at a time.
 ]]

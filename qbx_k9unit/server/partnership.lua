@@ -11,8 +11,8 @@
     `HandlerDownDefense` (the two features DEVELOPER_REFERENCE.md §12.0 item 7
     names as blocked on this file existing) were explicitly OUT OF SCOPE
     and unimplemented. Both are now built and consuming this file's
-    accessors for real: server/recall.lua's Recall actor and
-    server/defense.lua's HandlerDownDefense trigger both call
+    accessors for real: the removed recall server file's Recall actor and
+    the removed handler-down-defense server file's HandlerDownDefense trigger both call
     GetActivePartnerCitizenId directly (confirmed by direct read of both
     files) -- see "FUTURE CONSUMERS" below, and each accessor's own doc
     comment, for the exact current wiring.
@@ -635,8 +635,8 @@ end
 
 --- Read-only accessor over the `local` `Partnerships` cache -- see
 --- "FUTURE CONSUMERS" in this file's header for the originally-intended
---- caller. LANDED: both server/defense.lua's HandlerDownDefense trigger
---- and server/recall.lua's Recall actor now call this directly (confirmed
+--- caller. LANDED: both the removed handler-down-defense server file's HandlerDownDefense trigger
+--- and the removed recall server file's Recall actor now call this directly (confirmed
 --- by direct read of both files), each behind their own
 --- `type(GetActivePartnerCitizenId) == 'function'` runtime guard.
 --- @param citizenid string
@@ -652,7 +652,7 @@ end
 --- exactly the boolean check DEVELOPER_REFERENCE.md §12.0 item 7 specifies for
 --- BiteAndHold's Recall actor -- see "FUTURE CONSUMERS" in this file's
 --- header for the originally-intended caller. STILL not called that way:
---- server/recall.lua (confirmed by direct read) never takes an
+--- the removed recall server file (confirmed by direct read) never takes an
 --- "alleged partner" from anywhere to validate against this function --
 --- it derives the K9 to recall directly from `GetActivePartnerCitizenId(callerCitizenid)`
 --- instead, which is strictly narrower (a caller can only ever recall their

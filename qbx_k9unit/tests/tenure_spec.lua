@@ -705,9 +705,9 @@ end)
 -- ----------------------------------------------------------------------
 -- CHECKINTERVALMS VALIDATION: a misconfigured
 -- Config.Partnership.TenureBonus.checkIntervalMs must never reach Wait()
--- unguarded -- mirrors server/defense.lua's own PollIntervalMs finding for
+-- unguarded -- mirrors the removed handler-down-defense server file's own PollIntervalMs finding for
 -- the identical failure shape (a bad value here can busy-loop or silently
--- kill this shared thread forever). Unlike server/defense.lua's load-time
+-- kill this shared thread forever). Unlike the removed handler-down-defense server file's load-time
 -- assert, this file re-reads the config every loop pass, so the fix is a
 -- soft fallback (to the real shipped default, 300000ms) plus a warning,
 -- not a hard resource-start failure.

@@ -1471,7 +1471,7 @@ end)
 -- TEST, not a comment: it fails the moment handlerTreatK9 is awarded from
 -- this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker alongside it --
 -- now GREEN because that tracker genuinely exists. Mirrors
--- tests/recall_spec.lua's own "SOURCE AUDIT" precedent.
+-- the removed recall spec's own "SOURCE AUDIT" precedent.
 -- ========================================================================
 
 t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 without a dedicated per-actor *_XP_MINT_COOLDOWN tracker also present in this file', function()

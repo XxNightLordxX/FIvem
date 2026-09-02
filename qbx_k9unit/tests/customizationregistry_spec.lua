@@ -183,7 +183,8 @@ t.test('every Config.CommandTablet.ActionableFeatures key is a real Config.Featu
     -- would make the loop above pass vacuously.
     local count = 0
     for _ in pairs(Config.CommandTablet.ActionableFeatures) do count = count + 1 end
-    t.isTrue(count >= 20, ('sanity: only saw %d ActionableFeatures key(s) -- expected at least 20'):format(count))
+    -- FLOOR LOWERED 2026-09-02: twelve features were removed at the owner's request (61 -> 49 Config.Features keys), so the old floor could never be met again. It stays well above zero because its job is to catch an extraction pattern going stale and silently checking nothing -- not to pin the catalogue size.
+    t.isTrue(count >= 15, ('sanity: only saw %d ActionableFeatures key(s) -- expected at least 15'):format(count))
 end)
 
 -- ============================================================================
@@ -246,7 +247,7 @@ t.test('LOAD-BEARING DRIFT GUARD: every server/runtimecontrol.lua FEATURE_TIERS 
     -- matching nothing at all (a comment reformat, a rename of the local).
     local count = 0
     for _ in pairs(tierKeys) do count = count + 1 end
-    t.isTrue(count >= 56, ('sanity: only extracted %d FEATURE_TIERS key(s) from server/runtimecontrol.lua -- expected at least 56; the extraction pattern may be out of date'):format(count))
+    t.isTrue(count >= 45, ('sanity: only extracted %d FEATURE_TIERS key(s) from server/runtimecontrol.lua -- expected at least 45; the extraction pattern may be out of date'):format(count))
 end)
 
 -- ============================================================================
@@ -479,7 +480,7 @@ end)
 --- Every literal `HasPermission(<anything-without-a-comma>, 'block.<Name>')`
 --- call site across every file in SERVER_LUA_FILES -- deliberately anchored
 --- to the `HasPermission(` call shape (not a bare `block%.` text search) so
---- a PROSE MENTION of `block.Recall` in a comment (server/recall.lua's own
+--- a PROSE MENTION of `block.Recall` in a comment (the removed recall server file's own
 --- header explains at length why that exact permission key is deliberately
 --- never read) is never mistaken for a real enforcement call. Confirmed
 --- against every real call site in this codebase before writing this pattern
@@ -550,7 +551,7 @@ local DYNAMIC_BLOCK_COVERAGE = {
 -- does not invent a new design decision for any of these, it only encodes
 -- one that was already made and written down elsewhere.
 local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
-    -- ApprehensionAnnouncement (server/announce.lua, client/announce.lua) is
+    -- ApprehensionAnnouncement (the removed apprehension-announcement server file, the removed apprehension-announcement client file) is
     -- the "warn them before you release the dog" step: when on, a K9 must
     -- announce near a suspect to open a short window in which a bite or
     -- takedown against THAT suspect is permitted. It only ever makes
@@ -580,11 +581,11 @@ local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
     -- never this one quietly gaining a block path that reads backwards.
     ApprehensionAnnouncement = true,
 
-    -- server/recall.lua's own header (its "PER-PERSON FEATURE CONTROL ...
+    -- the removed recall server file's own header (its "PER-PERSON FEATURE CONTROL ...
     -- DELIBERATELY NOT IMPLEMENTED HERE" section, ~lines 51-70): Recall is
     -- this resource's one termination/escape-hatch path. IsValidPermissionKey
     -- happily accepts and stores a 'block.Recall' row (Recall is a real
-    -- Config.Features key) -- server/recall.lua deliberately never reads it,
+    -- Config.Features key) -- the removed recall server file deliberately never reads it,
     -- by name, on purpose, because gating the one path that lets a handler
     -- call their K9 off would reopen the exact "handler's K9 partner's
     -- certification revoked mid-bite, dog never called off" bug this whole

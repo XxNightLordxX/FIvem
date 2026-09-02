@@ -9,7 +9,7 @@
     instead of scattered across the resource -- unlike this codebase's
     OLDER precedent (client/movement.lua's camera toggle,
     client/agility.lua's vault, client/pursuitsprint.lua,
-    client/vision.lua's two toggles, client/defense.lua's confirm), which
+    client/vision.lua's two toggles, the removed handler-down-defense client file's confirm), which
     each pair their own RegisterCommand/RegisterKeyMapping call inline next
     to the function they wrap. Those five are NOT duplicated here -- they
     already have a working command + keybind pair and needed nothing from
@@ -42,7 +42,7 @@
                                              generalized to its most urgent
                                              case. RE-USES the EXISTING
                                              `k9recall` command
-                                             (client/recall.lua) -- see its
+                                             (the removed recall client file) -- see its
                                              own section below, this file
                                              adds ONLY the keybind half.
     Pursuit Sprint is the owner's other named example ("sprint") and
@@ -104,7 +104,7 @@
         CanShowK9UI()/DenyK9UIAccess() gate internally, so this file adds
         no second copy of that check.
       - k9recall    -> no new function at all; this file adds ONLY the
-        RegisterKeyMapping half for the command client/recall.lua ALREADY
+        RegisterKeyMapping half for the command the removed recall client file ALREADY
         registers (`k9recall` -> RequestRecall()). See that section below.
       - k9exitkennel -> ExitKennelRest() (client/kennel.lua) -- THIS PASS.
         The SAME function the new "Exit Kennel" item in client/radial.lua
@@ -116,7 +116,7 @@
     assumption -- by the time a player can actually press one of these
     keys, every client_scripts file has already finished loading; the
     guard exists so this file also degrades safely if ever loaded standalone,
-    e.g. under a future test harness, matching client/defense.lua's and
+    e.g. under a future test harness, matching the removed handler-down-defense client file's and
     client/radial.lua's own stated convention for the identical guard).
 
     THE ONE DISCLOSED EXCEPTION: k9bark below has NO existing shared

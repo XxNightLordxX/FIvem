@@ -69,12 +69,6 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 --- what makes the removal safe in the first place). If you add a key here,
 --- confirm that is true of its consumers before you do.
 local INTENTIONALLY_ABSENT = {
-    ScentTrailHunt = 'Removed outright, owner-approved, judged redundant with the '
-        .. 'scent-tracking action (see Config.Features\' own "REMOVED" block, '
-        .. 'README.md, and FEATURE_STRUCTURE_SPEC.md §2.2.1). client/scenttrail.lua '
-        .. 'and server/scenttrail.lua are kept intact and inert on purpose -- both '
-        .. 'top-level-return on this exact nil lookup -- so restoring it is a '
-        .. 'one-line config change and nothing else.',
 }
 
 --- Every distinct `Config.Features.<Name>` referenced from real source.
@@ -233,38 +227,6 @@ t.test('every INTENTIONALLY_ABSENT entry carries a real written reason, not a pl
             .. 'written down, so the next reader does not have to re-derive it')
         t.isFalse(reason:upper():find('TODO', 1, true) ~= nil, name .. "'s reason is a placeholder, not a decision")
     end
-end)
-
-t.test('THE CASE THAT PROMPTED THIS FILE: ScentTrailHunt is absent, allowlisted, and its consumers really do top-level-return on it', function()
-    -- Pins the specific shape that makes this removal safe rather than
-    -- broken: both files bail at the top on the nil lookup, so nothing
-    -- below runs half-initialised. If someone later moves that guard
-    -- deeper into either file, this fails and the removal needs re-checking.
-    t.isNil(shipped.ScentTrailHunt, 'sanity: still removed from config.lua')
-    t.isNotNil(INTENTIONALLY_ABSENT.ScentTrailHunt, 'sanity: still allowlisted')
-
-    -- The two halves guard themselves DIFFERENTLY, and both are correct:
-    --   client/scenttrail.lua top-level-returns, so the command and every
-    --     thread below it are never registered at all on any client.
-    --   server/scenttrail.lua registers its handlers and re-checks the flag
-    --     inside each one, which is the right shape server-side -- a
-    --     registered-but-refusing callback answers a spoofed call properly
-    --     instead of leaving the event name unhandled.
-    -- Asserting one shape for both would have been wrong, and did fail here
-    -- first time; each is pinned as what it actually is.
-    local clientHandle = assert(io.open('../client/scenttrail.lua', 'r'))
-    local clientText = clientHandle:read('a')
-    clientHandle:close()
-    t.isTrue(clientText:find('if not Config%.Features%.ScentTrailHunt then return end') ~= nil,
-        'client/scenttrail.lua must still bail at the top on the nil flag -- that top-level return is what '
-        .. 'makes the removal inert rather than half-loaded')
-
-    local serverHandle = assert(io.open('../server/scenttrail.lua', 'r'))
-    local serverText = serverHandle:read('a')
-    serverHandle:close()
-    t.isTrue(serverText:find('Config%.Features%.ScentTrailHunt') ~= nil,
-        'server/scenttrail.lua must still re-check the flag inside its handlers, so a call that reaches the '
-        .. 'server while the feature is off is refused rather than silently unhandled')
 end)
 
 -- ======================================================================
@@ -642,7 +604,7 @@ t.test('CONSTRAINT: no scenery ped this resource spawns may use a K9 model', fun
           what  = 'the equipment-shop attendant (client/equipmentshop.lua)' },
         { path = 'Config.SARCalls.missingPersonPedModel',
           value = shippedCfg.SARCalls and shippedCfg.SARCalls.missingPersonPedModel,
-          what  = 'the SAR missing-person victim (client/sarcalls.lua)' },
+          what  = 'the SAR missing-person victim (the removed SAR-calls client file)' },
     }
 
     local offenders = {}

@@ -1018,9 +1018,9 @@ function HasK9Access(source)
     -- releaseDrag, server/kennel.lua's requestExitKennel/requestPutDownKennel,
     -- server/propattachment.lua's own remove branch, server/fetch.lua's
     -- releaseFetchBall, server/main.lua's detachLeash,
-    -- server/training.lua's setTrainingMode(false), server/sarcalls.lua's
-    -- abandonSarCall, server/scentlineup.lua's k9lineupcancel,
-    -- server/scenttrail.lua's stopScentHunt) is UNCONDITIONAL and never
+    -- the removed training server file's setTrainingMode(false), the removed SAR-calls server file's
+    -- abandonSarCall, the removed scent-lineup server file's k9lineupcancel,
+    -- the removed scent-trail server file's stopScentHunt) is UNCONDITIONAL and never
     -- calls HasK9Access (or any block check) at all -- "gate the START of
     -- a thing, never the STOP", stated in those exact words across at
     -- least eight of those files' own comments. This block therefore

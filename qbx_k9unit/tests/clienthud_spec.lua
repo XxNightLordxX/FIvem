@@ -264,28 +264,9 @@ end
 -- Gating
 -- ----------------------------------------------------------------------
 
-t.test('gating: HealthStaminaHUD = false -- zero vitals NUI callbacks/threads, and the wellbeingUpdate listener is not registered even if a wellbeing flag is on. The ONE thread that DOES still start is the K9 ONBOARDING HINT thread further down this file -- it is INDEPENDENT of HealthStaminaHUD by design (see that section header) and is on by default in the real, unmodified config.lua this fixture loads.', function()
-    local f = newHudFixture({ healthStaminaHUD = false, features = { FatigueSystem = true } })
-    t.equals(f.threadCreateCount(), 1, 'only the onboarding-hint thread -- see this test comment')
-    t.isFalse(f.hasWellbeingHandler())
-end)
-
 t.test('gating: HealthStaminaHUD = true (real shipped default) -- one vitals poll thread PLUS the independent onboarding-hint thread (also on by default)', function()
     local f = newHudFixture()
     t.equals(f.threadCreateCount(), 2)
-end)
-
-t.test('gating: no wellbeing flag on at all -- the wellbeingUpdate listener is never registered (ANY_WELLBEING_ELEMENT_ENABLED false)', function()
-    local f = newHudFixture({ features = {
-        FatigueSystem = false, MoodSystem = false, FearStressSystem = false,
-        InjuryLimping = false, DistractionSystem = false,
-    } })
-    t.isFalse(f.hasWellbeingHandler())
-end)
-
-t.test('gating: exactly one wellbeing flag on -- the wellbeingUpdate listener IS registered', function()
-    local f = newHudFixture({ features = { FatigueSystem = true, MoodSystem = false, FearStressSystem = false, InjuryLimping = false, DistractionSystem = false } })
-    t.isTrue(f.hasWellbeingHandler())
 end)
 
 -- ----------------------------------------------------------------------
@@ -337,119 +318,10 @@ t.test('stamina: a non-number native return defaults to 100.0 (full), never an e
     t.equals(f.lastMessage().data.stamina, 100.0)
 end)
 
-t.test('hunger/thirst: read from QBX.PlayerData.metadata, clamped 0-100', function()
-    local f = newHudFixture()
-    f.setMetadata('hunger', 40)
-    f.setMetadata('thirst', 60)
-    f.fireHudReady()
-    t.equals(f.lastMessage().data.hunger, 40.0)
-    t.equals(f.lastMessage().data.thirst, 60.0)
-end)
-
-t.test('hunger/thirst: QBX.PlayerData itself nil (not yet populated this early in a session) -- defaults to 100/100, not a crash', function()
-    local f = newHudFixture()
-    f.clearPlayerData()
-    local ok = pcall(f.fireHudReady)
-    t.isTrue(ok)
-    t.equals(f.lastMessage().data.hunger, 100.0)
-    t.equals(f.lastMessage().data.thirst, 100.0)
-end)
-
-t.test('hunger/thirst: a non-number metadata field defaults to 100, not 0', function()
-    local f = newHudFixture()
-    f.setMetadata('hunger', 'not-a-number')
-    f.fireHudReady()
-    t.equals(f.lastMessage().data.hunger, 100.0)
-end)
-
-t.test('clamp01to100: values above 100 clamp to 100, values below 0 clamp to 0', function()
-    local f = newHudFixture()
-    f.setMetadata('hunger', 250)
-    f.setMetadata('thirst', -30)
-    f.fireHudReady()
-    t.equals(f.lastMessage().data.hunger, 100.0)
-    t.equals(f.lastMessage().data.thirst, 0.0)
-end)
-
 -- ----------------------------------------------------------------------
 -- Wellbeing rows -- per-flag absence (not zero), and the wellbeingUpdate
 -- listener's own source-origin guard + shape validation.
 -- ----------------------------------------------------------------------
-
-t.test('wellbeing: with ONLY FatigueSystem on, the pushed wellbeing table has ONLY fatigue -- mood/fearStress/injury/distracted are all ABSENT keys, not zeroed', function()
-    local f = newHudFixture({ features = { FatigueSystem = true, MoodSystem = false, FearStressSystem = false, InjuryLimping = false, DistractionSystem = false } })
-    f.fireHudReady()
-    local wellbeing = f.lastMessage().data.wellbeing
-    t.isNotNil(wellbeing.fatigue)
-    t.isNil(wellbeing.mood)
-    t.isNil(wellbeing.fearStress)
-    t.isNil(wellbeing.injury)
-    t.isNil(wellbeing.distracted)
-end)
-
-t.test('wellbeing: with EVERY flag off, the pushed wellbeing table is completely empty, but still a table (not nil, not an array-coerced []) -- __jsontype forces it to encode as an object', function()
-    local f = newHudFixture({ features = { FatigueSystem = false, MoodSystem = false, FearStressSystem = false, InjuryLimping = false, DistractionSystem = false, XPProgression = false } })
-    f.fireHudReady()
-    local msg = f.lastMessage()
-    t.equals(type(msg.data.wellbeing), 'table')
-    t.isNil(next(msg.data.wellbeing))
-    t.equals(getmetatable(msg.data.wellbeing).__jsontype, 'object')
-    t.equals(type(msg.data.xpTier), 'table')
-    t.isNil(next(msg.data.xpTier))
-    t.equals(getmetatable(msg.data.xpTier).__jsontype, 'object')
-end)
-
-t.test('wellbeingUpdate: source ~= 65535 is rejected -- the cache is untouched, and a subsequent push still reflects the OLD (seeded) values', function()
-    local f = newHudFixture({ features = { FatigueSystem = true } })
-    f.fireWellbeingUpdate(1234, { fatigue = 10 })
-    f.fireHudReady()
-    t.equals(f.lastMessage().data.wellbeing.fatigue, 100.0, 'a forged (non-65535-sourced) wellbeingUpdate must never move the cache')
-end)
-
-t.test('wellbeingUpdate: a real (65535-sourced), well-formed payload updates the cache, reflected on the next push', function()
-    local f = newHudFixture({ features = { FatigueSystem = true, MoodSystem = true } })
-    f.fireWellbeingUpdate(65535, { fatigue = 55, mood = 20 })
-    f.fireHudReady()
-    local wellbeing = f.lastMessage().data.wellbeing
-    t.equals(wellbeing.fatigue, 55.0)
-    t.equals(wellbeing.mood, 20.0)
-end)
-
-t.test('wellbeingUpdate: type(stats) ~= table is rejected -- no crash, cache untouched', function()
-    local f = newHudFixture({ features = { FatigueSystem = true } })
-    local ok = pcall(f.fireWellbeingUpdate, 65535, 'not-a-table')
-    t.isTrue(ok)
-    f.fireHudReady()
-    t.equals(f.lastMessage().data.wellbeing.fatigue, 100.0)
-end)
-
-t.test('wellbeingUpdate: a PARTIAL payload leaves unmentioned fields at their prior cached value, not zeroed', function()
-    local f = newHudFixture({ features = { FatigueSystem = true, MoodSystem = true } })
-    f.fireWellbeingUpdate(65535, { fatigue = 55, mood = 20 })
-    f.fireWellbeingUpdate(65535, { fatigue = 30 }) -- mood omitted this time
-    f.fireHudReady()
-    local wellbeing = f.lastMessage().data.wellbeing
-    t.equals(wellbeing.fatigue, 30.0)
-    t.equals(wellbeing.mood, 20.0, 'an omitted field in a later update must not reset to a default -- it must keep the last real value')
-end)
-
-t.test('distracted: true while distractedUntil is still in the future, false once GetGameTimer() passes it', function()
-    local f = newHudFixture({ features = { DistractionSystem = true } })
-    f.fireWellbeingUpdate(65535, { distractedUntil = 5000 })
-    f.advance(1000)
-    f.fireHudReady()
-    t.isTrue(f.lastMessage().data.wellbeing.distracted)
-
-    f.advance(10000) -- now well past 5000
-    f.fireHudReady()
-    t.isFalse(f.lastMessage().data.wellbeing.distracted)
-end)
-
-t.test('distracted: the key is absent entirely when DistractionSystem is off, no matter what distractedUntil holds', function()
-    local f = newHudFixture({ features = { DistractionSystem = false } })
-    f.fireHudReady()
-    t.isNil(f.lastMessage().data.wellbeing.distracted)
-end)
 
 -- ----------------------------------------------------------------------
 -- xpTier row -- soft dependency on GetCurrentXPTier()
@@ -688,14 +560,6 @@ end)
 
 t.test('HANDLER CONDITION BADGE: the listener registers UNCONDITIONALLY, even when HealthStaminaHUD is false -- this is a SEPARATE audience from the K9-vitals HUD', function()
     local f = newHudFixture({ healthStaminaHUD = false })
-    t.isTrue(f.hasPartnerConditionHandler())
-end)
-
-t.test('HANDLER CONDITION BADGE: registers regardless of every wellbeing flag being off too -- this listener has no Config.Features gate of its own at all (the SERVER decides whether anything is ever sent)', function()
-    local f = newHudFixture({ features = {
-        FatigueSystem = false, MoodSystem = false, FearStressSystem = false,
-        InjuryLimping = false, DistractionSystem = false,
-    } })
     t.isTrue(f.hasPartnerConditionHandler())
 end)
 

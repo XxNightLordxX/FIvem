@@ -2048,7 +2048,7 @@ end)
 --
 -- THE "NO WALLHACK" DESIGN TENSION, WEIGHED EXPLICITLY (qa-tester finding,
 -- this pass -- not silently left unwritten the way this resource's own
--- convention forbids): client/scenttrail.lua's header argues, at length,
+-- convention forbids): the removed scent-trail client file's header argues, at length,
 -- against "a menu that hands you the answer" (its own citation of the
 -- Batman/Witcher detective-vision criticism) and deliberately ships a
 -- SMALLER information surface than even THIS file's own Track Scent/Blood/

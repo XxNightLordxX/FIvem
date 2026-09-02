@@ -387,16 +387,16 @@
       searchContrabandFound/trackSourceResolved belong to
       server/search.lua/server/tracking.lua respectively, not here.
     - Calls IsApprehensionWarned(targetNetId), resource-global from
-      server/announce.lua, ONLY IF IT EXISTS (same runtime-existence-guard
+      the removed apprehension-announcement server file, ONLY IF IT EXISTS (same runtime-existence-guard
       convention as IsHesitating/IsDistracted immediately above — an absent
-      server/announce.lua, or one that failed to load, must mean "no
+      the removed apprehension-announcement server file, or one that failed to load, must mean "no
       restriction," never an error; this matches IsApprehensionWarned's own
       documented behavior of being fully permissive whenever
       Config.Features.ApprehensionAnnouncement is false, so a genuinely
       absent function and a present-but-disabled one both degrade the same
       way). WIRED THIS PASS — see ValidateCombatRequest's own inline comment,
       immediately before its final `return true`, for the actual call site.
-      server/announce.lua's own header (points 4-6) is the authority for
+      the removed apprehension-announcement server file's own header (points 4-6) is the authority for
       this feature's design; this file's ONLY job is to consult it at
       REQUEST time, for BiteAndHold/NonLethalTakedown alone (see that call
       site's own comment for why PropDragging is excluded) — never from
@@ -404,7 +404,7 @@
       releaseBiteHold/releaseTakedown/releaseDrag, so a warning window
       lapsing mid-hold can never strand an already-open hold or block a
       release. BEFORE THIS PASS: IsApprehensionWarned existed, was fully
-      tested in isolation (tests/announce_spec.lua), and was called by
+      tested in isolation (the removed apprehension-announcement spec), and was called by
       NOTHING — turning Config.Features.ApprehensionAnnouncement on had zero
       effect on whether a bite/takedown actually succeeded. Found and fixed
       this pass, reported upstream as a real user-facing gap (an owner who
@@ -668,8 +668,8 @@ local K9PositionHistory = {}
 -- top-level load time -- which does not just disable that one cooldown, it
 -- aborts this entire file's execution from that line onward, silently
 -- un-defining EndActiveEffectForHolder (near the bottom of this file, this
--- codebase's own termination primitive server/recall.lua and
--- server/training.lua both depend on) along with every
+-- codebase's own termination primitive the removed recall server file and
+-- the removed training server file both depend on) along with every
 -- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent below it.
 -- ResolveConfiguredThresholdMs (server/cooldowns.lua, see that file's header
 -- ADDENDUM for the full incident) resolves each value to something always
@@ -1172,7 +1172,7 @@ local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
     -- server/medkit.lua, server/inventory.lua, etc. all call it bare; a
     -- couple of call sites add a defensive `type(K9Compat) == 'table'`
     -- belt-and-suspenders check on top for other reasons -- see server/
-    -- integrations.lua's/server/scentlineup.lua's own comments on THAT --
+    -- integrations.lua's/the removed scent-lineup server file's own comments on THAT --
     -- but none of them add a pcall around the call itself, because none
     -- need one). This function's own boolean contract (no third "unknown"
     -- state) is exactly why `true`/`false` short-circuit here but `nil`
@@ -1258,10 +1258,11 @@ local COMBAT_REJECT_MESSAGES = {
     -- running; this refuses a bite/drag while a SEARCH is running, and the
     -- dog is equally busy either way.
     busy_searching     = locale('combat.blocked_while_searching'),
-    -- Byte-identical to client/defense.lua's own already_engaged rejection
-    -- (confirmed by reading both texts before reusing) — reused rather than
-    -- minted as a new combat.already_engaged duplicate.
-    already_engaged    = locale('defense.already_engaged'),
+    -- Was borrowed from the handler-down-defense locale group until
+    -- 2026-09-02, when that feature (and its whole group) was removed at the
+    -- owner's request. Combat is the only remaining consumer, so the exact
+    -- same sentence now lives under combat's own namespace where it belongs.
+    already_engaged    = locale('combat.already_engaged'),
     offline            = locale('combat.offline'),
     self_target        = locale('combat.self_target'),
     target_not_downed  = locale('combat.target_not_downed'),
@@ -1704,8 +1705,8 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- unrelated reason.
     --
     -- SECURITY, READ BEFORE CHANGING THIS BLOCK (coder-security, config-audit
-    -- follow-up pass): this is a HARD reject driven by IsHesitating(), and
-    -- IsHesitating() is driven by a payload-less, forgeable client event
+    -- follow-up pass): this is a HARD reject driven by the removed hesitation check, and
+    -- the removed hesitation check is driven by a payload-less, forgeable client event
     -- (server/wellbeing.lua's own header, 'relayWeaponFire') — CONFIRMED
     -- this pass to be forgeable by ANY connected player who is merely
     -- physically near the K9 whose hesitation they want to force, not just
@@ -1720,9 +1721,9 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- every episode is guaranteed to be followed by a window where this
     -- check passes again. That bound lives entirely in server/wellbeing.lua;
     -- this file does not need its own copy of that logic, only needs to
-    -- keep trusting IsHesitating()'s return value at face value, same as
+    -- keep trusting the removed hesitation check's return value at face value, same as
     -- today. If this reject is ever softened into a penalty instead of an
-    -- outright denial, or IsHesitating() gains real corroboration, update
+    -- outright denial, or the removed hesitation check gains real corroboration, update
     -- server/wellbeing.lua's own IsHesitating doc comment in the same pass.
     if type(IsHesitating) == 'function' or type(IsDistracted) == 'function' then
         local k9Player = exports.qbx_core:GetPlayer(src)
@@ -1931,7 +1932,7 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See this
     -- file's own header FILE-TO-FILE CONTRACT entry for IsApprehensionWarned
     -- for the full "was defined, tested, and called by nothing" writeup this
-    -- closes. server/announce.lua's own header, points 4-6, is the design
+    -- closes. the removed apprehension-announcement server file's own header, points 4-6, is the design
     -- authority this implements:
     --   - BiteAndHold/NonLethalTakedown ONLY, via the SAME featureKey guard
     --     TierCapabilityPermits above already uses for an identical
@@ -1939,7 +1940,7 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     --     must already be downed (opts.requireAlive == false, PropDragging's
     --     own precondition) -- pulling an already-subdued person is not a
     --     fresh use-of-force decision a verbal warning is meant to precede,
-    --     and folding it in here would silently widen what server/announce.lua's
+    --     and folding it in here would silently widen what the removed apprehension-announcement server file's
     --     own header calls a purely restrictive, apprehension-specific check
     --     into a mechanic its design was never scoped to cover.
     --   - PLACED LAST, deliberately, not alongside the early TierCapabilityPermits
@@ -1952,7 +1953,7 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     --     the wrong lesson.
     --   - Soft dependency (`type(IsApprehensionWarned) == 'function'`), same
     --     convention as IsHesitating/IsDistracted above -- an absent
-    --     server/announce.lua is "no restriction," never an error.
+    --     the removed apprehension-announcement server file is "no restriction," never an error.
     --   - REQUEST-TIME ONLY, exactly like every other check in this
     --     function (see this function's own doc comment) -- ValidateCombatRequest
     --     is only ever called to OPEN a hold, never from EndHold,
@@ -2177,12 +2178,12 @@ end
 --- Resource-global (no `local`) accessor exposed for OTHER files that need
 --- to unconditionally end whatever engagement (bite/takedown/drag) a K9 is
 --- CURRENTLY the HOLDER of, regardless of who is asking or that K9's own
---- current certification/access state. server/recall.lua's Recall actor
+--- current certification/access state. the removed recall server file's Recall actor
 --- (DEVELOPER_REFERENCE.md §12.5.1, §12.0 item 7's "Recall actor" consumer) is this
 --- function's one intended caller today -- resolved through the SAME
 --- `type(...) == 'function'` runtime-existence-guard convention this file
 --- already uses for IsHesitating/IsDistracted/AwardXP (see FILE-TO-FILE
---- CONTRACT above), never a load-order assumption, since server/recall.lua's
+--- CONTRACT above), never a load-order assumption, since the removed recall server file's
 --- own position in fxmanifest.lua's server_scripts relative to THIS file is
 --- not, and should not need to be, load-bearing.
 ---
@@ -2192,7 +2193,7 @@ end
 --- requires that a K9 whose certification is revoked, or whose feature flag
 --- is toggled off, mid-engagement can still be called off; gating this
 --- function on either would reintroduce exactly the trap that guarantee
---- forbids. The caller (server/recall.lua) is responsible for its OWN
+--- forbids. The caller (the removed recall server file) is responsible for its OWN
 --- authorization (verifying the requester is genuinely `holderSrc`'s
 --- established partner, per server/partnership.lua) -- this function's own
 --- contract is narrower and unconditional: "does this holder have an active
@@ -2871,7 +2872,7 @@ end)
 -- creation itself (rather than looping forever just to no-op every tick)
 -- costs nothing.
 --
--- POLL-INTERVAL VALIDATION (audit follow-up, same shape server/defense.lua's
+-- POLL-INTERVAL VALIDATION (audit follow-up, same shape the removed handler-down-defense server file's
 -- own pollIntervalMs fix just addressed there, see that file's own comment
 -- and server/cooldowns.lua's header ADDENDUM): positionSampleWindowMs feeds
 -- a bare `Wait()` directly, never NewCooldown/ResolveConfiguredThresholdMs,

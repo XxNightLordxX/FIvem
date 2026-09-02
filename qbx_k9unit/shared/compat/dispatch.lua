@@ -36,7 +36,7 @@
     integrations.lua's PollK9Health -- placed immediately AFTER (never
     instead of) the existing `FireOutboundEvent('qbx_k9unit:events:k9Down',
     ...)` call, guarded the same `type(K9Compat) == 'table' and
-    type(K9Compat.Get) == 'function'` way server/scentlineup.lua guards its
+    type(K9Compat.Get) == 'function'` way the removed scent-lineup server file guards its
     own K9Compat.Get('framework') call, so both fire from the exact same
     detection episode and a missing K9Compat degrades to "the convenience
     layer did nothing," never a thrown error. `title` there is a plain
@@ -287,7 +287,7 @@ end
 
 --- Accepts either a real CFX vector3 (type() genuinely reports the string
 --- 'vector3' for one -- this is not a guess, it is this resource's own
---- already-established idiom, see server/training.lua's identical
+--- already-established idiom, see the removed training server file's identical
 --- `type(coords) ~= 'table' and type(coords) ~= 'vector3'` check) or a
 --- plain `{ x = , y = , z = }` table, for a caller that built one by hand
 --- rather than via the `vector3(...)` constructor. Anything else -> nil.

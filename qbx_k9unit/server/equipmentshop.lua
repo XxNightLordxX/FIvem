@@ -1517,13 +1517,13 @@ end
 --- Command has blocked you" for either of those is not just imprecise,
 --- it is WRONG -- it blames a person for a decision nobody made about
 --- them individually. Every sibling feature with this same three-way
---- shape (server/pursuitsprint.lua, server/scenttrail.lua,
---- server/sarcalls.lua, server/scentlineup.lua, server/findalert.lua)
+--- shape (server/pursuitsprint.lua, the removed scent-trail server file,
+--- the removed SAR-calls server file, the removed scent-lineup server file, server/findalert.lua)
 --- already returns a `reason` string so its call sites can word each
 --- refusal accurately instead of blaming a person; this function now does
 --- the same. (Filename corrected 2026-08-31: this list previously named a
 --- `server/sar` file that has never existed -- the real SAR file is
---- `server/sarcalls.lua`, above. The dead name is not written out in full
+--- `the removed SAR-calls server file`, above. The dead name is not written out in full
 --- because tests/citationintegrity_spec.lua sweeps every path in the repo,
 --- so quoting one to correct it puts it back. The same pass also checked
 --- the claim itself

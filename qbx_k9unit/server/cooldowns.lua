@@ -206,7 +206,7 @@
     at its shipped value): server/combat.lua throws at its own
     `BiteHoldCooldown = NewCooldown(...)` line and takes
     EndActiveEffectForHolder down with it — the termination primitive
-    server/recall.lua and server/training.lua both depend on, and this
+    the removed recall server file and the removed training server file both depend on, and this
     codebase's own documented "never let this become unreachable" guarantee
     — along with every BiteAndHold/NonLethalTakedown/PropDragging net event
     in that file. A single mis-set Config number must never be able to
@@ -221,7 +221,7 @@
     NewNestedCooldown as the constructor default. Applied at the following
     re-derived 11 call sites: server/combat.lua (x4: BiteHoldCooldown,
     TakedownCooldown, TakedownTargetCooldown, BiteHoldTargetCooldown),
-    server/defense.lua (x2: AttackerReportCooldown, DefenseTriggerCooldown),
+    the removed handler-down-defense server file (x2: AttackerReportCooldown, DefenseTriggerCooldown),
     server/fetch.lua (x2: ThrowCooldown, PickupCooldown — the latter's old
     `Config.FetchMechanic.pickupCooldownMs or 500` idiom is REPLACED here,
     not layered under, since `0 or 500` evaluates to `0` in Lua and never
@@ -278,7 +278,7 @@
 --- setting a cooldown Config field to `0` meaning "no throttle" instead
 --- silently got "blocked forever", because `0 or 500`-style fallback
 --- idioms treat 0 as present (0 is truthy in Lua) and this file's own
---- :IsOnCooldown then fails closed on it. server/recall.lua already
+--- :IsOnCooldown then fails closed on it. the removed recall server file already
 --- worked around this independently for Config.Recall.RequestCooldownMs
 --- (falls back to a built-in constant and prints a warning rather than
 --- trusting a raw non-positive config read) — this constructor-time guard

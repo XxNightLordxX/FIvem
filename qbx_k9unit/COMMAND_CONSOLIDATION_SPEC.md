@@ -100,7 +100,7 @@ This is a real, intentional "gate the start, never the stop" pattern, not
 an oversight — preserve it exactly: only `throw` gets the `HasK9Access()`
 pre-check in the merged dispatcher.
 
-### lineup (3 -> 1) — `server/scentlineup.lua`
+### lineup (3 -> 1) — `the removed scent-lineup server file`
 | command | gate |
 |---|---|
 | k9lineup | `Config.Features.ScentLineup` + `HasK9Access(src)` + `CanUseScentLineup(src)` permission grant |
@@ -120,7 +120,7 @@ Still worth merging — just: dispatch on the subcommand keyword FIRST, then
 run that subcommand's own original gate (or lack thereof) unchanged, with
 zero shared pre-check.
 
-### training (3 -> 1) — `client/training.lua`
+### training (3 -> 1) — `the removed training client file`
 | command | gate |
 |---|---|
 | k9training on | `HasK9Access()` client courtesy check |
@@ -130,7 +130,7 @@ zero shared pre-check.
 
 Same "gate the start, not the stop" shape as fetch. `trainingModeActive` is
 a precondition, not an authorization check — real server-side authorization
-for the drill events lives in `server/training.lua` (re-checks
+for the drill events lives in `the removed training server file` (re-checks
 `HasK9Access(src)` + a per-person feature grant). Client-only merge, low
 risk: worst case of a mistake here is a UX regression, not a privilege
 escalation, because the server re-validates independently either way.
@@ -333,9 +333,9 @@ live in those files right now.
 | 1 | audit (5->1) | `server/admin.lua`, `client/commandsuggestions.lua`, `html/tablet.js`, `locales/en.json`, `tests/commandsuggestions_spec.lua`, `tests/commandreferenceregistry_spec.lua` | No | Uniform gate, no client dependency on old names. Safest first commit — also proves out the hidden-alias allowlist mechanism (§3) once, cheaply, before reusing it 7 more times. |
 | 2 | dog record (2->1) | `server/dogcharacter.lua` + the same 4 shared support files as #1 | No | Uniform gate, ships the `ResolveTargetCitizenId`-style rule §2 leans on elsewhere. |
 | 3 | fetch (3->1) | `client/fetch.lua` + shared support files | No | Client-only, server re-validates independently either way. |
-| 4 | training (3->1) | `client/training.lua` + shared support files | No | Client-only, same reasoning as #3. |
+| 4 | training (3->1) | `the removed training client file` + shared support files | No | Client-only, same reasoning as #3. |
 | 5 | kennel (additive, not a replace) | `client/kennel.lua`, `client/keybinds.lua` (comment/doc only, no removal), + shared support files | No | Do this AFTER #3/#4 land cleanly once, since it's the one family whose "merge" shape is genuinely different (§1) — easier to get right once the pattern for the others is proven. |
-| 6 | lineup (3->1) | `server/scentlineup.lua` + shared support files | No | Highest in-family risk (§1's mismatched-gate warning) — sequence after #1-#5 so the hidden-alias + per-subcommand-gate pattern is already well-exercised before tackling the one family where getting it wrong breaks (not widens) access. |
+| 6 | lineup (3->1) | `the removed scent-lineup server file` + shared support files | No | Highest in-family risk (§1's mismatched-gate warning) — sequence after #1-#5 so the hidden-alias + per-subcommand-gate pattern is already well-exercised before tackling the one family where getting it wrong breaks (not widens) access. |
 | 7 | permissions (2->1) | `server/permissions.lua` + shared support files | **YES** (`server/permissions.lua`) | Uniform gate, low design risk — held back purely because the file is hot. |
 | 8 | online/offline pairs (10->5) + the tablet:decertify fix (§6) | `server/certifications.lua`, `client/tablet.lua` + shared support files | **YES** (both) | Biggest win, and now also carries the decertify bugfix. Do this last, in its own commit(s) separate from the bugfix if possible, once `server/certifications.lua`/`client/tablet.lua` are free. |
 

@@ -527,7 +527,7 @@ if ONBOARD_CFG.enabled ~= false then
     -- uses inside its own menus, not during ordinary on-foot/vehicle play,
     -- and one none of this resource's own RegisterKeyMapping defaults
     -- (H/J/K/I and friends -- client/vision.lua, client/keybinds.lua,
-    -- client/announce.lua, client/recall.lua) ever claim. Change
+    -- the removed apprehension-announcement client file, the removed recall client file) ever claim. Change
     -- Config.K9Onboarding.dismissControl (and its matching
     -- dismissControlLabel, shown in the hint text itself) if this ever
     -- turns out to collide with something else on your own server.
@@ -746,10 +746,6 @@ local JSON_FORCE_OBJECT_MT = { __jsontype = 'object' }
 -- appears when its own feature is enabled.
 local WELLBEING_ELEMENT_ENABLED = {
     fatigue = Config.Features.FatigueSystem,
-    mood = Config.Features.MoodSystem,
-    fearStress = Config.Features.FearStressSystem,
-    injury = Config.Features.InjuryLimping,
-    distraction = Config.Features.DistractionSystem,
 }
 local ANY_WELLBEING_ELEMENT_ENABLED = WELLBEING_ELEMENT_ENABLED.fatigue
     or WELLBEING_ELEMENT_ENABLED.mood

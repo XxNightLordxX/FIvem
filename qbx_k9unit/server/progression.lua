@@ -1270,7 +1270,7 @@ end
 --
 --   ENFORCED, NOT JUST DOCUMENTED: tests/medkit_spec.lua and
 --   tests/kennel_spec.lua each carry a SOURCE AUDIT test (mirroring
---   tests/recall_spec.lua's own "SOURCE AUDIT" precedent) that fails the
+--   the removed recall spec's own "SOURCE AUDIT" precedent) that fails the
 --   moment AwardHandlerXP('handlerTreatK9'/'handlerKennelDeploy') actually
 --   appears in server/medkit.lua/server/kennel.lua UNLESS that same file
 --   also names a dedicated *_XP_MINT_COOLDOWN tracker (the

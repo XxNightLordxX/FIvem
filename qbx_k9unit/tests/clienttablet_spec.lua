@@ -1569,14 +1569,6 @@ t.test('PropDragging (Start branch) CONTROL: a caller with NO K9 access at all i
     t.equals(f.denyCalls(), 1)
 end)
 
-t.test('Recall: fully ungated and unconditional, exactly like radial.lua', function()
-    local f = newTabletFixture({ canShowK9UI = false, hasK9Access = false })
-    local result = f.callNui('tablet:triggerFeature', { feature = 'Recall' })
-    t.isTrue(result.ok)
-    t.equals(#f.calls['RequestRecall'], 1)
-    t.equals(f.denyCalls(), 0)
-end)
-
 t.test('ThermalVision: fully self-gating passthrough -- this file never consults CanShowK9UI/HasK9Access for it at all', function()
     local f = newTabletFixture()
     local result = f.callNui('tablet:triggerFeature', { feature = 'ThermalVision' })
@@ -1603,17 +1595,11 @@ t.test('FetchMechanic (carrying already): releases ungated', function()
     t.equals(#f.calls['ReleaseFetchBall'], 1)
 end)
 
-t.test('HandlerDownDefense: always confirms "bite" (the documented single-button default), gated', function()
-    local f = newTabletFixture()
-    f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
-    t.equals(f.calls['ConfirmHandlerDownDefense'][1][1], 'bite')
-end)
-
 -- THIS PIN WAS FLIPPED. It used to assert the OPPOSITE -- that a High
 -- Command/autoAccessGrade holder is denied here -- on the stated grounds
--- that ConfirmHandlerDownDefense() re-gated on the full CanShowK9UI()
+-- that the removed handler-down-defense confirm function re-gated on the full CanShowK9UI()
 -- combinator anyway, so widening this wrapper would be a no-op. That was
--- true when written and became false when client/defense.lua's own gate was
+-- true when written and became false when the removed handler-down-defense client file's own gate was
 -- widened to HasK9Access() alone. The pin then outlived its own premise and
 -- started defending the bug: this wrapper's pre-check was, by then, the ONLY
 -- thing refusing, one layer above an already-correct callee.
@@ -1621,30 +1607,6 @@ end)
 -- A test whose justification has quietly expired is worse than no test,
 -- because it reads as a deliberate decision. When the reasoning in a pin's
 -- own name stops matching the code, the pin must be re-derived, not trusted.
-t.test('HandlerDownDefense WIDENED: a High Command/autoAccessGrade holder (HasK9Access true, CanShowK9UI false) reaches ConfirmHandlerDownDefense -- the callee gates on HasK9Access() alone now, matching server/combat.lua ValidateCombatRequest, so this wrapper must not refuse ahead of it', function()
-    local f = newTabletFixture({ canShowK9UI = false, hasK9Access = true })
-    local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
-    t.isTrue(result.ok)
-    t.equals(#(f.calls['ConfirmHandlerDownDefense'] or {}), 1, 'the call must actually reach the shared function')
-    t.equals(f.calls['ConfirmHandlerDownDefense'][1][1], 'bite')
-    t.equals(f.denyCalls(), 0, 'this wrapper must not deny -- the callee owns the refusal and its message')
-end)
-
-t.test('CONTROL: HandlerDownDefense still reaches the shared function for an ordinary certified K9 too -- proving the test above is not passing merely because the wrapper now does nothing at all', function()
-    local f = newTabletFixture({ canShowK9UI = true, hasK9Access = true })
-    local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
-    t.isTrue(result.ok)
-    t.equals(#(f.calls['ConfirmHandlerDownDefense'] or {}), 1)
-end)
-
-t.test('CONTROL: refusal is the CALLEE\'s job, not this wrapper\'s -- with ConfirmHandlerDownDefense absent entirely (the soft-dependency case this file guards for everywhere), the wrapper reports not_available rather than silently claiming success', function()
-    local f = newTabletFixture({ canShowK9UI = true, hasK9Access = true })
-    f.env.ConfirmHandlerDownDefense = nil
-    local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
-    t.isFalse(result.ok)
-    t.equals(result.error, 'not_available')
-end)
-
 t.test('HandlerPartnership: toggles exactly like Leash -- partnered releases ungated, else attempts + seam-guarded', function()
     local f = newTabletFixture()
     f.setQueryState('isPartnered', true)

@@ -408,15 +408,6 @@ t.test('LOAD-BEARING: SetFeature(true) on a tier=rawtoplevel feature (FetchMecha
     t.equals(result.tier, 'rawtoplevel')
 end)
 
-t.test('a tier=rawtoplevel feature reports restartRequired+configEditRequired for OFF too (Recall, on by default -- the termination-path case)', function()
-    local f = boot({ config = { Features = { RuntimeFeatureControl = true, TabletTheming = true, HighCommand = true, Recall = true }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
-    f.env.IsHighCommand = function() return true end
-    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'Recall', false)
-    t.isTrue(result.ok)
-    t.isFalse(result.appliedLive, 'Recall genuinely does not stop once registered -- OFF must not be reported as live either')
-    t.isTrue(result.configEditRequired)
-end)
-
 t.test('LOAD-BEARING: ResetFeature on a tier=onstart feature reports restartRequired, matching SetFeature\'s own tier-awareness (regression test for the reset/set asymmetry this pass fixed)', function()
     local f = boot()
     f.env.IsHighCommand = function() return true end
@@ -731,7 +722,7 @@ end)
 -- above loads ONLY server/cooldowns.lua + server/runtimecontrol.lua, per
 -- this file's own header) -- every test below injects a stand-in directly
 -- onto `f.env`, the SAME "runtime-existence-guarded soft dependency"
--- pattern tests/recall_spec.lua/tests/certifications_spec.lua already use
+-- pattern the removed recall spec/tests/certifications_spec.lua already use
 -- for `f.env.EndActiveEffectForHolder`.
 -- ============================================================================
 
@@ -876,20 +867,6 @@ t.test('ResetFeature is symmetric with SetFeature on active-usage confirmation: 
     local confirmedReset = f3.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'DeployableKennel', 'DeployableKennel')
     t.isTrue(confirmedReset.ok)
     t.isFalse(f3.env.Config.Features.DeployableKennel)
-end)
-
-t.test('DELIBERATE EXCLUSION, verified: TrainingMode is tier=rawtoplevel (a live toggle already does nothing this session) and is NEVER active-usage-gated, even when a drill is reported running -- an honest confirmation-free toggle beats a dishonest one', function()
-    local f = bootWithActiveUsageFeatures()
-    f.env.IsHighCommand = function() return true end
-    -- Even if some future file exposed a training-session counter, THIS
-    -- feature must not consult it -- TrainingMode is intentionally absent
-    -- from ACTIVE_USAGE_FEATURES. Nothing to stub; this proves the ABSENCE
-    -- of a gate, not merely an untriggered one.
-
-    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'TrainingMode', false)
-    t.isTrue(result.ok, 'TrainingMode must apply (config.lua-edit-required, but never gated) with no confirm argument at all')
-    t.isNil(result.lockoutRisk, 'TrainingMode is not a lockoutRisk feature by either mechanism')
-    t.isFalse(f.env.Config.Features.TrainingMode)
 end)
 
 t.test('runtimeListFeatures: a currently-OFF feature never shows active-usage lockoutRisk even if a stray count exists -- nothing pending to disable, so no warning is owed', function()
@@ -1627,7 +1604,13 @@ t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against t
     -- runtimefeaturetiers_spec.lua's own ">= 56" sanity floor for the
     -- identical reason (a loadfile typo silently producing a near-empty
     -- table would otherwise make the loop above pass vacuously).
-    t.isTrue(#listed.tunables >= 105, ('sanity: only saw %d tunable(s) registered -- expected at least 105 after this pass\'s owner-directed expansion (HighCommand.*/XP.*/CertificationExpiry*)'):format(#listed.tunables))
+    -- FLOOR LOWERED 105 -> 85 on 2026-09-02: the 21 Wellbeing.Mood /
+    -- FearStress / Distraction / Injury / Hunger / Thirst tunables were
+    -- deleted with the subsystems that owned them. The floor still exists
+    -- for its original reason -- a loadfile typo producing a near-empty
+    -- registry would make the loop above pass vacuously -- so it stays high
+    -- enough to catch that, just not higher than the registry now is.
+    t.isTrue(#listed.tunables >= 85, ('sanity: only saw %d tunable(s) registered -- expected at least 85'):format(#listed.tunables))
 end)
 
 t.test('RESOLVED: K9Medkit.cooldownMs is now safely exposed as a tunable -- server/medkit.lua\'s own StartSweep prune window (staleAfterMs) used to be a captured-once-at-load local, not a fresh Config read, so a LIVE RAISE of this value would have been silently undermined by the sweep evicting the tracker entry using the OLD, now-too-short window; that gap is closed (ResolveMedkitBaseCooldownMs is now called fresh both by the per-request gate AND every sweep tick), so the old "must never be exposed" pinning would now just be asserting a bug that no longer exists', function()
@@ -1677,9 +1660,6 @@ t.test('every out-of-range rejection for a newly-added tunable still names the e
     local r1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'K9DownDispatch.minDurationMs', -1)
     t.isFalse(r1.ok); t.equals(r1.reason, 'out_of_range'); t.equals(r1.min, 0)
 
-    f.fakeNow.value = f.fakeNow.value + 2000
-    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Injury.deathRespawnRestoreAmount', 101)
-    t.isFalse(r2.ok); t.equals(r2.reason, 'out_of_range'); t.equals(r2.max, 100)
 
     f.fakeNow.value = f.fakeNow.value + 2000
     local r3 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Combat.BiteAndHold.maxDurationMs', 4999)

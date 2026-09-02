@@ -197,11 +197,11 @@ client_scripts {
     -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
     -- immediately above: a K9's own player, not an automatic detector,
     -- deliberately warning their partnered handler. See
-    -- server/dangerwarn.lua's own header for the full design. No hard
+    -- the removed danger-warn server file's own header for the full design. No hard
     -- load-order requirement -- CanShowK9UI/DenyK9UIAccess (client/main.lua)
     -- and PlayK9Sound (client/audio.lua, behind a runtime existence guard)
     -- are both reached only at CALL time, never at file-load time. Placed
-    -- here purely for topical grouping with client/defense.lua, the other
+    -- here purely for topical grouping with the removed handler-down-defense client file, the other
     -- half of this pair.
     'client/propattachment.lua', -- R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/leashvisual.lua',    -- Makes the leash mechanic (client/movement.lua, server/main.lua) actually visible: a rendered rope between handler and K9 for the whole leash duration, plus a leash-handle prop on the handler's own hand. Loaded AFTER client/propattachment.lua deliberately, same "reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy" reasoning as client/fetch.lua's own placement note directly below -- no hard load-order requirement either (global-function resolution is at CALL time, not load time, per every other file's note in this list), kept here purely for consistency with that established convention. Adds no new event to client/movement.lua's or server/main.lua's contract -- it registers its OWN second handler for the SAME 'qbx_k9unit:client:leashAttached'/'qbx_k9unit:client:leashDetached' events client/movement.lua already handles (RegisterNetEvent supports multiple independent handlers per event name), and introduces this resource's first entity-scoped statebag (read: client/leashvisual.lua's own header "BYSTANDER VISIBILITY" section) so a rope is visible to nearby bystanders too, not just the two leash participants -- entirely self-contained; neither movement.lua nor server/main.lua was touched.
@@ -216,17 +216,17 @@ client_scripts {
     -- (client/combat.lua's BiteAndHold/NonLethalTakedown/PropDragging were
     -- radial-only), plus Sit/Bark (the owner's own named fast-action
     -- examples) and a keybind for the pre-existing `k9recall` command
-    -- (client/recall.lua). SOFT dependency only -- every cross-file call is
+    -- (the removed recall client file). SOFT dependency only -- every cross-file call is
     -- behind this resource's standard `type(fn) == 'function'` guard, not a
     -- load-order assumption (see that file's own header) -- placed here,
-    -- after client/recall.lua, purely for readability: recall.lua is the
+    -- after the removed recall client file, purely for readability: recall.lua is the
     -- LATEST-loading of this file's three direct dependencies
     -- (client/combat.lua loads much earlier, client/movement.lua earlier
     -- still), so this groups with the last of them rather than splitting
     -- across the list.
     'client/keybinds.lua',
     -- APPREHENSION ANNOUNCEMENT (Config.Features.ApprehensionAnnouncement),
-    -- client half -- see server/announce.lua's own header for the full
+    -- client half -- see the removed apprehension-announcement server file's own header for the full
     -- design writeup. Registers its OWN RegisterCommand+RegisterKeyMapping
     -- pair ('k9announce') rather than extending client/keybinds.lua, same
     -- "each mechanic owns its own file" convention every other Phase 3+
@@ -465,7 +465,7 @@ server_scripts {
     -- ForEachNearbyPlayer (server/search.lua, loaded LATER in this list)
     -- are all behind `type(...) == 'function'` runtime existence guards, so
     -- none of this is a hard ordering requirement beyond cooldowns.lua --
-    -- placed here purely for topical grouping with server/defense.lua, the
+    -- placed here purely for topical grouping with the removed handler-down-defense server file, the
     -- other half of this pair. Never sends an exact coordinate, entity, or
     -- identity of any third party to any client -- see that file's own
     -- header "THE ONE PIECE OF INFORMATION THIS FILE ACTUALLY SENDS".
@@ -551,7 +551,7 @@ server_scripts {
     -- file's IsApprehensionWarned is the SAME guarded shape, so load order
     -- between this file and server/combat.lua does not matter either;
     -- placed immediately after it purely for topical grouping, same
-    -- reasoning server/recall.lua's own placement note (below) already
+    -- reasoning the removed recall server file's own placement note (below) already
     -- gives for itself.
     -- Recall (server half) -- the handler's escape hatch, ending
     -- whatever active effect their partnered K9 holds. Loaded after

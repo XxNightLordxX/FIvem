@@ -5,7 +5,7 @@
     client/pursuitsprint.lua against the REAL, unmodified production files
     (PROJECT_HISTORY.md §5, "Pursuit sprint"). One file, per this task's own file
     allowlist -- server-side tests first, client-side tests second, each
-    with its own fixture builder, mirroring how tests/defense_spec.lua and
+    with its own fixture builder, mirroring how the removed handler-down-defense spec and
     tests/clientagility_spec.lua are each structured internally even though
     this suite keeps server/client specs in separate files everywhere else.
 
@@ -13,10 +13,10 @@
     server/entities.lua (mirrors tests/combat_spec.lua's own convention of
     loading entities.lua for real rather than hand-stubbing
     ResolveNetworkEntity/ResolveConnectedPlayerFromPed, since this feature
-    -- unlike server/recall.lua, which never calls either -- genuinely
+    -- unlike the removed recall server file, which never calls either -- genuinely
     depends on their real resolution logic), then the real
     server/pursuitsprint.lua on top. `Config` is a small, hand-built table
-    (mirroring tests/recall_spec.lua/tests/combat_spec.lua's own
+    (mirroring the removed recall spec/tests/combat_spec.lua's own
     convention for a feature file with many independent knobs), NOT the
     real config.lua -- Config.Features.PursuitSprint/Config.PursuitSprint/
     Config.FeatureControl.RequireGrant.PursuitSprint do not exist in the
@@ -256,7 +256,7 @@ local function newServerFixture(opts)
         setPedCoords = function(entity, x, y, z) pedCoords[entity] = vec3(x, y, z) end,
         --- Dispatches the real captured 'qbx_k9unit:server:requestPursuitSprint'
         --- handler with `env.source` set to `src`, mirroring
-        --- tests/recall_spec.lua's own `dispatch` helper exactly. Accepts
+        --- the removed recall spec's own `dispatch` helper exactly. Accepts
         --- (and forwards) any EXTRA trailing arguments beyond targetNetId --
         --- the real handler's own signature is `function(targetNetId)`, so
         --- Lua silently discards anything past the first argument, exactly

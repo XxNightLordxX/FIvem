@@ -303,7 +303,7 @@ local function newFixture(opts)
     local function GetEntityModel(_ped) return 55555 end -- arbitrary "current live model" hash for PlayerLoaded's capture path
 
     -- K9 IDENTITY (THIS PASS) -- Vec3-alike stub, IDENTICAL shape/reasoning
-    -- to tests/wellbeing_spec.lua's/tests/defense_spec.lua's/
+    -- to tests/wellbeing_spec.lua's/the removed handler-down-defense spec's/
     -- tests/tenure_spec.lua's own copies (the only other files needing
     -- GetEntityCoords' real `-`/`#` operators -- see that file's own
     -- comment; Sandbox.vector3 is deliberately too minimal for this, per

@@ -249,17 +249,17 @@ local function newCombatFixture(opts)
     end
 
     -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX) --
-    -- server/announce.lua's IsApprehensionWarned, wired into
+    -- the removed apprehension-announcement server file's IsApprehensionWarned, wired into
     -- ValidateCombatRequest's BiteAndHold/NonLethalTakedown branch this
     -- pass. OMITTED FROM THE SANDBOX ENTIRELY BY DEFAULT, same convention as
     -- HasPermission/TierCapabilityPermits above: proves the real
     -- `type(IsApprehensionWarned) == 'function'` guard degrades cleanly (no
-    -- restriction) when server/announce.lua is absent, and means every one
+    -- restriction) when the removed apprehension-announcement server file is absent, and means every one
     -- of this file's ~150 OTHER tests (none of which opt in via
     -- opts.withApprehensionAnnouncement) exercises that exact
     -- absent-dependency path for free -- never a "warned" store that
-    -- happens to be empty. server/announce.lua's own window/expiry logic is
-    -- fully covered by tests/announce_spec.lua -- this stub only needs to
+    -- happens to be empty. the removed apprehension-announcement server file's own window/expiry logic is
+    -- fully covered by the removed apprehension-announcement spec -- this stub only needs to
     -- prove server/combat.lua calls it with the right netId, at the right
     -- place (BiteAndHold/NonLethalTakedown only, never PropDragging, never a
     -- termination path), and honors its answer.
@@ -805,7 +805,7 @@ end)
 -- at its shipped value) threw at this file's own
 -- `BiteHoldCooldown = NewCooldown(...)` line, so nothing textually below
 -- it -- EndActiveEffectForHolder (this codebase's termination primitive,
--- depended on by server/recall.lua and server/training.lua), every
+-- depended on by the removed recall server file and the removed training server file), every
 -- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent, and this
 -- file's own onResourceStart/playerDropped handlers -- ever existed for the
 -- rest of that resource's uptime. Fixed via ResolveConfiguredThresholdMs
@@ -821,7 +821,7 @@ t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no
     })
 
     t.equals(type(f.env.EndActiveEffectForHolder), 'function',
-        'the termination primitive server/recall.lua and server/training.lua depend on must remain reachable no matter what an operator puts in the config')
+        'the termination primitive the removed recall server file and the removed training server file depend on must remain reachable no matter what an operator puts in the config')
 
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
@@ -1525,7 +1525,7 @@ t.test('requestBiteHold: an NPC target succeeds, relayed ONLY to the requesting 
 end)
 
 -- ----------------------------------------------------------------------
--- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). server/announce.lua's
+-- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). the removed apprehension-announcement server file's
 -- IsApprehensionWarned was defined, individually tested, and called by
 -- NOTHING -- Config.Features.ApprehensionAnnouncement had zero effect on
 -- whether a real bite/takedown succeeded. This section proves the fix:
@@ -1558,7 +1558,7 @@ t.test('requestBiteHold: CONTROL -- succeeds once the target has a genuine annou
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'a genuinely warned target must still be biteable -- this feature only ADDS a precondition, never blocks unconditionally')
 end)
 
-t.test('requestBiteHold: CONTROL -- with the feature entirely absent from the sandbox (server/announce.lua not loaded), an unwarned target is UNAFFECTED -- proves the soft-dependency guard, not a hidden hard requirement', function()
+t.test('requestBiteHold: CONTROL -- with the feature entirely absent from the sandbox (the removed apprehension-announcement server file not loaded), an unwarned target is UNAFFECTED -- proves the soft-dependency guard, not a hidden hard requirement', function()
     local f = newCombatFixture() -- opts.withApprehensionAnnouncement omitted -- IsApprehensionWarned is genuinely absent
     t.isNil(f.env.IsApprehensionWarned)
     wireK9(f, K9_SRC)
@@ -1612,9 +1612,9 @@ t.test('CONTROL, THE ONE THAT MATTERS MOST: an already-open hold survives its wa
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'the hold must have opened while warned')
 
-    -- Simulate the real server/announce.lua window lapsing WHILE this hold
+    -- Simulate the real the removed apprehension-announcement server file window lapsing WHILE this hold
     -- is still open -- exactly the "gate the start, never the stop" trap
-    -- this whole design exists to avoid (server/announce.lua's own header,
+    -- this whole design exists to avoid (the removed apprehension-announcement server file's own header,
     -- point 5).
     f.setWarned(500, false)
 

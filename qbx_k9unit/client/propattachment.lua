@@ -223,7 +223,7 @@ function RequestToggleK9PropAttachment()
     -- So: if a vest is already on, the request goes through unconditionally.
     -- Same shape client/kennel.lua's RequestDeployKennel() uses (resolve
     -- "am I already carrying something" before any flag or access gate) and
-    -- client/training.lua's RequestSetTrainingMode() uses (only check access
+    -- the removed training client file's the removed training-mode request uses (only check access
     -- when switching ON, never when switching OFF).
     --
     -- This grants nothing. Taking off a vest you are already wearing is not

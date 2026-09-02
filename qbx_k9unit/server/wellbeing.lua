@@ -765,7 +765,7 @@
     SERVER-AUTHORITATIVE PARTNER RESOLUTION, NEVER A CLIENT CLAIM: the
     receiving handler is resolved via server/partnership.lua's
     GetActivePartnerCitizenId(k9Citizenid) -- the SAME accessor
-    server/recall.lua's Recall actor and server/defense.lua's
+    the removed recall server file's Recall actor and the removed handler-down-defense server file's
     HandlerDownDefense trigger already trust for the identical "who is
     this K9's bonded partner, right now" question. A citizenid never
     appears as a target here because a client asked for it; it appears
@@ -1125,7 +1125,7 @@ local HandlerConditionCache = {}
 
 
 
---- VALIDATED TICK INTERVAL (audit follow-up — same shape server/defense.lua's
+--- VALIDATED TICK INTERVAL (audit follow-up — same shape the removed handler-down-defense server file's
 --- pollIntervalMs fix and server/combat.lua's positionSampleWindowMs fix
 --- both address in their own files; see server/cooldowns.lua's header
 --- ADDENDUM for the general writeup). `Config.Wellbeing.tickIntervalMs` is a
@@ -1879,8 +1879,8 @@ local function PushHandlerConditionUpdate(k9Citizenid, stats)
     end
 
     -- SOFT DEPENDENCY, this resource's established convention for a
-    -- cross-file resource-global consumed at RUNTIME (server/recall.lua's
-    -- Recall actor and server/defense.lua's HandlerDownDefense trigger
+    -- cross-file resource-global consumed at RUNTIME (the removed recall server file's
+    -- Recall actor and the removed handler-down-defense server file's HandlerDownDefense trigger
     -- both guard this exact accessor identically) — never a load-order
     -- assumption, even though server/partnership.lua does load before
     -- this file in fxmanifest.lua's server_scripts.

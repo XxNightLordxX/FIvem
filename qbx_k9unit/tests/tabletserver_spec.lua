@@ -912,7 +912,7 @@ t.test('myFeatures: a Config.Features key entirely ABSENT from Config.Features (
             -- ScentTrailHunt (removed entirely) and ApprehensionAnnouncement
             -- (never added at all) are both genuinely absent keys, not
             -- `= false` ones -- see config.lua's own Config.Features comment
-            -- and server/announce.lua's header for both.
+            -- and the removed apprehension-announcement server file's header for both.
             Features = { CommandTablet = true, LeashMechanics = true },
             Departments = {}, Permissions = {},
             FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },

@@ -131,10 +131,7 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = true,
     k9dropfetchball = true,
     k9recallfetchball = true,
-    -- family #4: training (3 -> 1, 'k9train') -- client/training.lua
-    k9training = true,
-    k9trainsearch = true,
-    k9trainbite = true,
+    -- family #4: training (3 -> 1, 'k9train') -- the removed training client file
     -- family #5: kennel (ADDITIVE, 'k9kennel') -- client/kennel.lua +
     -- client/keybinds.lua. Unlike every other entry in this table,
     -- k9deploykennel/k9exitkennel are NOT being folded away -- both keep
@@ -589,7 +586,7 @@ end)
 -- never executes and the command is not registered at all. Advertising it
 -- in chat autocomplete then promises something typing it cannot deliver.
 -- ========================================================================
-t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer advertised -- Config.Features.ScentTrailHunt was deliberately removed from config.lua, so client/scenttrail.lua returns at its top and never registers the command on any client', function()
+t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer advertised -- Config.Features.ScentTrailHunt was deliberately removed from config.lua, so the removed scent-trail client file returns at its top and never registers the command on any client', function()
     local f = newFixture()
     f.fireResourceStart('qbx_k9unit')
 

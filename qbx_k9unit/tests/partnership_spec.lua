@@ -17,7 +17,7 @@
     server/partnership.lua consumes HasK9Access and IsConfiguredK9Model as
     plain resource-globals (no runtime-existence guard on THOSE two --
     unlike GetActivePartnerCitizenId/EndActiveEffectForHolder in
-    server/recall.lua, this file's own header states these are a hard,
+    the removed recall server file, this file's own header states these are a hard,
     load-order-guaranteed dependency, not an optional one), so this spec
     controls both as test-supplied stubs -- exactly the same "this file's
     job is server/partnership.lua's OWN eligibility/consent/mutex logic,

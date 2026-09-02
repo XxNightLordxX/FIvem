@@ -280,7 +280,7 @@
                 //                         administrative/infrastructure switch -- e.g.
                 //                         HighCommand, CommandTablet), or the feature's
                 //                         own owning file documents a DELIBERATE decision
-                //                         never to honour one (e.g. server/recall.lua's
+                //                         never to honour one (e.g. the removed recall server file's
                 //                         block.Recall -- a termination/escape-hatch path
                 //                         that must never be gated, by this resource's
                 //                         own "no unbounded trap" rule). NOTE: an EARLIER
@@ -1747,7 +1747,7 @@
         cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
         cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
         // qbx_k9unit:dangerWarnThreat -- menu-parity pass. Same
-        // RequestDangerWarn() function as Alert above, same gate, only the
+        // the removed danger-warn request function as Alert above, same gate, only the
         // warning type and urgency differ.
         cmdref_danger_warn_threat_usage: '/qbx_k9unit:dangerWarnThreat',
         cmdref_danger_warn_threat_does: 'Tells your partnered handler your K9 is barking at a real, active threat, with a rough direction and distance.',
@@ -1785,7 +1785,7 @@
         // ---- Integration-sweep fix (this pass): seven REAL, working
         // keybind commands (RegisterCommand + RegisterKeyMapping, both
         // confirmed in client/agility.lua, client/pursuitsprint.lua,
-        // client/movement.lua, client/vision.lua, client/defense.lua) that
+        // client/movement.lua, client/vision.lua, the removed handler-down-defense client file) that
         // had ZERO COMMAND_REFERENCE entry -- see
         // tests/commandreferenceregistry_spec.lua's own header "WIDENED,
         // THIS PASS" for why the drift guard never caught this. Named
@@ -2341,7 +2341,6 @@
         // folding into Basic K9 Commands or Combat & Restraint above.
         { key: 'vision', labelKey: 'cmdref_category_vision' },
         { key: 'field_gear', labelKey: 'cmdref_category_field_gear' },
-        { key: 'calling_off', labelKey: 'cmdref_category_calling_off' },
         { key: 'records', labelKey: 'cmdref_category_records' },
         { key: 'certification', labelKey: 'cmdref_category_certification' },
         { key: 'xp', labelKey: 'cmdref_category_xp' },
@@ -2382,51 +2381,11 @@
         // is a chase-support ability for the same apprehension workflow.
         // command names use this resource's OWN `qbx_k9unit:` prefix, not
         // a bare `k9x` name -- both RegisterCommand calls in
-        // client/agility.lua/client/pursuitsprint.lua/client/defense.lua
+        // client/agility.lua/client/pursuitsprint.lua/the removed handler-down-defense client file
         // pair a RegisterKeyMapping, whose own id must be globally unique
         // across every resource a server loads, unlike a chat-only command.
         { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
         { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
-        { command: 'qbx_k9unit:dangerWarnAlert', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_alert_usage', doesKey: 'cmdref_danger_warn_alert_does', needsKey: 'cmdref_danger_warn_alert_needs', gate: { kind: 'access', featureKey: 'DangerWarn' }, defaultKeybind: 'P', defaultKeybindConfigurable: true },
-        // qbx_k9unit:dangerWarnThreat -- menu-parity pass: its sibling Alert
-        // (immediately above) already had a command/keybind; Threat had
-        // neither. This closes the COMMAND half only -- NO defaultKeybind
-        // field here, deliberately: a keybind was attempted and reverted in
-        // the same pass once it collided with Alert's own default (see
-        // client/dangerwarn.lua's own comment on this command for the full
-        // writeup) -- every single-letter default this resource's own
-        // convention would reach for is already spoken for, so this stays
-        // command-only rather than either double-firing with Alert or
-        // binding a non-letter key with no precedent anywhere else here.
-        { command: 'qbx_k9unit:dangerWarnThreat', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_threat_usage', doesKey: 'cmdref_danger_warn_threat_does', needsKey: 'cmdref_danger_warn_threat_needs', gate: { kind: 'access', featureKey: 'DangerWarn' } },
-        { command: 'qbx_k9unit:confirmHandlerDownDefense', category: 'combat', adminOnly: false, usageKey: 'cmdref_confirm_handler_down_defense_usage', doesKey: 'cmdref_confirm_handler_down_defense_does', needsKey: 'cmdref_confirm_handler_down_defense_needs', gate: { kind: 'access', featureKey: 'HandlerDownDefense' }, defaultKeybind: 'G', defaultKeybindConfigurable: true },
-
-        // ---- Cameras & Vision (this pass, same integration-sweep fix as
-        // Combat & Restraint's three additions immediately above) --
-        // toggleCamera (client/movement.lua), toggleCameraFeed/
-        // toggleThermalVision/toggleNightVision (client/vision.lua). All
-        // four change what the K9 player SEES, never a command issued TO
-        // the K9, which is why COMMAND_REFERENCE_CATEGORIES gives them
-        // their own 'vision' bucket rather than folding into Basic K9
-        // Commands or Combat & Restraint. `defaultKeybindConfigurable`
-        // (this pass, NEW, OPTIONAL field): true for a command whose
-        // RegisterKeyMapping default is read from a config.lua VALUE
-        // (Config.CameraFeed.toggleKey/Config.Vision.Thermal.toggleKey/
-        // Config.Vision.Night.toggleKey/
-        // Config.Combat.HandlerDownDefense.confirmKey), not a literal
-        // baked into client/keybinds.lua the way 'V'/'C'/'B'/'T'/'Y'/'Z'/
-        // 'U'/'O'/'X'/'N' above are -- `defaultKeybind` below is still the
-        // REAL current value read directly from config.lua (never
-        // guessed), but buildCommandReferenceRow() renders an HONEST extra
-        // caveat for these four: this server's operator chose that value,
-        // so it can legitimately be different from server to server, unlike
-        // every literal default above. k9bitehold/k9takedown/k9dragtoggle/
-        // k9scentvision above are ALSO config-sourced defaults
-        // (Config.Combat.BiteAndHold.toggleKeybind etc.) but were not
-        // marked this way when first written -- a known, disclosed
-        // inconsistency from before this pass, not a new one, and out of
-        // this pass's own narrow scope (the seven undocumented commands) to
-        // retrofit.
         { command: 'qbx_k9unit:toggleCamera', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_usage', doesKey: 'cmdref_toggle_camera_does', needsKey: 'cmdref_toggle_camera_needs', gate: { kind: 'open' }, defaultKeybind: 'L' },
         { command: 'qbx_k9unit:toggleCameraFeed', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_feed_usage', doesKey: 'cmdref_toggle_camera_feed_does', needsKey: 'cmdref_toggle_camera_feed_needs', gate: { kind: 'access', featureKey: 'CameraFeedPiP' }, defaultKeybind: 'H', defaultKeybindConfigurable: true },
         // qbx_k9unit:toggleThermalVision / qbx_k9unit:toggleNightVision --
@@ -2512,15 +2471,6 @@
         // ungated release paths the same way k9leash/k9partner's own toggle
         // entries above document).
         { command: 'k9fetch', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9fetch_usage', doesKey: 'cmdref_k9fetch_does', needsKey: 'cmdref_k9fetch_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
-        { command: 'k9eat', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9eat_usage', doesKey: 'cmdref_k9eat_does', needsKey: 'cmdref_k9eat_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
-        { command: 'k9drink', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9drink_usage', doesKey: 'cmdref_k9drink_does', needsKey: 'cmdref_k9drink_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
-
-        // ---- Calling Your K9 Off ----
-        { command: 'k9calmdown', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9calmdown_usage', doesKey: 'cmdref_k9calmdown_does', needsKey: 'cmdref_k9calmdown_needs', gate: { kind: 'access', featureKey: 'FearStressSystem' } },
-        { command: 'k9meatbait', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9meatbait_usage', doesKey: 'cmdref_k9meatbait_does', needsKey: 'cmdref_k9meatbait_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
-        { command: 'k9whistle', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9whistle_usage', doesKey: 'cmdref_k9whistle_does', needsKey: 'cmdref_k9whistle_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
-
-        // ---- Scent Games ----
         { command: 'k9track', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9track_usage', doesKey: 'cmdref_k9track_does', needsKey: 'cmdref_k9track_needs', gate: { kind: 'access', featureKey: 'ScentTracking' } },
         { command: 'k9stats', category: 'records', adminOnly: false, usageKey: 'cmdref_k9stats_usage', doesKey: 'cmdref_k9stats_does', needsKey: 'cmdref_k9stats_needs', gate: { kind: 'access', featureKey: 'K9Leaderboard' } },
 
@@ -8499,7 +8449,7 @@
         // PersonFeaturesResult doc comment above for the two ways that
         // happens (no per-citizenid ability here to gate in the first
         // place, e.g. an administrative switch like CommandTablet; or a
-        // deliberate design decision, e.g. server/recall.lua's
+        // deliberate design decision, e.g. the removed recall server file's
         // escape-hatch path). Offering a button that can never do
         // anything is exactly the dishonest control this task exists to
         // remove -- HIDDEN, not merely labeled, for this one case. A

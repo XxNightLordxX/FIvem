@@ -10,20 +10,20 @@
 
     WHY THIS FILE MATTERS MORE THAN ITS SIBLINGS: shared/compat/target.lua
     and shared/compat/inventory.lua feed UI/interaction plumbing. This file
-    feeds server/scentlineup.lua's own ResolveCitizenId (~line 421 there),
+    feeds the removed scent-lineup server file's own ResolveCitizenId (~line 421 there),
     which is the ONE live call site anywhere in this resource that routes
     through K9Compat.Get('framework') -- and that citizenid is what
-    CanUseScentLineup (server/scentlineup.lua) grants or denies access on.
+    CanUseScentLineup (the removed scent-lineup server file) grants or denies access on.
     A wrong field path here is an access-control bug, not a cosmetic one.
 
-    THE GAP THIS SPEC CLOSES, EXACTLY AS SCOPED: tests/scentlineup_spec.lua
+    THE GAP THIS SPEC CLOSES, EXACTLY AS SCOPED: the removed scent-lineup spec
     already proves "adapter returns nil -> fails closed" (it deliberately
     stubs citizenid resolution rather than loading this file -- a reasonable
     scoping choice there, see that spec's own header). What NOTHING proved
     before this file existed is the more dangerous case: an adapter that
     returns a PLAUSIBLE-BUT-WRONG citizenid -- exactly what a field-path bug
     (reading the wrong table key) would produce, and which does NOT fail
-    closed at server/scentlineup.lua's own ResolveCitizenId (it only rejects
+    closed at the removed scent-lineup server file's own ResolveCitizenId (it only rejects
     a non-string or empty string, never checks the value is correct-looking).
     Every "FIELD-PATH CONFUSION" test below feeds one adapter a player/
     playerData object shaped like a DIFFERENT framework and asserts the
@@ -77,7 +77,7 @@
     HEADLINE FINDING: no fail-open path found. Every gating/malformed-input/
     throwing-export/cross-framework-shape scenario exercised below resolves
     to nil (GetCitizenId/GetPlayer/GetPlayerByCitizenId/GetPlayerData) or
-    `nil, nil` (GetJob) -- server/scentlineup.lua's own ResolveCitizenId
+    `nil, nil` (GetJob) -- the removed scent-lineup server file's own ResolveCitizenId
     already treats any non-string/empty-string citizenid as "cannot
     resolve", so every one of these paths reaches that same fail-closed
     outcome. The one non-obvious, DISCLOSED (not a bug) observation: because
@@ -502,7 +502,7 @@ local function describeSharedServerContract(resourceName)
         t.isNil(jobGradeLevel)
     end)
 
-    t.test(('%s GetCitizenId: an empty-string citizenid is returned as-is -- this file does not judge string content; server/scentlineup.lua\'s own ResolveCitizenId is what rejects ""'):format(resourceName), function()
+    t.test(('%s GetCitizenId: an empty-string citizenid is returned as-is -- this file does not judge string content; the removed scent-lineup server file\'s own ResolveCitizenId is what rejects ""'):format(resourceName), function()
         local adapter = newAdapter()
         local player = qbxLikePlayer({ citizenid = '' })
         t.equals(adapter.GetCitizenId(player), '')

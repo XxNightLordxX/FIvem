@@ -20,7 +20,7 @@
 
     Loads the REAL, unmodified server/cooldowns.lua -> server/tracking.lua
     chain (server/entities.lua is NOT needed -- unlike server/search.lua/
-    server/defense.lua, this file never calls ResolveNetworkEntity), mirrors
+    the removed handler-down-defense server file, this file never calls ResolveNetworkEntity), mirrors
     tests/pursuitsprint_spec.lua's own fixture shape (that file being the
     canonical per-person-feature-control reference this pass's own task
     named) almost line for line, adapted for findTrackableSource's
@@ -82,7 +82,7 @@ local function newTrackingFixture(opts)
     local state = { now = 1000000 }
     local function GetGameTimer() return state.now end
 
-    local threadRunner = Sandbox.newThreadRunner() -- prune thread parked at its first Wait forever -- never stepped, matching tests/defense_spec.lua's "not exercised" convention for a thread this suite doesn't need to drive
+    local threadRunner = Sandbox.newThreadRunner() -- prune thread parked at its first Wait forever -- never stepped, matching the removed handler-down-defense spec's "not exercised" convention for a thread this suite doesn't need to drive
 
     local printLog = {}
     local function printStub(...)

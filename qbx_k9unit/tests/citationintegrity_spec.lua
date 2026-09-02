@@ -23,7 +23,7 @@
       - `DIAGNOSTIC_CHECKS.md` cited `server/compatinventory.lua`; the real
         compat layer is `shared/compat/inventory.lua`.
       - `server/equipmentshop.lua` cited `server/sar.lua`; the SAR file is
-        `server/sarcalls.lua`.
+        `the removed SAR-calls server file`.
       - Twenty separate `§4.2.3` / `§4.2.4` / `§4.2.5` / `§9.2` references
         across seven files, all inventing subsection numbers for what are
         really NUMBERED LIST ITEMS inside `### 4.2` and `## 9`. The rules

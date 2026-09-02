@@ -244,7 +244,7 @@ end
 -- command with no chat suggestion, exactly as intended.
 -- ----------------------------------------------------------------------
 local COMMAND_SUGGESTIONS = {
-    -- client/scenttrail.lua
+    -- the removed scent-trail client file
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
     { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' , featureFlag = 'PursuitSprint' },
     -- client/kennel.lua -- COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
@@ -269,7 +269,7 @@ local COMMAND_SUGGESTIONS = {
     -- only the chat suggestion is gone.
     -- client/agility.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:vault', keySuffix = 'vault' },
-    -- client/training.lua -- COMMAND_CONSOLIDATION_SPEC.md #4:
+    -- the removed training client file -- COMMAND_CONSOLIDATION_SPEC.md #4:
     -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
     -- 'k9train' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
@@ -291,7 +291,7 @@ local COMMAND_SUGGESTIONS = {
     -- established for k9kennel: an additional entry point calling the same
     -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
-    -- client/recall.lua
+    -- the removed recall client file
     -- client/movement.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCamera', keySuffix = 'toggle_camera' },
     -- client/movement.lua -- menu-parity pass ("chat commands, 3rd eye, and
@@ -314,14 +314,11 @@ local COMMAND_SUGGESTIONS = {
     -- previously had an ox_target option and a client/radial.lua Utility
     -- item, but no chat command.
     { command = 'k9treat', keySuffix = 'k9treat' },
-    -- client/sarcalls.lua
-    -- client/defense.lua (qbx_k9unit: namespace)
-    { command = 'qbx_k9unit:confirmHandlerDownDefense', keySuffix = 'confirm_handler_down_defense' },
-    -- client/dangerwarn.lua (qbx_k9unit: namespace) -- Alert already had a
+    -- the removed SAR-calls client file
+    -- the removed handler-down-defense client file (qbx_k9unit: namespace)
+    -- the removed danger-warn client file (qbx_k9unit: namespace) -- Alert already had a
     -- command/keybind; Threat is the menu-parity pass addition (its sibling
-    -- Alert's own asymmetry) sharing the same RequestDangerWarn() function.
-    { command = 'qbx_k9unit:dangerWarnAlert', keySuffix = 'danger_warn_alert' },
-    { command = 'qbx_k9unit:dangerWarnThreat', keySuffix = 'danger_warn_threat' },
+    -- Alert's own asymmetry) sharing the same the removed danger-warn request function.
     -- client/fetch.lua -- COMMAND_CONSOLIDATION_SPEC.md #3:
     -- k9throwfetchball/k9dropfetchball/k9recallfetchball are now HIDDEN
     -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --
@@ -329,12 +326,7 @@ local COMMAND_SUGGESTIONS = {
     -- names.
     { command = 'k9fetch', keySuffix = 'k9fetch' , featureFlag = 'FetchMechanic' },
     -- client/wellbeing.lua
-    { command = 'k9calmdown', keySuffix = 'k9calmdown' },
-    { command = 'k9meatbait', keySuffix = 'k9meatbait' },
-    { command = 'k9whistle', keySuffix = 'k9whistle' },
     -- client/wellbeing.lua (HungerThirstSystem, this pass, coder-backend)
-    { command = 'k9eat', keySuffix = 'k9eat' },
-    { command = 'k9drink', keySuffix = 'k9drink' },
     -- client/propattachment.lua
     { command = 'k9propattach', keySuffix = 'k9propattach' },
     -- server/highcommand.lua
@@ -360,7 +352,6 @@ local COMMAND_SUGGESTIONS = {
     -- chat-suggested). See HIDDEN_ALIAS_COMMANDS in
     -- tests/commandsuggestions_spec.lua for the drift-guard allowlist that
     -- makes removing their entries here intentional, not a silent gap.
-    { command = 'k9announce', keySuffix = 'k9announce' },
     { command = 'k9audit', keySuffix = 'k9audit' },
     -- server/dogcharacter.lua -- COMMAND_CONSOLIDATION_SPEC.md #2:
     -- k9setdog/k9removedog are now HIDDEN ALIASES of 'k9dog' (still real,
@@ -376,7 +367,7 @@ local COMMAND_SUGGESTIONS = {
     -- 'k9permission' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
     { command = 'k9permission', keySuffix = 'k9permission' },
-    -- server/scentlineup.lua
+    -- the removed scent-lineup server file
 }
 
 --- Registers one `chat:addSuggestion` for a resolved command name, reading
@@ -413,7 +404,7 @@ local function RegisterAllCommandSuggestions()
         --
         -- THE BUG THIS CLOSES, live on the shipped default config:
         -- Config.Features.ScentTrailHunt was deliberately removed from
-        -- config.lua, so it reads nil, so client/scenttrail.lua returns at
+        -- config.lua, so it reads nil, so the removed scent-trail client file returns at
         -- its top and /k9nosehunt is never registered on any client, ever.
         -- This table went on advertising it in chat autocomplete anyway,
         -- with a description promising a working feature. The tablet's own

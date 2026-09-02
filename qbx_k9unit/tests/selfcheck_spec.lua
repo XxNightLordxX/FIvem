@@ -233,7 +233,8 @@ t.test('LOAD-BEARING, AGAINST THE REAL CODEBASE: every real Config.Features key 
     for _ in pairs(configEnv.Config.Features) do totalFeatures = totalFeatures + 1 end
     -- Sanity, same discipline as tests/runtimefeaturetiers_spec.lua's own
     -- "a loadfile typo silently produces an empty table" guard.
-    t.isTrue(totalFeatures >= 56, ('sanity: only saw %d Config.Features key(s); config.lua may not have loaded correctly for this spec'):format(totalFeatures))
+    -- FLOOR LOWERED 2026-09-02: twelve features were removed at the owner's request (61 -> 49 Config.Features keys), so the old floor could never be met again. It stays well above zero because its job is to catch an extraction pattern going stale and silently checking nothing -- not to pin the catalogue size.
+    t.isTrue(totalFeatures >= 45, ('sanity: only saw %d Config.Features key(s); config.lua may not have loaded correctly for this spec'):format(totalFeatures))
 
     local unrecognized = K9SelfCheck.FindUnrecognizedFeatureKeys(configEnv.Config.Features, registryText)
     if #unrecognized > 0 then

@@ -129,9 +129,10 @@ local function RealFeatureKeys()
     return keys
 end
 
-t.test('diagnostic: the real config.lua currently ships at least 50 Config.Features keys (a catastrophic parse failure/empty table fails here, not silently passing with zero keys checked)', function()
+t.test('diagnostic: the real config.lua currently ships at least 45 Config.Features keys (a catastrophic parse failure/empty table fails here, not silently passing with zero keys checked)', function()
     local keys = RealFeatureKeys()
-    t.isTrue(#keys >= 50, ('expected at least 50 real Config.Features keys, got %d -- either config.lua failed to load or this fixture is not seeing it'):format(#keys))
+    -- FLOOR LOWERED 2026-09-02: twelve features were removed at the owner's request (61 -> 49 Config.Features keys), so the old floor could never be met again. It stays well above zero because its job is to catch an extraction pattern going stale and silently checking nothing -- not to pin the catalogue size.
+    t.isTrue(#keys >= 45, ('expected at least 45 real Config.Features keys, got %d -- either config.lua failed to load or this fixture is not seeing it'):format(#keys))
 end)
 
 t.test('NO KEY LEFT BEHIND: every real Config.Features key gets a non-nil category in tabletRequestMyRecord\'s own myFeatures[]', function()

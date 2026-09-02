@@ -297,7 +297,7 @@ already written and tested.
   (see false-positive risk below), so scope it narrowly to features that
   match this project's own past pattern: a boolean in `Config.Features`
   whose corresponding gate-function (named in the feature's own file
-  header, e.g. `AnnouncementRequiredFor` in `server/announce.lua`) is
+  header, e.g. `AnnouncementRequiredFor` in `the removed apprehension-announcement server file`) is
   never referenced from `server/combat.lua`'s bite/takedown *opening*
   functions. This needs a maintained, hand-built list of
   {feature flag -> function name -> expected caller file(s)} rather than
@@ -410,7 +410,7 @@ already written and tested.
 - **The real bug it comes from:** this is this project's own
   most-frequently-invoked named rule, appearing in `server/wellbeing.lua`,
   `server/tracking.lua`, `server/certifications.lua`,
-  `server/runtimecontrol.lua`, `server/scenttrail.lua`, `client/vehicle.lua`,
+  `server/runtimecontrol.lua`, `the removed scent-trail server file`, `client/vehicle.lua`,
   `client/tracking.lua`, `client/vision.lua`, `client/radial.lua`, and
   documented as violated and fixed in commits `3a1aafe` (vest could not be
   removed after decertification), `ee4c8c0`/`9f4b225` (vision stuck on),
@@ -542,14 +542,14 @@ already written and tested.
   is still sitting around instead of being cleared — which might mean the
   cleanup that's supposed to happen isn't running."
 - **The real bug it comes from:** the entire join-request design in
-  `server/sarcalls.lua:1112,1801-1882` is built around a hard
+  `the removed SAR-calls server file:1112,1801-1882` is built around a hard
   `expiresAt = GetGameTimer() + tuning.joinRequestTTLMs` and the
   KNOWN_ISSUES/CHANGELOG record several related SAR bugs around exactly
   this lifecycle (join requests surviving a call being stopped and
   restarted, commit `532b45a`; join requests not being answered leaving
   the officer "watching a screen that never changed," commit `eb4bfb3`).
 - **How to detect it, concretely:** if a pending-request table is
-  reachable (module-local in `server/sarcalls.lua`), report any entry
+  reachable (module-local in `the removed SAR-calls server file`), report any entry
   where `GetGameTimer() > pending.expiresAt` by a large margin (say, more
   than a few times the TTL) — that specifically indicates the lazy expiry
   check isn't being hit rather than the request simply having expired a

@@ -300,7 +300,7 @@ local function newWellbeingFixture(opts)
     -- the reverse-direction lookup server/wellbeing.lua's own
     -- ResolveOnlineSourceForCitizenid needs. Derived from the SAME
     -- `citizenidBySource` table setPlayer/clearPlayer already maintain
-    -- (mirrors tests/defense_spec.lua's/tests/recall_spec.lua's own
+    -- (mirrors the removed handler-down-defense spec's/the removed recall spec's own
     -- identical fixture pattern for this exact export) -- never a second,
     -- independently-maintained table that could drift out of sync with it.
     local function qbxGetPlayerByCitizenId(_self, citizenid)
@@ -312,7 +312,7 @@ local function newWellbeingFixture(opts)
 
     -- HANDLER CONDITION BADGE (this pass) -- server/partnership.lua's real
     -- GetActivePartnerCitizenId accessor, stubbed. ABSENT from `env` by
-    -- default (mirrors tests/recall_spec.lua's/tests/defense_spec.lua's own
+    -- default (mirrors the removed recall spec's/the removed handler-down-defense spec's own
     -- "server/partnership.lua module absent" soft-dependency convention) --
     -- every PRE-EXISTING test in this file never wires this fixture up at
     -- all, so `type(GetActivePartnerCitizenId) == 'function'` stays false
@@ -760,7 +760,7 @@ t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at 
     --     exactly like HungerFeedCooldown/ThirstReliefCooldown above. Two
     --     more always-on threads is the whole cost of that fix, and it is
     --     the same cost the other sweeps in this list already pay.
-    t.equals(f.createThreadCallCount(), 8, "eight CreateThread calls happen at file-load time even with every feature off -- the four pre-existing always-on sweeps/tick loop, WellbeingLastSeenOnline's own sweep, the persistence-flush thread, and the two new citizenid-keyed cooldown sweeps (AffectionCooldown, CalmDownCooldown)")
+    t.equals(f.createThreadCallCount(), 3, "three CreateThread calls happen at file-load time even with every feature off -- the shared tick loop, WellbeingLastSeenOnline's own sweep, and the persistence-flush thread. This was eight until 2026-09-02: the AffectionCooldown and CalmDownCooldown citizenid-keyed sweeps went with MoodSystem and FearStressSystem, and the other removed subsystems took their own sweeps with them. The PROPERTY this pins is unchanged -- every one of these starts unconditionally at file load, so a live toggle-on reaches an already-connected client with no restart")
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
     t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
@@ -1209,7 +1209,7 @@ end)
 
 t.test('EVERY tracker in server/wellbeing.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, citizenid-keyed ones sweep, and none has neither', function()
     -- Same "read the file's own text, not a runtime accessor" technique
-    -- tests/mainserver_spec.lua/tests/combat_spec.lua/tests/recall_spec.lua/
+    -- tests/mainserver_spec.lua/tests/combat_spec.lua/the removed recall spec/
     -- tests/partnership_spec.lua already established for the identical
     -- invariant in their own files -- extended to server/wellbeing.lua for
     -- the first time this pass, specifically because this task added THREE
@@ -1326,7 +1326,7 @@ local function wirePartneredK9(f, opts)
 end
 
 t.test('HANDLER CONDITION BADGE: a genuinely partnered, online handler receives exactly one condition push per changed tick', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     local _, _, handlerSrc = wirePartneredK9(f)
 
     f.runOneTick()
@@ -1338,7 +1338,7 @@ t.test('HANDLER CONDITION BADGE: a genuinely partnered, online handler receives 
 end)
 
 t.test('HANDLER CONDITION BADGE: an UNPARTNERED K9 sends no condition update to anyone, ever, even across many ticks -- with the partnership MODULE genuinely loaded (a real resolver wired in for an unrelated pair), just no ROW for this citizenid', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     f.setPlayer(1, 'K9-LONELY')
     f.setPed(1, 100)
     f.setModel(100, 555)
@@ -1363,7 +1363,7 @@ t.test('HANDLER CONDITION BADGE: an UNPARTNERED K9 sends no condition update to 
 end)
 
 t.test('HANDLER CONDITION BADGE: server/partnership.lua module absent (GetActivePartnerCitizenId not a function at all) is a silent no-op, never a crash', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     f.setPlayer(1, 'K9-NOMOD')
     f.setPed(1, 100)
     f.setModel(100, 555)
@@ -1378,7 +1378,7 @@ t.test('HANDLER CONDITION BADGE: server/partnership.lua module absent (GetActive
 end)
 
 t.test('HANDLER CONDITION BADGE: Config.Features.HandlerPartnership = false is treated exactly like "no partnership" -- gated even when GetActivePartnerCitizenId WOULD have resolved a real partner', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = false } })
     wirePartneredK9(f)
 
     f.runOneTick()
@@ -1387,7 +1387,7 @@ t.test('HANDLER CONDITION BADGE: Config.Features.HandlerPartnership = false is t
 end)
 
 t.test('HANDLER CONDITION BADGE: a handler receives condition updates ONLY for their OWN bonded K9 partner, never for an unrelated K9 -- two independent pairs, cross-checked both ways', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     local _, _, handlerSrcA = wirePartneredK9(f, { k9Src = 1, k9Citizenid = 'K9-A', handlerSrc = 10, handlerCitizenid = 'HANDLER-A' })
 
     -- A second, completely independent pair -- different K9, different
@@ -1457,14 +1457,14 @@ end
 t.test('THRESHOLD PIN: Fatigue <= speedPenaltyThreshold reports "tired" -- absent one unit above it, present exactly at it', function()
     local cfgAbsent = baselineWellbeingConfig()
     cfgAbsent.Fatigue.speedPenaltyThreshold = 99 -- starting fatigue (max=100) is one unit ABOVE this
-    local fAbsent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfgAbsent })
+    local fAbsent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
     wirePartneredK9(fAbsent)
     fAbsent.runOneTick()
     t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'tired'))
 
     local cfgPresent = baselineWellbeingConfig()
     cfgPresent.Fatigue.speedPenaltyThreshold = 100 -- starting fatigue is EXACTLY this
-    local fPresent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfgPresent })
+    local fPresent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
     wirePartneredK9(fPresent)
     fPresent.runOneTick()
     t.isTrue(tagsContain(lastHandlerTags(fPresent), 'tired'))
@@ -1479,7 +1479,7 @@ end)
 -- ------------------------------------------------------------------
 
 t.test('STOPS CLEANLY: partnership ending sends an explicit visible=false clear on the very next tick -- self-healing, not stranded', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     local _, _, handlerSrc = wirePartneredK9(f)
     f.runOneTick()
     t.equals(#partnerConditionEvents(f), 1, 'sanity: the handler really did get an initial visible push')
@@ -1502,7 +1502,7 @@ t.test('STOPS CLEANLY: partnership ending sends an explicit visible=false clear 
 end)
 
 t.test('STOPS CLEANLY: the K9 (not the handler) disconnecting clears the badge IMMEDIATELY, via playerDropped -- never waits for a future tick that will never come for this citizenid again', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     local k9Src, _, handlerSrc = wirePartneredK9(f)
     f.runOneTick()
     t.equals(#partnerConditionEvents(f), 1)
@@ -1523,7 +1523,7 @@ t.test('STOPS CLEANLY: the K9 (not the handler) disconnecting clears the badge I
 end)
 
 t.test('STOPS CLEANLY: the HANDLER (not the K9) disconnecting needs no explicit push (nobody to receive one), and a later RECONNECT under a new source id forces a fresh push rather than being suppressed as "unchanged"', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     wirePartneredK9(f, { handlerSrc = 10, handlerCitizenid = 'HANDLER-RECONNECT' })
     f.runOneTick()
     t.equals(#partnerConditionEvents(f), 1)
@@ -1545,7 +1545,7 @@ t.test('STOPS CLEANLY: the HANDLER (not the K9) disconnecting needs no explicit 
 end)
 
 t.test('STOPS CLEANLY: every wellbeing stat system switched off at once clears every currently-visible badge from the CreateThread loop\'s own else-branch -- the one iteration TickWellbeing itself never runs', function()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
     local _, _, handlerSrc = wirePartneredK9(f)
     f.runOneTick()
     t.equals(#partnerConditionEvents(f), 1)
@@ -1652,54 +1652,6 @@ local function newFakeK9Store()
     }
 end
 
---- baselineWellbeingConfig() plus a small, fast Persistence sub-block --
---- real field names, deliberately small numbers so a test can cross
---- evictAfterMs/evictSweepIntervalMs/flushIntervalMs with a handful of
---- f.advance() calls instead of the real 15-minute/5-minute/1-minute
---- shipped defaults.
---- @return table
-local function persistenceWellbeingConfig()
-    local cfg = baselineWellbeingConfig()
-    cfg.Persistence = {
-        enabled = true,
-        flushIntervalMs = 1000,
-        evictAfterMs = 5000,
-        evictSweepIntervalMs = 1000,
-    }
-    return cfg
-end
-
-t.test('PERSISTENCE ANTI-FARM: an entry evicted after a genuine offline stretch reloads its EXACT last-saved value on reconnect under a NEW/recycled source id -- logging out (or a server restart) can never be used to reset a K9\'s condition', function()
-    local k9Store, ctl = newFakeK9Store()
-    local cfg = persistenceWellbeingConfig()
-    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg, k9Store = k9Store })
-
-    f.setOnline({ 1 })
-    f.setPlayer(1, 'K9-CID')
-    f.setPed(1, 9001)
-    f.setModel(9001, 555)
-    f.setIsK9Model(555, true)
-    f.setCoords(9001, 0, 0, 0)
-
-    f.dispatchNetEvent('qbx_k9unit:server:relayDamageEvent', 1) -- mood 100 -> 85
-    f.runOneTick() -- TickWellbeing's own passiveRegenPerTick: 85 -> 86; the SAME pass also flushes it
-
-    t.equals(ctl.rows['K9-CID'] and ctl.rows['K9-CID'].mood, 86, 'CONTROL: the flush really ran and really wrote the current, real mood value')
-
-    -- Disconnect, and stay offline long enough for eviction (evictAfterMs=5000,
-    -- evictSweepIntervalMs=1000 -- ten real hours comfortably clears both).
-    f.firePlayerDropped(1)
-    f.setOnline({})
-    f.advance(10 * 60 * 60 * 1000)
-    for _ = 1, 3 do f.runOneTick() end
-
-    -- Reconnect: SAME citizenid, a brand-new/recycled server source id --
-    -- exactly the shape a real relog or a server restart produces.
-    f.setPlayer(2, 'K9-CID')
-    f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 2)
-
-    t.equals(ctl.getCallCount(), 2, 'CONTROL: Wellbeing_Get was called a SECOND time -- proving the in-memory entry really was evicted and this reconnect genuinely reloaded from the database, rather than trivially reading an untouched cache entry')
-end)
 
 -- ============================================================================
 -- BOOT-ORDER SETTLEMENT (boot-order-race audit, this pass -- lifecycle QA
