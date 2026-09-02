@@ -303,7 +303,7 @@ local function newFixture(opts)
     local function GetEntityModel(_ped) return 55555 end -- arbitrary "current live model" hash for PlayerLoaded's capture path
 
     -- K9 IDENTITY (THIS PASS) -- Vec3-alike stub, IDENTICAL shape/reasoning
-    -- to tests/wellbeing_spec.lua's/the removed handler-down-defense spec's/
+    -- to tests/wellbeing_spec.lua's/
     -- tests/tenure_spec.lua's own copies (the only other files needing
     -- GetEntityCoords' real `-`/`#` operators -- see that file's own
     -- comment; Sandbox.vector3 is deliberately too minimal for this, per
@@ -1603,7 +1603,7 @@ t.test('PAYLOAD SHAPE: a successful result carries ONLY ok/name/callsign/handler
     -- task singled out as forbidden must be absent BY NAME, not merely
     -- coincidentally missing from an allowlist that could itself be wrong.
     for _, forbidden in ipairs({
-        'health', 'fatigue', 'mood', 'fear', 'fearStress', 'stress', 'thirst', 'hunger',
+        'health', 'fatigue', 'thirst', 'hunger',
         'condition', 'certification', 'tier', 'certTier', 'specialization', 'specializations',
         'detects', 'detection', 'coords', 'position', 'x', 'y', 'z', 'citizenid', 'job',
     }) do

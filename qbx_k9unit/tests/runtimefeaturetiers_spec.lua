@@ -222,7 +222,7 @@ end)
 -- INVERTED ON PURPOSE (2026-08-26). This test used to REQUIRE a disclosure
 -- note on BiteAndHold/NonLethalTakedown/PropDragging, because server/combat.lua's
 -- auto-release maintenance thread and its K9-position-history sampling thread
--- each only STARTED if one of those flags (or HandlerDownDefense) was already
+-- each only STARTED if one of those flags was already
 -- true when that file loaded -- so flipping one on live, from all-four-off at
 -- boot, created holds that nothing would ever time out. That gap is fixed:
 -- both threads now start unconditionally and re-check their governing flag(s)

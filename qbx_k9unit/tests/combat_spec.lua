@@ -125,7 +125,7 @@ end
 -- ----------------------------------------------------------------------
 -- Real, shipped config.lua baselines -- used so boundary tests exercise the
 -- actual numbers this resource ships, not arbitrary round test numbers,
--- same convention defense_spec.lua's baselineHandlerDownDefenseConfig()
+-- same convention every other baseline config builder in this suite
 -- already established. Callers may override any field via newCombatFixture's
 -- own opts.*Cfg tables.
 -- ----------------------------------------------------------------------
@@ -768,7 +768,7 @@ end)
 -- at its shipped value) threw at this file's own
 -- `BiteHoldCooldown = NewCooldown(...)` line, so nothing textually below
 -- it -- EndActiveEffectForHolder (this codebase's termination primitive,
--- depended on by the removed recall server file and the removed training server file), every
+-- depended on by several other files), every
 -- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent, and this
 -- file's own onResourceStart/playerDropped handlers -- ever existed for the
 -- rest of that resource's uptime. Fixed via ResolveConfiguredThresholdMs
@@ -784,7 +784,7 @@ t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no
     })
 
     t.equals(type(f.env.EndActiveEffectForHolder), 'function',
-        'the termination primitive the removed recall server file and the removed training server file depend on must remain reachable no matter what an operator puts in the config')
+        'the termination primitive other files depend on must remain reachable no matter what an operator puts in the config')
 
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
@@ -929,7 +929,7 @@ end)
 -- auto-ended by timeout, holder-death, target-unresolvable,
 -- target-entered-vehicle, or drag-max-distance-exceeded -- used to only
 -- ever start if one of BiteAndHold/NonLethalTakedown/PropDragging/
--- HandlerDownDefense was ALREADY true at this file's own load time.
+-- one of them was ALREADY true at this file's own load time.
 -- server/runtimecontrol.lua's FEATURE_TIERS registers BiteAndHold/
 -- NonLethalTakedown/PropDragging as `tier = 'live'` (ApplyFeatureOverride
 -- mutates Config.Features.* immediately, no restart), so an operator could

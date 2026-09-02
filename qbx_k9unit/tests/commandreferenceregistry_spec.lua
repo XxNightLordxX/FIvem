@@ -112,7 +112,7 @@ end
 --- time rather than kept as a hand-maintained snapshot.
 ---
 --- WHY THIS CHANGED. Two literal lists used to live here, and they drifted
---- exactly as you would expect: the removed feature files and
+--- exactly as you would expect: the files that owned them and
 --- several others were each found missing later, after the fact, every one
 --- of them a file that registers a real command. KNOWN_ISSUES.md carried
 --- the gap as an open item -- "a new file that registers a command and

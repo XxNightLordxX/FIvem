@@ -169,7 +169,7 @@ local function newProximityAudioFixture(opts)
 
     -- CLAMP-AND-WARN CAPTURE -- proves a bad scanIntervalMs actually warns
     -- (not just "doesn't crash"), same convention as
-    -- the removed SAR-calls spec's/tests/clientkennel_spec.lua's own printLog
+    -- tests/clientkennel_spec.lua's own printLog
     -- captures for this exact class of guard.
     local printLog = {}
     env.print = function(...)

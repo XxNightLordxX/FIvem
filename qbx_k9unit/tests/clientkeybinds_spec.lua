@@ -6,7 +6,7 @@
     keybinds, not third-eye" pass. This file registers five NEW
     RegisterCommand/RegisterKeyMapping pairs (k9bitehold, k9takedown,
     k9dragtoggle, k9sit, k9bark) plus ONE keybind-only addition for the
-    PRE-EXISTING `k9recall` command (the removed recall client file). A trap-hunt pass
+    since-removed `k9recall` command. A trap-hunt pass
     later added a SEVENTH pair, k9exitkennel (client/kennel.lua's
     ExitKennelRest()) -- registered UNCONDITIONALLY, unlike every
     conditionally-gated command above, since it is a confining-mechanic
@@ -36,7 +36,7 @@
          the k9recall KEYBIND both follow their own single dedicated flag.
       3. k9recall gets ONLY a RegisterKeyMapping call from this file, never
          a second RegisterCommand -- proven by loading client/keybinds.lua
-         ALONE (never the removed recall client file) and confirming no `k9recall`
+         ALONE and confirming no `k9recall`
          command handler exists in this fixture at all, only a keyMapping
          entry.
 

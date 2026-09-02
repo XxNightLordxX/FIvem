@@ -52,7 +52,7 @@
     elapsed = elapsed + tickMs ... end`) calls Wait(tickMs) as the FIRST
     statement of its loop body, same shape as clienttracking_spec.lua's OWN
     compute/render threads (NOT the same shape as this suite's own
-    clientscenttrail_spec.lua poll thread, where Wait is the LAST
+    poll thread shape, where Wait is the LAST
     statement) -- so the FIRST resume of a freshly created thread only
     "primes" it (runs to the initial Wait and yields without having
     incremented `elapsed` yet); each resume AFTER that runs exactly one

@@ -145,7 +145,7 @@
         cooldowns_spec.lua's own direct `StartSweep` coverage of the same
         shared primitive, so re-deriving it here against a second Config
         value would be duplication, not new coverage.
-      - the removed Injury-stat math was server/wellbeing.lua's
+      - the since-removed Injury-stat math was server/wellbeing.lua's
         concern (covered by wellbeing_spec.lua) -- this file only proves
         WHETHER server/medkit.lua calls it, with what arguments, and that its
         own guard degrades cleanly when absent and fails soft (not loudly)

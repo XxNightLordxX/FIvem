@@ -735,7 +735,7 @@ end)
 -- RED TEST, not a comment: it fails the moment handlerKennelDeploy is
 -- awarded from this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker
 -- alongside it -- now GREEN because that tracker genuinely exists. Mirrors
--- the removed recall spec's own "SOURCE AUDIT" precedent.
+-- an earlier spec's own "SOURCE AUDIT" precedent.
 -- ========================================================================
 
 t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDeploy without a dedicated per-actor *_XP_MINT_COOLDOWN tracker also present in this file', function()

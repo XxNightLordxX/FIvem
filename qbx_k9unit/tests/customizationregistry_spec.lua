@@ -508,8 +508,8 @@ end
 --     featureName) is called with exactly these six literal arguments --
 --     A since-removed key added this pass (coder-backend, config-landing
 --     pass): TickWellbeing's own Hunger/Thirst passive-decay branch already
---     called this checker with the literal 'HungerThirstSystem' argument
---     BEFORE Config.Features.HungerThirstSystem/Config.Wellbeing.Hunger/
+--     called this checker with a literal removed-feature argument
+--     BEFORE its own Config.Features/Config.Wellbeing
 --     .Thirst existed in config.lua at all -- the block PATH was real from
 --     the day that branch was written, it just had no config to turn the
 --     feature on with. Same "immunity from harm, never a freeze" shape as

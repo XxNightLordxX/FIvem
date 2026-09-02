@@ -6,7 +6,7 @@
     ReadVitals()'s health/stamina/hunger/thirst derivation (all `local`,
     reached only through the 'hud:ready' NUI callback and the poll thread's
     own pushes -- both real, resource-visible entry points), the five
-    independently-gated wellbeing rows (fatigue/mood/fearStress/injury/
+    independently-gated wellbeing rows (fatigue/
     distracted, each absent-not-zeroed when its own flag is off), the
     XPProgression-gated xpTier row and its soft dependency on
     GetCurrentXPTier(), the dkjson array-vs-object `__jsontype` fix on the

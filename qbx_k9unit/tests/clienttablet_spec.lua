@@ -290,7 +290,6 @@ local function newTabletFixture(opts)
         IsPartnered = queryFn('IsPartnered', 'isPartnered'), BreakPartnership = record('BreakPartnership'),
         RequestPartnerUp = record('RequestPartnerUp'),
         RequestRecall = record('RequestRecall'),
-        ConfirmHandlerDownDefense = record('ConfirmHandlerDownDefense'),
         IsFetchCarryEngaged = queryFn('IsFetchCarryEngaged', 'isFetchCarryEngaged'),
         ReleaseFetchBall = record('ReleaseFetchBall'), RequestThrowFetchBall = record('RequestThrowFetchBall'),
         RequestToggleK9PropAttachment = record('RequestToggleK9PropAttachment'),
@@ -1596,9 +1595,9 @@ end)
 
 -- THIS PIN WAS FLIPPED. It used to assert the OPPOSITE -- that a High
 -- Command/autoAccessGrade holder is denied here -- on the stated grounds
--- that the removed handler-down-defense confirm function re-gated on the full CanShowK9UI()
+-- that a since-removed confirm function re-gated on the full CanShowK9UI()
 -- combinator anyway, so widening this wrapper would be a no-op. That was
--- true when written and became false when the removed handler-down-defense client file's own gate was
+-- true when written and became false when that file's own gate was
 -- widened to HasK9Access() alone. The pin then outlived its own premise and
 -- started defending the bug: this wrapper's pre-check was, by then, the ONLY
 -- thing refusing, one layer above an already-correct callee.
