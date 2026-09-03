@@ -871,6 +871,26 @@ end
 --- ALREADY lost every credential, or revoking someone first would strand
 --- them permanently. Authorization is therefore keyed on the GRANTER alone
 --- (IsHighCommand), never on anything about the target.
+---
+--- NO SELF-SERVICE REVERT. EVER. Asked directly, the owner's answer was
+--- "No never": a player wearing the K9 CANNOT return themselves to human,
+--- and no command, radial entry, tablet button or item may ever be added
+--- that lets them. High command puts someone into the role and high
+--- command is the only way out of it.
+---
+--- This is a standing product decision, not an unfinished feature -- do
+--- not "fix" it. The obvious argument for adding one (a player stuck as
+--- the dog at 3am with no admin online) was put to the owner explicitly
+--- and rejected, so raising it again needs a new decision from him, not a
+--- patch. The player-facing half is the Guide's "Go Back to Being Human"
+--- walkthrough, which tells them plainly that the only route is to ask
+--- high command -- keep the two in step if this ever does change.
+---
+--- WHY IT SITS HERE, on the granter-authorized primitive: this function is
+--- where anyone adding a self-revert would start, because it is already
+--- the one path that reverts unconditionally. Making it callable by its
+--- own target is a two-line change and would look like a small
+--- convenience.
 --- @param granterSrc number
 --- @param targetCitizenid string
 --- @return boolean ok
