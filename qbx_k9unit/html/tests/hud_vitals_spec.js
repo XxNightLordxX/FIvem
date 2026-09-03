@@ -34,7 +34,7 @@ t.test('root starts hidden with aria-hidden=true before any message (index.html 
 t.test('visible:true renders all four vitals and un-hides the root', () => {
     const h = freshHarnessNoAudio();
     h.postMessage('hud:updateVitals', {
-        visible: true, health: 82, stamina: 41, hunger: 63, thirst: 97,
+        visible: true, health: 82, stamina: 41,
         wellbeing: {}, xpTier: {},
     });
 
@@ -42,7 +42,7 @@ t.test('visible:true renders all four vitals and un-hides the root', () => {
     t.isFalse(root.classList.contains('hidden'));
     t.equals(root.getAttribute('aria-hidden'), 'false');
 
-    for (const [stat, expected] of [['health', 82], ['stamina', 41], ['hunger', 63], ['thirst', 97]]) {
+    for (const [stat, expected] of [['health', 82], ['stamina', 41]]) {
         const { fill, value } = h.getBarRow(stat);
         t.equals(fill.style.width, `${expected}%`, `${stat} fill width`);
         t.equals(value.textContent, String(expected), `${stat} value text`);
@@ -52,7 +52,7 @@ t.test('visible:true renders all four vitals and un-hides the root', () => {
 t.test('visible:false hides the root and does NOT touch bar DOM (client/hud.lua resends stale values, never zeroed)', () => {
     const h = freshHarnessNoAudio();
     h.postMessage('hud:updateVitals', {
-        visible: true, health: 55, stamina: 55, hunger: 55, thirst: 55,
+        visible: true, health: 55, stamina: 55,
         wellbeing: {}, xpTier: {},
     });
 
@@ -60,7 +60,7 @@ t.test('visible:false hides the root and does NOT touch bar DOM (client/hud.lua 
     // sends: visible=false alongside the LAST REAL values, not zeroed --
     // handleUpdateVitals must return before ever reading data.health here.
     h.postMessage('hud:updateVitals', {
-        visible: false, health: 999, stamina: -999, hunger: 0, thirst: 0,
+        visible: false, health: 999, stamina: -999,
         wellbeing: {}, xpTier: {},
     });
 
@@ -76,7 +76,7 @@ t.test('visible:false hides the root and does NOT touch bar DOM (client/hud.lua 
 t.test('out-of-range values clamp into 0-100 (above max, below min), in-range fractional values round', () => {
     const h = freshHarnessNoAudio();
     h.postMessage('hud:updateVitals', {
-        visible: true, health: 150, stamina: -30, hunger: 63.7, thirst: 100.9,
+        visible: true, health: 150.9, stamina: -30,
         wellbeing: {}, xpTier: {},
     });
 
@@ -84,8 +84,7 @@ t.test('out-of-range values clamp into 0-100 (above max, below min), in-range fr
     t.equals(h.getBarRow('health').value.textContent, '100');
     t.equals(h.getBarRow('stamina').fill.style.width, '0%', 'stamina clamps up from -30');
     t.equals(h.getBarRow('stamina').value.textContent, '0');
-    t.equals(h.getBarRow('hunger').value.textContent, '64', 'in-range fractional value rounds via Math.round');
-    t.equals(h.getBarRow('thirst').value.textContent, '100', 'value just above 100 clamps to exactly 100, not 100.9-rounded-to-101');
+    t.equals(h.getBarRow('health').value.textContent, '100', 'value above 100 clamps to exactly 100, not 150.9-rounded-to-151');
 });
 
 t.test('non-numeric / missing values coerce to 0, never throw (defensive against a malformed payload)', () => {
@@ -94,12 +93,10 @@ t.test('non-numeric / missing values coerce to 0, never throw (defensive against
         visible: true,
         health: 'not a number',
         stamina: null,
-        hunger: undefined,
-        thirst: NaN,
         wellbeing: {}, xpTier: {},
     });
 
-    for (const stat of ['health', 'stamina', 'hunger', 'thirst']) {
+    for (const stat of ['health', 'stamina']) {
         const { fill, value } = h.getBarRow(stat);
         t.equals(fill.style.width, '0%', `${stat} fill on malformed input`);
         t.equals(value.textContent, '0', `${stat} value on malformed input`);
@@ -109,12 +106,12 @@ t.test('non-numeric / missing values coerce to 0, never throw (defensive against
 t.test('a numeric string still parses (Number(raw) coercion, matching JSON payloads that could carry numeric strings)', () => {
     const h = freshHarnessNoAudio();
     h.postMessage('hud:updateVitals', {
-        visible: true, health: '73', stamina: '0', hunger: '100', thirst: '50.4',
+        visible: true, health: '73', stamina: '50.4',
         wellbeing: {}, xpTier: {},
     });
 
     t.equals(h.getBarRow('health').value.textContent, '73');
-    t.equals(h.getBarRow('thirst').value.textContent, '50');
+    t.equals(h.getBarRow('stamina').value.textContent, '50');
 });
 
 t.test('partial payload (only health present) still renders health, and the never-set others read as whatever their coerced-default is (0), never throwing', () => {
@@ -141,10 +138,10 @@ t.test('a null/undefined data payload is a silent no-op (handleUpdateVitals\' ow
 
 t.test('repeated visible:true pushes with changing values keep re-rendering (not a one-shot render)', () => {
     const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', { visible: true, health: 10, stamina: 10, hunger: 10, thirst: 10, wellbeing: {}, xpTier: {} });
+    h.postMessage('hud:updateVitals', { visible: true, health: 10, stamina: 10, wellbeing: {}, xpTier: {} });
     t.equals(h.getBarRow('health').value.textContent, '10');
 
-    h.postMessage('hud:updateVitals', { visible: true, health: 90, stamina: 90, hunger: 90, thirst: 90, wellbeing: {}, xpTier: {} });
+    h.postMessage('hud:updateVitals', { visible: true, health: 90, stamina: 90, wellbeing: {}, xpTier: {} });
     t.equals(h.getBarRow('health').value.textContent, '90');
 });
 

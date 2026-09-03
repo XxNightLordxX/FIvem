@@ -44,13 +44,25 @@ t.test('#k9partner-badge starts hidden before any message arrives', () => {
 
 t.test('visible: true shows the badge and renders the label plus every tag word, comma-joined, in server-sent order', () => {
     const h = freshHarnessNoAudio();
-    h.postMessage('hud:partnerCondition', { visible: true, tags: ['tired', 'hungry'] });
+    // TWO TAGS, DELIBERATELY, so the comma-join and the server-sent order
+    // this test names are actually exercised. 'tired' is now the only tag
+    // the server can emit on its own (mood/fear-stress/injury/hunger/thirst
+    // were removed by owner directive, and their tag codes went with them),
+    // so the second word is supplied the only way a second word can still
+    // legitimately arrive: a `strings` entry from a server that knows a tag
+    // this client build does not. Rendering it proves the join, the order,
+    // and the forward-compatibility path in one.
+    h.postMessage('hud:partnerCondition', {
+        visible: true,
+        tags: ['tired', 'some_future_tag'],
+        strings: { some_future_tag: 'Restless' },
+    });
 
     const badge = h.getPartnerBadge();
     t.isFalse(badge.row.classList.contains('hidden'));
     t.equals(badge.row.getAttribute('aria-hidden'), 'false');
     t.equals(badge.label.textContent, 'K9 Partner');
-    t.equals(badge.value.textContent, 'Tired, Hungry');
+    t.equals(badge.value.textContent, 'Tired, Restless');
 });
 
 t.test('visible: true with an EMPTY tags array renders the "fine" string, not a blank value', () => {
@@ -62,7 +74,7 @@ t.test('visible: true with an EMPTY tags array renders the "fine" string, not a 
 
 t.test('visible: false hides the badge and sets aria-hidden back to true, regardless of what tags carried', () => {
     const h = freshHarnessNoAudio();
-    h.postMessage('hud:partnerCondition', { visible: true, tags: ['injured'] });
+    h.postMessage('hud:partnerCondition', { visible: true, tags: ['tired'] });
     t.isFalse(h.getPartnerBadge().row.classList.contains('hidden'));
 
     h.postMessage('hud:partnerCondition', { visible: false, tags: [] });
@@ -84,7 +96,7 @@ t.test('COMPLETE INDEPENDENCE FROM #k9hud: a hud:partnerCondition push never tou
     // touch the partner badge.
     h.postMessage('hud:partnerCondition', { visible: false, tags: [] });
     t.isTrue(h.getPartnerBadge().row.classList.contains('hidden'));
-    h.postMessage('hud:updateVitals', { visible: true, health: 100, stamina: 100, hunger: 100, thirst: 100, wellbeing: {}, xpTier: {} });
+    h.postMessage('hud:updateVitals', { visible: true, health: 100, stamina: 100, wellbeing: {}, xpTier: {} });
     t.isFalse(h.getRoot().classList.contains('hidden'));
     t.isTrue(h.getPartnerBadge().row.classList.contains('hidden'), 'hud:updateVitals must never show the partner badge');
 });
@@ -93,13 +105,13 @@ t.test('data.strings overrides the English fallback per-key, falling back to the
     const h = freshHarnessNoAudio();
     h.postMessage('hud:partnerCondition', {
         visible: true,
-        tags: ['tired', 'hungry'],
+        tags: ['tired', 'fine'],
         strings: { tired: 'Fatigado', label: 'Mi Perro' },
     });
 
     const badge = h.getPartnerBadge();
     t.equals(badge.label.textContent, 'Mi Perro');
-    t.equals(badge.value.textContent, 'Fatigado, Hungry', 'hungry falls back to the English default since strings.hungry was not sent');
+    t.equals(badge.value.textContent, 'Fatigado, Fine', "'fine' falls back to the English default since strings.fine was not sent");
 });
 
 t.test('an unrecognized tag code (present in neither strings nor the default table) is dropped, never rendered as "undefined"', () => {
@@ -111,9 +123,9 @@ t.test('an unrecognized tag code (present in neither strings nor the default tab
 
 t.test('non-string entries in tags are ignored defensively rather than rendered', () => {
     const h = freshHarnessNoAudio();
-    h.postMessage('hud:partnerCondition', { visible: true, tags: ['tired', 42, null, 'hungry'] });
+    h.postMessage('hud:partnerCondition', { visible: true, tags: ['tired', 42, null, 'fine'] });
 
-    t.equals(h.getPartnerBadge().value.textContent, 'Tired, Hungry');
+    t.equals(h.getPartnerBadge().value.textContent, 'Tired, Fine');
 });
 
 t.test('a missing/non-array tags field on a visible:true payload renders "fine", never throwing', () => {
@@ -129,12 +141,12 @@ t.test('a missing/non-array tags field on a visible:true payload renders "fine",
 
 t.test('a null/undefined data payload is a silent no-op, never touching the badge\'s current state', () => {
     const h = freshHarnessNoAudio();
-    h.postMessage('hud:partnerCondition', { visible: true, tags: ['injured'] });
-    t.equals(h.getPartnerBadge().value.textContent, 'Injured');
+    h.postMessage('hud:partnerCondition', { visible: true, tags: ['tired'] });
+    t.equals(h.getPartnerBadge().value.textContent, 'Tired');
 
     h.postMessage('hud:partnerCondition', null);
     h.postMessage('hud:partnerCondition', undefined);
-    t.equals(h.getPartnerBadge().value.textContent, 'Injured', 'a malformed follow-up push must not clobber the last real state');
+    t.equals(h.getPartnerBadge().value.textContent, 'Tired', 'a malformed follow-up push must not clobber the last real state');
 });
 
 t.test('NEVER innerHTML: a battery of malicious tag/strings values never once touches innerHTML on the badge label or value elements', () => {

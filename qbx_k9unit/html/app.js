@@ -46,8 +46,10 @@
             visible: <boolean>,
             health:  <number>,  // 0-100, normalized percent
             stamina: <number>,  // 0-100
-            hunger:  <number>,  // 0-100
-            thirst:  <number>,  // 0-100
+            // `hunger`/`thirst` REMOVED from this contract (owner
+            // directive: the hunger/thirst system is one of the
+            // subsystems removed completely). client/hud.lua no longer
+            // sends them and index.html no longer has rows for them.
 
             // WELLBEING / XP TIER EXTENSION — added this pass, same
             // message/action, no new push (see client/hud.lua's header
@@ -62,7 +64,7 @@
             // must render that row as genuinely absent (CSS
             // `display: none` via the `k9hud-row--hidden` class), never
             // as a blank/zero placeholder — see applyGatedBarStat()/
-            // applyDistractionStatus()/applyXPTierStatus() below.
+            // applyXPTierStatus() below.
             wellbeing: {
               fatigue:    <number>,   // 0-100, KEY ABSENT unless FatigueSystem is on
             },
@@ -252,10 +254,13 @@
     never touches it, and this handler never touches `#k9hud`.
 
     `tags` is a small, fixed set of COARSE, NON-NUMERIC condition codes —
-    zero or more of 'tired'/'unhappy'/'stressed'/'injured'/'hungry'/
-    'thirsty' — resolved server-side from server/wellbeing.lua's own
-    existing per-stat thresholds (see that file's header for exactly
-    which). NEVER a raw stat value, NEVER a position, NEVER anything that
+    today exactly one, 'tired', since fatigue is the only wellbeing stat
+    left (mood, fear/stress, injury and hunger/thirst were removed by owner
+    directive, and their tags went with them) — resolved server-side from
+    server/wellbeing.lua's own existing per-stat thresholds (see that
+    file's header for exactly which). An unrecognised tag from an older
+    server is skipped rather than rendered, so this list shrinking cannot
+    produce a blank badge. NEVER a raw stat value, NEVER a position, NEVER anything that
     could narrow where the K9 is — this page renders exactly what it is
     sent and invents nothing further. An empty `tags` array (while
     `visible` is true) means every enabled stat is currently in its
@@ -267,9 +272,9 @@
     unconditionally whenever it sees this, never leaving a stale badge
     on screen.
 
-    `strings` (optional, same "resilience net" pattern as `hud:updateVitals`'s
-    own `data.strings` for the Distraction row — see HUD_DEFAULT_STRINGS'
-    own comment above): client/hud.lua resolves every tag's player-visible
+    `strings` (optional, the "resilience net" pattern this surface uses for
+    every locale-carrying message — see PARTNER_CONDITION_DEFAULT_STRINGS'
+    own comment below): client/hud.lua resolves every tag's player-visible
     text via the shared `locale()` function (locales/en.json's `hud` group)
     and forwards the resolved table here; PARTNER_CONDITION_DEFAULT_STRINGS
     below is the non-authoritative English fallback used only if `strings`
@@ -317,8 +322,9 @@
     or anything else html/tablet-bridge.js already owns.
 
     `strings` (optional, same "resilience net" pattern as every other
-    locale-carrying message on this surface — see HUD_DEFAULT_STRINGS' own
-    comment): client/hud.lua resolves `title`/`body`/`dismissHint` via the
+    locale-carrying message on this surface — see
+    PARTNER_CONDITION_DEFAULT_STRINGS' own comment): client/hud.lua
+    resolves `title`/`body`/`dismissHint` via the
     shared `locale()` function (locales/en.json's `hud` group) and
     forwards the resolved table here; ONBOARDING_HINT_DEFAULT_STRINGS below
     is the non-authoritative English fallback used only if `strings` is
@@ -337,7 +343,7 @@
 (function () {
     'use strict';
 
-    /** @type {Record<'health'|'stamina'|'hunger'|'thirst'|'fatigue', { row: HTMLElement, fill: HTMLElement, value: HTMLElement }>} */
+    /** @type {Record<'health'|'stamina'|'fatigue', { row: HTMLElement, fill: HTMLElement, value: HTMLElement }>} */
     var statEls = {};
 
     /** Status-text rows (xpTier) — no bar/fill, see
@@ -362,75 +368,50 @@
      * @type {{ row: HTMLElement, title: HTMLElement, body: HTMLElement, dismiss: HTMLElement }|null} */
     var onboardingHintEls = null;
 
-    /** English fallback for the Distraction status row's text values --
-     * see applyDistractionStatus() below. This is the SAME "resilience
-     * net" pattern html/tablet.js's DEFAULT_STRINGS/S() already use for
-     * the tablet surface (state.strings[key] first, this object as the
-     * fallback only): the `hud:updateVitals` contract does not YET carry
-     * a `strings` sub-object the way `tablet:open` does, so today this
-     * fallback is ALWAYS what renders -- but wiring the lookup this way
-     * now, rather than hardcoding the two literals inline, means the day
-     * client/hud.lua starts sending locale()-resolved text here (e.g.
-     * `data.strings = { <key> = locale('hud.<key>'), ... }`,
-     * mirroring client/tablet.lua's own BuildTabletStrings()), this file
-     * needs zero changes to pick it up -- only this object needs to stay
-     * as the non-authoritative fallback. Reported to the locale owner:
-     * locales/en.json has no `hud` group yet; the two keys below
-     * are the ones needed,
-     * with this exact English text, once client/hud.lua adds a `strings`
-     * field to its payload.
-     * @type {Record<string,string>} */
-    var HUD_DEFAULT_STRINGS = {
-    };
-
-    /**
-     * Resolves one Distraction-row string key, preferring a server-sent
-     * `data.strings[key]` (once client/hud.lua sends one -- see
-     * HUD_DEFAULT_STRINGS' own comment; this payload has no such field
-     * today, so `strings` is always undefined/absent in practice right
-     * now) over the English fallback. Same `typeof ... === 'string' &&
-     * length > 0` guard every other type-strictness check in this file
-     * already uses, so a malformed/empty value degrades to the fallback
-     * rather than rendering blank.
-     * @param {*} strings
-     * @param {string} key
-     * @returns {string}
-     */
-    function hudString(strings, key) {
-        if (strings && typeof strings[key] === 'string' && strings[key].length > 0) {
-            return strings[key];
-        }
-        return HUD_DEFAULT_STRINGS[key];
-    }
+    /* HUD_DEFAULT_STRINGS / hudString() DELETED (owner directive: the
+     * distraction system is one of the subsystems removed completely).
+     * They existed solely to resolve the two literal words the Distraction
+     * status row rendered. That row is gone from index.html, nothing ever
+     * called hudString() again, and the table it read from had already been
+     * emptied to `{}` -- a lookup helper over an empty object, reachable
+     * from nowhere. The Handler Condition Badge below keeps its OWN
+     * equivalent pair, which is live and genuinely used. */
 
     /** English fallback for the Handler Condition Badge's own text values --
      * see partnerConditionString()/applyPartnerCondition() below. Same
-     * "resilience net" pattern as HUD_DEFAULT_STRINGS above: client/hud.lua
+     * "resilience net" pattern this surface uses throughout: client/hud.lua
      * already sends a real `data.strings` object here (resolved via
      * `locale()`, locales/en.json's `hud` group) every push, so in normal
      * operation this fallback is a safety net, not the common path -- but
      * a malformed/missing individual key inside a real `strings` payload
      * still degrades to this table entry rather than rendering blank.
-     * Keys match exactly the six possible tag codes
-     * server/wellbeing.lua's ComputeHandlerConditionTags can ever emit,
-     * plus `fine` (shown when `tags` arrives empty) and `label` (this
-     * badge's own heading).
+     * Keys match exactly the tag codes server/wellbeing.lua's
+     * ComputeHandlerConditionTags can ever emit -- `tired` is now the only
+     * one, since fatigue is the only wellbeing stat left (that function's
+     * own header says so) -- plus `fine` (shown when `tags` arrives empty)
+     * and `label` (this badge's own heading).
+     *
+     * FIVE KEYS DELETED HERE (owner directive: mood, fear/stress, injury
+     * and hunger/thirst are removed subsystems): `unhappy`, `stressed`,
+     * `injured`, `hungry`, `thirsty`. The server stopped emitting those
+     * tags when their systems went, so these fallbacks could never render
+     * again -- but leaving them meant a reader (or a future change) could
+     * reasonably conclude those conditions still exist somewhere. An
+     * unrecognised tag is already handled correctly without them:
+     * applyPartnerCondition() below skips any tag partnerConditionString()
+     * cannot resolve, so an older server sending a stale tag to a newer
+     * client degrades to "Fine", never to a blank badge or an error.
      * @type {Record<string,string>} */
     var PARTNER_CONDITION_DEFAULT_STRINGS = {
         label: 'K9 Partner',
         tired: 'Tired',
-        unhappy: 'Unhappy',
-        stressed: 'Stressed',
-        injured: 'Injured',
-        hungry: 'Hungry',
-        thirsty: 'Thirsty',
         fine: 'Fine',
     };
 
     /**
      * Resolves one Handler Condition Badge string key -- same shape as
-     * hudString() above, kept as its own function (not a shared helper)
-     * since the two default-string tables are independent and unrelated.
+     * every other string resolver on this surface, kept as its own function
+     * since each default-string table is independent and unrelated.
      * @param {*} strings
      * @param {string} key
      * @returns {string}
@@ -443,12 +424,11 @@
     }
 
     /** Bar-row stat keys whose owning Config.Features flag can be off,
-     * i.e. every row added this pass except the original four vitals
-     * (health/stamina/hunger/thirst are gated only by
-     * Config.Features.HealthStaminaHUD, which this whole page being
-     * visible at all already implies — see client/hud.lua's own "GATING"
-     * note). Iterated by handleUpdateVitals() below, one applyGatedBarStat()
-     * call per entry.
+     * i.e. every row except the always-present vitals (health/stamina are
+     * gated only by Config.Features.HealthStaminaHUD, which this whole page
+     * being visible at all already implies — see client/hud.lua's own
+     * "GATING" note). Iterated by handleUpdateVitals() below, one
+     * applyGatedBarStat() call per entry.
      * @type {Array<'fatigue'>} */
     var GATED_BAR_STATS = ['fatigue'];
 
@@ -473,7 +453,7 @@
 
     /**
      * Applies one stat's value to its bar fill width + numeric readout.
-     * @param {'health'|'stamina'|'hunger'|'thirst'|'fatigue'} stat
+     * @param {'health'|'stamina'|'fatigue'} stat
      * @param {*} rawValue
      */
     function applyStat(stat, rawValue) {
@@ -543,14 +523,12 @@
         if (!present) return;
 
         var badgePresent = typeof rawBadge === 'string' && rawBadge.length > 0;
-        // textContent only, both pieces -- see applyDistractionStatus's own
-        // note; both strings DO come from the network (server-authoritative
+        // textContent only, both pieces; both strings DO come from the network (server-authoritative
         // Config.XPTiers label/badge, or a live XP Tier Editor override),
         // which is exactly why textContent (never innerHTML) matters here.
         // The " ★ " (star) separator is a decorative glyph, not
         // translatable copy, so it does not need a hud_* string-table entry
-        // the way the Distraction row's two literal words already do (see
-        // HUD_DEFAULT_STRINGS' own comment on that file-wide convention).
+        // the way this surface's real, player-visible words do.
         els.value.textContent = badgePresent ? (rawLabel + ' ★ ' + rawBadge) : rawLabel;
     }
 
@@ -566,13 +544,9 @@
      * hidden, so it does). The `wellbeing`/`xpTier` objects added this
      * pass follow the identical "skip touching DOM while root is hidden"
      * rule -- their own PER-ROW gating (applyGatedBarStat/
-     * applyDistractionStatus/applyXPTierStatus) is a SEPARATE, additional
-     * layer on top of this, not a replacement for it. `strings` (optional,
-     * not part of the contract as of this pass -- see HUD_DEFAULT_STRINGS'
-     * own comment) is forwarded to applyDistractionStatus() so a future
-     * client/hud.lua revision can override its English fallback text
-     * without any further app.js change.
-     * @param {{ visible: boolean, health: number, stamina: number, hunger: number, thirst: number, wellbeing?: object, xpTier?: object, strings?: Record<string,string> }} data
+     * applyXPTierStatus) is a SEPARATE, additional layer on top of this,
+     * not a replacement for it.
+     * @param {{ visible: boolean, health: number, stamina: number, wellbeing?: object, xpTier?: object }} data
      */
     function handleUpdateVitals(data) {
         if (!data || !rootEl) return;
@@ -585,8 +559,6 @@
 
         applyStat('health', data.health);
         applyStat('stamina', data.stamina);
-        applyStat('hunger', data.hunger);
-        applyStat('thirst', data.thirst);
 
         var wellbeing = data.wellbeing || {};
         for (var i = 0; i < GATED_BAR_STATS.length; i++) {
@@ -619,7 +591,7 @@
         var strings = data.strings;
         // textContent only, both pieces -- never innerHTML, same standing
         // rule as every other DOM write in this file (see
-        // applyDistractionStatus's own comment). Every string rendered here
+        // Every string rendered here
         // comes from partnerConditionString()'s own fixed, code/locale-owner
         // authored table -- never a value echoed from the network payload
         // verbatim (the payload's own `tags` entries are used only as
@@ -651,7 +623,7 @@
     // ------------------------------------------------------------------
 
     /** English fallback for the onboarding hint's own text values -- same
-     * "resilience net" pattern as HUD_DEFAULT_STRINGS/
+     * "resilience net" pattern as
      * PARTNER_CONDITION_DEFAULT_STRINGS above: client/hud.lua already
      * sends a real `data.strings` object here (resolved via `locale()`,
      * locales/en.json's `hud` group) every push, so in normal operation
@@ -665,7 +637,7 @@
 
     /**
      * Resolves one onboarding-hint string key -- same shape as
-     * hudString()/partnerConditionString() above, kept as its own function
+     * partnerConditionString() above, kept as its own function
      * since all three default-string tables are independent.
      * @param {*} strings
      * @param {string} key
@@ -1159,16 +1131,6 @@
                 row: document.querySelector('[data-stat-row="stamina"]'),
                 fill: document.querySelector('[data-fill="stamina"]'),
                 value: document.querySelector('[data-value="stamina"]'),
-            },
-            hunger: {
-                row: document.querySelector('[data-stat-row="hunger"]'),
-                fill: document.querySelector('[data-fill="hunger"]'),
-                value: document.querySelector('[data-value="hunger"]'),
-            },
-            thirst: {
-                row: document.querySelector('[data-stat-row="thirst"]'),
-                fill: document.querySelector('[data-fill="thirst"]'),
-                value: document.querySelector('[data-value="thirst"]'),
             },
             fatigue: {
                 row: document.querySelector('[data-stat-row="fatigue"]'),

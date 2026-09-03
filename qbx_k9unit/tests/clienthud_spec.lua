@@ -3,7 +3,7 @@
 
     Direct, black-box tests of client/hud.lua against the REAL, unmodified
     production file: the Config.Features.HealthStaminaHUD file-scope gate,
-    ReadVitals()'s health/stamina/hunger/thirst derivation (all `local`,
+    ReadVitals()'s health/stamina derivation (all `local`,
     reached only through the 'hud:ready' NUI callback and the poll thread's
     own pushes -- both real, resource-visible entry points), the five
     independently-gated wellbeing rows (fatigue/
@@ -270,7 +270,7 @@ t.test('gating: HealthStaminaHUD = true (real shipped default) -- one vitals pol
 end)
 
 -- ----------------------------------------------------------------------
--- ReadVitals -- health/stamina/hunger/thirst, reached via 'hud:ready'
+-- ReadVitals -- health/stamina, reached via 'hud:ready'
 -- ----------------------------------------------------------------------
 
 t.test('hud:ready: calls back with an empty table, unconditionally and immediately', function()
@@ -620,14 +620,26 @@ t.test('HANDLER CONDITION BADGE: a missing `tags` field on a visible=true payloa
     t.equals(#msg.data.tags, 0)
 end)
 
-t.test('HANDLER CONDITION BADGE: every one of the six tag strings plus fine/label resolves via the REAL locale() call against locales/en.json -- proves the keys genuinely exist, not just that this file compiles', function()
+t.test('HANDLER CONDITION BADGE: every tag string plus fine/label resolves via the REAL locale() call against locales/en.json -- proves the keys genuinely exist, not just that this file compiles', function()
+    -- 'tired' is now the ONLY tag server/wellbeing.lua's
+    -- ComputeHandlerConditionTags can emit -- mood, fear/stress, injury and
+    -- hunger/thirst were removed by owner directive, and their tag codes
+    -- ('unhappy'/'stressed'/'injured'/'hungry'/'thirsty') went with them,
+    -- out of this table, out of locales/en.json, and out of html/app.js's
+    -- own PARTNER_CONDITION_DEFAULT_STRINGS fallback. Re-adding any of them
+    -- to this list would make this test demand a locale key for a condition
+    -- that no longer exists.
     local f = newHudFixture()
     f.firePartnerConditionUpdate(65535, { visible = true, tags = {} })
     local msg = f.lastMessageWithAction('hud:partnerCondition')
     local strings = msg.data.strings
-    for _, key in ipairs({ 'tired', 'unhappy', 'stressed', 'injured', 'hungry', 'thirsty', 'fine', 'label' }) do
+    for _, key in ipairs({ 'tired', 'fine', 'label' }) do
         t.equals(type(strings[key]), 'string')
         t.isTrue(#strings[key] > 0)
+    end
+
+    for _, gone in ipairs({ 'unhappy', 'stressed', 'injured', 'hungry', 'thirsty' }) do
+        t.isNil(strings[gone], gone .. ' is a removed subsystem\'s tag and must not be sent to the HUD any more')
     end
 end)
 

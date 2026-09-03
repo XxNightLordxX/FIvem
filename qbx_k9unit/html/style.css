@@ -65,8 +65,8 @@ body {
        sizing are provisional defaults, not a signed-off design — revisit
        once coder-ui's own layout/UX pass lands. Also flagged in
        DEVELOPER_REFERENCE.md#hud-bridge: a K9-model character may show this
-       alongside the server's existing core-HUD hunger/thirst readout;
-       differentiate styling/placement if that turns out to double up. */
+       alongside the server's own core HUD; differentiate styling/placement
+       if that turns out to double up. */
 }
 
 /* Hidden until the first `hud:updateVitals` push with `data.visible ===
@@ -77,23 +77,21 @@ body {
     display: none;
 }
 
-/* Per-row feature gate — added this pass for the five wellbeing rows plus
-   the XP tier row. Distinct from `#k9hud.hidden` above (that one hides the
+/* Per-row feature gate — for the fatigue row plus the XP tier row. Distinct from `#k9hud.hidden` above (that one hides the
    WHOLE overlay; this one hides ONE row whose owning Config.Features flag
    is off, or whose value has genuinely never arrived yet). `display: none`
    here is deliberate, not `visibility: hidden` or opacity: 0 — a
    feature-disabled row must be genuinely ABSENT (no layout box at all,
    nothing to accidentally show through), not merely invisible-but-present,
    per this HUD's own "must be absent, not blank or zeroed" requirement.
-   Toggled in app.js's applyGatedBarStat()/applyDistractionStatus()/
-   applyXPTierStatus(); see that file for which payload key's absence maps
-   to which row. */
+   Toggled in app.js's applyGatedBarStat()/applyXPTierStatus(); see that
+   file for which payload key's absence maps to which row. */
 .k9hud-row.k9hud-row--hidden {
     display: none;
 }
 
-/* Distraction and XP tier are status-text rows, not track+fill bars (see
-   index.html's own comments on each for why) — no `.k9hud-bar-track`
+/* XP tier is a status-text row, not a track+fill bar (see index.html's
+   own comment on it for why) — no `.k9hud-bar-track`
    child, so this fixes their value column to the same visual weight as a
    bar row's numeric readout without needing the bar-track's own width. */
 .k9hud-row--status .k9hud-status-value {
@@ -156,21 +154,16 @@ body {
     background: #f2c14e;
 }
 
-.k9hud-bar-fill--hunger {
-    background: #7fb2e0;
-}
+/* The `--hunger` and `--thirst` fills are DELETED (owner directive: the
+   hunger/thirst system is one of the subsystems removed completely, and
+   index.html no longer has rows for them). */
 
-.k9hud-bar-fill--thirst {
-    background: #6fd6d6;
-}
-
-/* Wellbeing bar colors — added this pass, same "placeholder guess,
-   deliberately distinct hues" posture as the four above (TODO(coder-ui)
-   note above still applies to these too). Fatigue/Mood/Injury are
-   a higher-is-better stat, same semantic direction as Health/Stamina/
-   Hunger/Thirst above (a full bar is good) — a greenish hue chosen only
-   for visual distinction from the core four, not to imply anything about
-   good/bad by hue (the core four already establish that hue here is
+/* Wellbeing bar color — same "placeholder guess, deliberately distinct
+   hue" posture as the two above (TODO(coder-ui) note above still applies
+   to it too). Fatigue is a higher-is-better stat, same semantic direction
+   as Health/Stamina above (a full bar is good) — a greenish hue chosen
+   only for visual distinction from the core two, not to imply anything
+   about good/bad by hue (the core two already establish that hue here is
    decorative, not semantic — e.g. Health is red despite full=good). */
 .k9hud-bar-fill--fatigue {
     background: #9bd17f;

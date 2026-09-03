@@ -7,7 +7,7 @@
     deleted from the real index.html, or the whole document skeleton
     deleted around it, changes nothing any of them observe. That is exactly
     what happened once: a pass removing four wellbeing rows cut from
-    `<!DOCTYPE html>` through the end of the thirst row, taking `<html>`,
+    `<!DOCTYPE html>` through the end of the stamina row, taking `<html>`,
     `<head>`, `<body>` and the `#k9hud` container with them and leaving a
     file whose first real element was a stray `</div>`. Every spec stayed
     green, because none of them ever reads this file.
@@ -54,7 +54,13 @@ t.test('the #k9hud root starts hidden -- nothing may flash on screen before the 
 
 // The exact row inventory. A row here that app.js never writes to is dead
 // markup; a row app.js writes to that is missing here is a silent no-op.
-const EXPECTED_BAR_ROWS = ['health', 'stamina', 'hunger', 'thirst', 'fatigue'];
+// 'hunger'/'thirst' REMOVED from this list, deliberately (owner directive:
+// the hunger/thirst system is one of the subsystems removed completely).
+// Their rows are gone from index.html, their fills from style.css, their
+// fields from the hud:updateVitals wire contract, and their reads from
+// client/hud.lua's ReadVitals(). Putting either name back here would be a
+// green test for markup that must no longer exist.
+const EXPECTED_BAR_ROWS = ['health', 'stamina', 'fatigue'];
 const EXPECTED_STATUS_ROWS = ['xpTier'];
 
 t.test('every expected bar row is present with all three of its data-* hooks', () => {

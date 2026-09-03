@@ -27,9 +27,16 @@
     resource has any JS tooling; this is a receive-only readout, not a
     component tree that benefits from a reactive framework).
 
-    Structure: one root container (#k9hud) holding four labeled
-    track+fill bar rows (health/stamina/hunger/thirst), one additional
+    Structure: one root container (#k9hud) holding two labeled
+    track+fill bar rows (health/stamina), one additional
     wellbeing track+fill bar row (fatigue), and one XP tier status-text row
+
+    HUNGER AND THIRST ROWS DELETED (owner directive: "hungerthirstsystem"
+    is one of the subsystems removed completely). They were the last
+    visible remnant of it: the K9 hunger/thirst mechanic itself was gone,
+    but these two bars kept rendering the PLAYER's ordinary framework
+    hunger/thirst (qbx_core metadata) inside the K9 HUD -- duplicating what
+    the server's own HUD already shows, under a removed feature's name.
     (app.js's applyXPTierStatus()) — each of the two additive rows starts
     with the `k9hud-row--hidden` class already applied (style.css), a
     row-scoped sibling of the `#k9hud.hidden` class the root itself uses:
@@ -74,22 +81,6 @@
                 <div class="k9hud-bar-fill k9hud-bar-fill--stamina" data-fill="stamina"></div>
             </div>
             <span class="k9hud-value" data-value="stamina">--</span>
-        </div>
-
-        <div class="k9hud-row" data-stat-row="hunger">
-            <span class="k9hud-label">Hunger</span>
-            <div class="k9hud-bar-track">
-                <div class="k9hud-bar-fill k9hud-bar-fill--hunger" data-fill="hunger"></div>
-            </div>
-            <span class="k9hud-value" data-value="hunger">--</span>
-        </div>
-
-        <div class="k9hud-row" data-stat-row="thirst">
-            <span class="k9hud-label">Thirst</span>
-            <div class="k9hud-bar-track">
-                <div class="k9hud-bar-fill k9hud-bar-fill--thirst" data-fill="thirst"></div>
-            </div>
-            <span class="k9hud-value" data-value="thirst">--</span>
         </div>
 
         <!--

@@ -4,7 +4,7 @@
     Phase 4. Config.Features.HealthStaminaHUD
     gate (currently `false` in config.lua — this file registers NOTHING at
     all while that stays false, see the gating note below). DEVELOPER_REFERENCE.md §6.6
-    first bullet: "NUI HUD displays health, stamina, hunger, and thirst for
+    first bullet: "NUI HUD displays health and stamina for
     the active K9... only if Config.Features.HealthStaminaHUD is true."
 
     Authoritative contract for everything in this file:
@@ -42,8 +42,6 @@
                visible = <boolean>,
                health  = <number>,  -- 0-100
                stamina = <number>,  -- 0-100
-               hunger  = <number>,  -- 0-100
-               thirst  = <number>,  -- 0-100
              },
            }
        `visible` and all four numbers are ALWAYS sent together, never
@@ -62,7 +60,7 @@
     desync fields" rationale the original four vitals already follow. The
     payload's `data` object gains two new keys, ALWAYS present as tables
     (possibly with some/all of their own keys absent), sent alongside
-    `visible`/health/stamina/hunger/thirst on every push:
+    `visible`/health/stamina on every push:
 
         data.wellbeing = {
           fatigue    = <number 0-100>,  -- KEY ABSENT unless Config.Features.FatigueSystem
@@ -203,18 +201,17 @@
     the HUD bar means what it says (full when fresh, draining as the K9
     tires).
 
-    HUNGER/THIRST SOURCE — MEDIUM confidence per design note §3: read from
-    the already-live `QBX.PlayerData.metadata` client-side cache
-    (fxmanifest.lua already pulls in `@qbx_core/modules/playerdata.lua` for
-    exactly this, the same source `metadata.k9certified` already reuses —
-    see client/main.lua's header for that precedent). The exact field
-    names (`hunger`/`thirst`) and 0-100 scale are NOT independently
-    verified against a live qbx_core install — confirm with whoever owns
-    the qbx_core integration before this flag ships enabled. No new server
-    event/callback is added here for this — if the real field names
-    differ, that's a QBX.PlayerData schema fix, not a reason to invent a
-    redundant network round trip for data the client already caches
-    locally.
+    HUNGER/THIRST ROWS REMOVED (owner directive: "hungerthirstsystem" is
+    one of the subsystems removed completely). This HUD used to carry two
+    further bars alongside health and stamina, read from
+    `QBX.PlayerData.metadata.hunger`/`.thirst`. The K9-specific
+    hunger/thirst mechanic was already gone by then; what those two bars
+    still showed was the PLAYER's ordinary framework hunger and thirst,
+    which the server's own core HUD already displays -- so they were both
+    a duplicate readout and the last visible trace of a removed feature.
+    Deleted here, in html/index.html, html/app.js and html/style.css
+    together; the wire contract in this header no longer carries the two
+    fields at all.
 
     ONRESOURCESTOP — deliberately NOT added. Contrast client/vision.lua's
     onResourceStop handler, which exists because SetSeethrough/
@@ -246,7 +243,7 @@
 -- DELIBERATELY ABOVE Config.Features.HealthStaminaHUD's early-return
 -- (immediately below this block) — THIS IS NOT A BUG, READ BEFORE MOVING
 -- IT: HealthStaminaHUD gates the K9's OWN on-screen vitals (health/
--- stamina/hunger/thirst/wellbeing bars) for whoever is CURRENTLY PLAYING
+-- stamina/wellbeing bars) for whoever is CURRENTLY PLAYING
 -- THE DOG. This feature is for the opposite audience — a plain officer who
 -- is NOT their own K9, so CanShowK9UI() (IsOwnModelK9() AND HasK9Access())
 -- is false for them essentially always. Gating this badge behind the same
@@ -317,11 +314,6 @@ local PARTNER_CONDITION_EVENT = 'qbx_k9unit:client:partnerConditionUpdate'
 --- heading).
 local PARTNER_CONDITION_STRINGS = {
     tired = locale('hud.partner_condition_tired'),
-    unhappy = locale('hud.partner_condition_unhappy'),
-    stressed = locale('hud.partner_condition_stressed'),
-    injured = locale('hud.partner_condition_injured'),
-    hungry = locale('hud.partner_condition_hungry'),
-    thirsty = locale('hud.partner_condition_thirsty'),
     fine = locale('hud.partner_condition_fine'),
     label = locale('hud.partner_condition_label'),
 }
@@ -566,9 +558,8 @@ if ONBOARD_CFG.enabled ~= false then
     local ONBOARD_KVP_DISMISSED_PREFIX = 'qbx_k9unit_onboard_dismissed_'
 
     --- @return string|nil -- nil while QBX.PlayerData has not populated a
-    --- citizenid yet (mirrors this file's own "hunger/thirst" defensive
-    --- read of QBX.PlayerData.metadata above -- same early-session gap,
-    --- same posture: never trust it is already there).
+    --- citizenid yet -- QBX.PlayerData may not be populated this early in
+    --- a session, so never trust it is already there.
     local function GetOwnCitizenId()
         local playerData = QBX and QBX.PlayerData
         local citizenid = playerData and playerData.citizenid
@@ -762,8 +753,6 @@ local hudState = {
     visible = false,
     health = 100.0,
     stamina = 100.0,
-    hunger = 100.0,
-    thirst = 100.0,
     fatigue = 100.0,
     xpTierLabel = nil, -- string|nil; nil means "no tier known yet" (XPProgression disabled, or no snapshot received this session yet) — rendered as an absent row in that case, per the header's "absence, not blank" rule
     xpTierBadge = nil, -- string|nil; nil means "no badge on the current tier" (same absent-row rule as xpTierLabel above) -- e.g. non-nil for config.lua's Elite row (`badge = 'elite'`), nil for every other shipped tier
@@ -833,7 +822,7 @@ end
 --- reads, no network round trip (design note §3: "structurally simpler
 --- bridge... all four source values are already known to the client with
 --- zero network latency").
---- @return number health, number stamina, number hunger, number thirst
+--- @return number health, number stamina
 local function ReadVitals()
     local ped = PlayerPedId()
 
@@ -853,28 +842,16 @@ local function ReadVitals()
     -- remaining).
     -- Defaults to 100.0 (full stamina) when the native doesn't return a
     -- number, matching the same "never paints as starving/depleted"
-    -- fallback philosophy health/hunger/thirst already follow above/below
-    -- — a malformed read should never look like an empty stamina bar.
+    -- fallback philosophy health already follows above — a malformed read
+    -- should never look like an empty stamina bar.
     local staminaRemaining = GetPlayerSprintStaminaRemaining(PlayerId())
     local stamina = type(staminaRemaining) == 'number' and (100.0 - staminaRemaining) or 100.0
     stamina = clamp01to100(stamina)
 
-    -- hunger/thirst — see this file's header "HUNGER/THIRST SOURCE" note
-    -- on field-name/scale confidence. Defensive nil-chained read since
-    -- QBX.PlayerData.metadata may not be populated yet this early in a
-    -- session (e.g. hud:ready firing before qbx_core's own playerdata
-    -- event has landed) — default to 100 (full) rather than 0 (empty) so
-    -- a not-yet-loaded metadata table never paints as "starving."
-    local metadata = QBX.PlayerData and QBX.PlayerData.metadata
-    local hunger = (metadata and type(metadata.hunger) == 'number') and metadata.hunger or 100.0
-    local thirst = (metadata and type(metadata.thirst) == 'number') and metadata.thirst or 100.0
-    hunger = clamp01to100(hunger)
-    thirst = clamp01to100(thirst)
-
-    return health, stamina, hunger, thirst
+    return health, stamina
 end
 
---- Reads the five wellbeing display fields fresh from `wellbeingCache`
+--- Reads the wellbeing display field (fatigue, the only one left) fresh from `wellbeingCache`
 --- (itself only ever updated by the push-driven event listener above —
 --- see this file's header, no network read happens here), returning nil
 --- for any field whose owning Config.Features flag is off. A nil return
@@ -933,12 +910,10 @@ end
 --- @param visible boolean
 --- @param health number
 --- @param stamina number
---- @param hunger number
---- @param thirst number
 --- @param fatigue number|nil
 --- @param xpTierLabel string|nil
 --- @param xpTierBadge string|nil
-local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
+local function PushVitals(visible, health, stamina, fatigue, xpTierLabel, xpTierBadge)
     -- See this file's header "WELLBEING / XP TIER EXTENSION" — any of
     -- these five keys being nil above means it is simply ABSENT here (a
     -- Lua table never stores a nil-valued key), which is exactly the
@@ -984,8 +959,6 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, xpT
             visible = visible,
             health = health,
             stamina = stamina,
-            hunger = hunger,
-            thirst = thirst,
             wellbeing = wellbeing,
             xpTier = xpTier,
         },
@@ -994,8 +967,6 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, xpT
     hudState.visible = visible
     hudState.health = health
     hudState.stamina = stamina
-    hudState.hunger = hunger
-    hudState.thirst = thirst
     hudState.fatigue = fatigue
     hudState.xpTierLabel = xpTierLabel
     hudState.xpTierBadge = xpTierBadge
@@ -1015,10 +986,10 @@ end
 RegisterNUICallback('hud:ready', function(_, cb)
     cb({})
 
-    local health, stamina, hunger, thirst = ReadVitals()
+    local health, stamina = ReadVitals()
     local fatigue = ReadWellbeingForDisplay()
     local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
-    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
+    PushVitals(CanShowK9UI(), health, stamina, fatigue, xpTierLabel, xpTierBadge)
 end)
 
 -- ----------------------------------------------------------------------
@@ -1063,14 +1034,14 @@ CreateThread(function()
                 -- JS doesn't have to wait out a stale-zero flash" rule,
                 -- extended here to the wellbeing/xpTier fields for the
                 -- identical reason.
-                PushVitals(false, hudState.health, hudState.stamina, hudState.hunger, hudState.thirst,
+                PushVitals(false, hudState.health, hudState.stamina,
                     hudState.fatigue,
                     hudState.xpTierLabel, hudState.xpTierBadge)
             end
 
             Wait(HUD_IDLE_TICK_MS) -- design note §5.4: idle backoff while not currently relevant
         else
-            local health, stamina, hunger, thirst = ReadVitals()
+            local health, stamina = ReadVitals()
             local fatigue = ReadWellbeingForDisplay()
             local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
             local becameVisible = not hudState.visible
@@ -1078,8 +1049,6 @@ CreateThread(function()
 
             local changedEnough = math.abs(health - hudState.health) > HUD_CHANGE_EPSILON
                 or math.abs(stamina - hudState.stamina) > HUD_CHANGE_EPSILON
-                or math.abs(hunger - hudState.hunger) > HUD_CHANGE_EPSILON
-                or math.abs(thirst - hudState.thirst) > HUD_CHANGE_EPSILON
                 -- Each wellbeing comparison below short-circuits on its own
                 -- enabled flag BEFORE ever touching hudState's (possibly
                 -- nil, if disabled) slot for that field — see
@@ -1093,7 +1062,7 @@ CreateThread(function()
             -- §5.5's false -> true immediate-push rule), independent of
             -- both the epsilon check and the heartbeat ceiling.
             if becameVisible or changedEnough or heartbeatDue then
-                PushVitals(true, health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
+                PushVitals(true, health, stamina, fatigue, xpTierLabel, xpTierBadge)
             end
 
             Wait(HUD_POLL_TICK_MS) -- design note §5.1: active poll cadence while visible
