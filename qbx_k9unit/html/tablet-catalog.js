@@ -322,7 +322,6 @@
         // here read-only, source_config); this tab manages the runtime,
         // database-backed pool ONLY (source_runtime) -- see
         // server/equipmentshop.lua's own SCOPE note.
-        tab_shop_locations: 'Shop Locations',
         shop_locations_heading: 'K9 Supply Shop Locations',
         shop_locations_disabled_note: 'The K9 Supply Shop is disabled server-wide. Existing locations are shown for reference only.',
         shop_locations_empty: 'No shop locations configured yet.',
@@ -368,6 +367,8 @@
         // that file's raw English `note` prose is NEVER rendered verbatim,
         // per its own header ("LOCALE KEYS THIS FILE NEEDS: none... never
         // player-facing prose").
+        tab_shop: "K9 Supply Shop",
+        help_tab_shop_desc: "Everything about the K9 supply shop, in two sections: where its ped stands in the world for each department, and what it sells -- at what price, and which certification tier is required to buy each item. You may see only one of the two sections: they are separate permissions, so someone can be trusted with the catalog without being trusted to move the shop, or the other way round.",
         tab_runtime_control: 'Runtime Control',
         runtime_control_heading: 'Runtime Feature Control',
         runtime_control_intro: 'These settings apply server-wide, for every player. Check the Effect column before changing anything — not every switch takes effect immediately.',
@@ -713,7 +714,6 @@
         // very DEFAULT_STRINGS table covers that exact gap in the
         // meantime, same resilience-net role it already documents for
         // every other key.
-        tab_shop_items: 'Shop Items',
         shop_items_heading: 'K9 Supply Shop Items',
         shop_items_add_label: 'Add New Item',
         shop_items_empty: 'No shop items configured yet.',
@@ -1217,8 +1217,6 @@
         help_tab_cert_tiers_desc: "Add, rename, or remove certification tiers (like Trainee, Certified, Senior) and decide which extra abilities each tier unlocks. Open it before you certify anyone if the default tiers do not match how your server is organized.",
         help_tab_permission_keys_desc: "Add or remove the permission keys this tablet can grant to a specific person (like the ability to certify others). Open it if a permission you need does not exist yet -- to grant an existing one to someone, use the Console tab's Person screen instead.",
         help_tab_roster_desc: "Everyone currently hired, across every configured department, with their callsign, certification tier, XP, and active partner if any. Switch between K9s and Handlers at the top; both share one \"Unassigned\" section -- certified people who have not been assigned to either roster yet, which is not an error, just people still waiting to be sorted. Open a row to hire, fire, promote, demote, change someone's roster role, or set a callsign -- all from their profile, the same one the Console tab and Online Players list also open.",
-        help_tab_shop_locations_desc: "Decide where the K9 supply shop ped stands in the world, for each department. Open it to move or add a shop, not to change what it sells.",
-        help_tab_shop_items_desc: "Decide what the K9 supply shop sells, at what price, and which certification tier is required to buy each item. Open it to change the shop's catalog.",
         help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
         help_tab_xp_tiers_desc: "Decide how much XP is needed to reach each rank. Open it to change the pace of progression.",
         help_tab_audit_desc: "A read-only history of who certified whom, who partnered with whom, who searched whom, XP grants, and department-wide activity. This is privacy-sensitive -- it shows real names and real actions. Open it to investigate something that already happened.",

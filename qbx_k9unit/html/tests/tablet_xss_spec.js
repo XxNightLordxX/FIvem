@@ -304,7 +304,7 @@ for (const malicious of MALICIOUS_STRINGS) {
         await settle();
 
         const { findByText } = require('./tablet-dom-stub');
-        findByText(h.getRoot(), 'Shop Locations')[0].click();
+        findByText(h.getRoot(), 'K9 Supply Shop')[0].click();
         await settle();
 
         // Table: label + ped model, rendered identically for BOTH the
@@ -350,7 +350,7 @@ for (const malicious of MALICIOUS_STRINGS) {
         await settle();
 
         const { findByText } = require('./tablet-dom-stub');
-        findByText(h.getRoot(), 'Shop Locations')[0].click();
+        findByText(h.getRoot(), 'K9 Supply Shop')[0].click();
         await settle();
 
         findByText(h.getRoot(), 'Add Location Here')[0].click();
@@ -451,7 +451,7 @@ t.test('shop locations: a full battery of malicious strings across many sequenti
         // a freshly-random malicious payload on every visit.
         findByText(h.getRoot(), 'My Record')[0].click();
         await settle();
-        findByText(h.getRoot(), 'Shop Locations')[0].click();
+        findByText(h.getRoot(), 'K9 Supply Shop')[0].click();
         await settle();
     }
     t.equals(everyElementInnerHTMLWriteCount(h), 0, 'zero innerHTML writes across the whole document after every malicious shop-location payload in this suite, across repeated tab-visit cycles');

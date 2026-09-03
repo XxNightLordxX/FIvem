@@ -964,7 +964,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' | 'my_record' | 'progression' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' | 'my_record' | 'progression' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -2328,10 +2328,8 @@
             panel.appendChild(buildCertTiersScreen());
         } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand && surfaceEnabled('permission_keys')) {
             panel.appendChild(buildPermissionKeysScreen());
-        } else if (state.screen === 'shop_locations' && canManageShopLocations()) {
-            panel.appendChild(buildShopLocationsScreen());
-        } else if (state.screen === 'shop_items' && canManageShopItems()) {
-            panel.appendChild(buildShopItemsScreen());
+        } else if (state.screen === 'shop' && (canManageShopLocations() || canManageShopItems())) {
+            panel.appendChild(buildShopScreen());
         } else if (state.screen === 'runtime_control' && canManageRuntimeControl()) {
             panel.appendChild(buildRuntimeControlScreen());
         } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand && surfaceEnabled('xp_tiers')) {
@@ -2798,48 +2796,43 @@
         // here called this "SAME high-command gate" -- stated incorrectly;
         // corrected.) Fresh entry clears any leftover draft/refusal, same
         // reset discipline as every other tab switch on this page.
-        if (canManageShopLocations()) {
-            var shopLocationsTab = mkButton(S('tab_shop_locations'), 'k9tablet-tab' + (state.screen === 'shop_locations' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'shop_locations';
+        // K9 SUPPLY SHOP -- ONE tab, two sections (plan item F). It was two
+        // tabs, "Shop Locations" and "Shop Items", for one shop behind one
+        // feature flag: where the ped stands, and what it sells.
+        //
+        // THE TWO CAPABILITIES STAY SEPARATE, which is why the sections are
+        // gated individually inside buildShopScreen() rather than the tab
+        // gating both. server/equipmentshop.lua has two independent,
+        // independently-delegable keys -- CanManageShopLocations
+        // ('k9.equipmentshoplocations') and CanManageShopItems
+        // ('k9.equipmentshopitems') -- and a viewer holding exactly one of
+        // them must see exactly one section. Merging the tabs must not
+        // quietly merge the authorization, so the tab appears for either
+        // key and each section still asks its own question.
+        //
+        // Fresh entry clears both drafts and loads whichever list this
+        // viewer can actually see -- same reset discipline as every other
+        // tab on this page, and no fetch fired for a list its own key would
+        // refuse. loadCertTiers() rides along for the Items section's
+        // "Required Tier" picker, same best-effort posture as
+        // openPerson()'s own call: a caller who cannot list tiers sees the
+        // raw tier key as text rather than a broken control.
+        if (canManageShopLocations() || canManageShopItems()) {
+            var shopTab = mkButton(S('tab_shop'), 'k9tablet-tab' + (state.screen === 'shop' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'shop';
                 state.shopLocationDraft = null;
                 state.shopLocationActionError = null;
-                render();
-                loadShopLocations();
-            });
-            appendAdminTab(shopLocationsTab);
-        }
-
-        // K9 Supply Shop ITEM CATALOG editing -- NOT high-command-only:
-        // server/equipmentshop.lua's own CanManageShopItems(source) is
-        // `IsHighCommand(source) OR HasPermission(citizenid,
-        // 'k9.equipmentshopitems') == true` (verified directly against
-        // source, tests/equipmentshopitems_spec.lua:616). canManageShopItems()
-        // mirrors canViewAudit()'s own isHighCommand-OR-capability idiom --
-        // see that function's doc comment. (This file's PREVIOUS comment
-        // here called this "SAME high-command gate" -- stated incorrectly;
-        // corrected.) Sits alongside the Shop Locations tab immediately
-        // above -- same "K9 Supply Shop" domain, split into two tabs
-        // because WHICH items are sold (this tab) vs. WHERE the shop ped
-        // stands (the tab above) are two independent server-side
-        // authorization keys, each independently delegable. Fresh entry
-        // clears any leftover draft/refusal, same reset discipline as
-        // every other tab switch on this page. Also opportunistically
-        // loads the certification-tier catalog (needed for this screen's
-        // own "Required Tier" picker) -- SAME best-effort posture as
-        // openPerson()'s own loadCertTiers() call: a caller who cannot
-        // list tiers simply sees the raw tier key as plain text instead of
-        // a labelled dropdown option, never a broken control.
-        if (canManageShopItems()) {
-            var shopItemsTab = mkButton(S('tab_shop_items'), 'k9tablet-tab' + (state.screen === 'shop_items' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'shop_items';
                 state.shopItemDraft = null;
                 state.shopItemFieldError = null;
                 state.shopItemActionError = null;
                 render();
-                loadEquipmentShopItems();
-                loadCertTiers();
+                if (canManageShopLocations()) loadShopLocations();
+                if (canManageShopItems()) {
+                    loadEquipmentShopItems();
+                    loadCertTiers();
+                }
             });
-            appendAdminTab(shopItemsTab);
+            appendAdminTab(shopTab);
         }
 
         // Runtime feature control + tuning -- NOT high-command-only:
@@ -3804,8 +3797,11 @@
         // immediately above). ONE entry, because there is now one tab: the
         // K9/Handlers split is a control on the screen, not two tabs.
         { tabLabelKey: 'tab_roster', descKey: 'help_tab_roster_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_shop_locations', descKey: 'help_tab_shop_locations_desc', visible: canManageShopLocations },
-        { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: canManageShopItems },
+        // ONE entry, because there is one K9 Supply Shop tab now (plan item
+        // F). Visible to a holder of EITHER shop capability, matching the
+        // tab's own gate -- the two sections inside it are still gated
+        // separately.
+        { tabLabelKey: 'tab_shop', descKey: 'help_tab_shop_desc', visible: function () { return canManageShopLocations() || canManageShopItems(); } },
         { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: canManageRuntimeControl },
         { tabLabelKey: 'tab_xp_tiers', descKey: 'help_tab_xp_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_audit', descKey: 'help_tab_audit_desc', visible: canViewAudit },
@@ -7331,8 +7327,26 @@
      * every one of the three mutating callbacks this screen calls -- see
      * THE SECURITY RULE.
      */
-    function buildShopLocationsScreen() {
+    /**
+     * The K9 Supply Shop screen: where the ped stands, then what it sells.
+     * Two sections, one tab (plan item F) -- and each section asks its OWN
+     * capability question, because server/equipmentshop.lua gates the two
+     * independently and a viewer may legitimately hold only one.
+     * @returns {Element}
+     */
+    function buildShopScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
+        if (canManageShopLocations()) {
+            wrap.appendChild(buildShopLocationsSection());
+        }
+        if (canManageShopItems()) {
+            wrap.appendChild(buildShopItemsSection());
+        }
+        return wrap;
+    }
+
+    function buildShopLocationsSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('shop_locations_heading') }));
 
         if (!state.shopLocationsEnabled) {
@@ -7619,8 +7633,8 @@
      * every one of the four callbacks this screen calls -- see THE
      * SECURITY RULE.
      */
-    function buildShopItemsScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
+    function buildShopItemsSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('shop_items_heading') }));
 
         if (state.shopItemsLoading && !state.shopItems) {
@@ -10460,7 +10474,7 @@
     // ificationList/buildCertificationDetail/buildCapabilityList/build
     // PersonFeaturesSection/buildAuditModeSwitch+buildAuditForm+build
     // AuditResults/buildRuntimeFeaturesSection/buildRuntimeTunablesSection/
-    // buildCertTiersScreen/buildXpTiersScreen/buildShopItemsScreen) is
+    // buildCertTiersScreen/buildXpTiersScreen/buildShopItemsSection) is
     // called HERE, UNMODIFIED, exactly as the standalone Console/Person/
     // Audit/Theme/Cert Tiers/Runtime Control/XP Tiers/Shop Items tabs
     // already call it -- every action a flow step takes is the SAME
@@ -11545,7 +11559,7 @@
     // an operator visits in sequence. Every step embeds the REAL,
     // UNMODIFIED existing screen/section builder (buildRuntimeFeatures
     // Section/buildRuntimeTunablesSection/buildCertTiersScreen/
-    // buildXpTiersScreen/buildShopItemsScreen) -- so every edit made from
+    // buildXpTiersScreen/buildShopItemsSection) -- so every edit made from
     // inside this flow is the identical call, with the identical
     // authorization, as making it from that screen's own standalone tab.
     // The Overview step answers "here is what I have changed" HONESTLY,
@@ -11623,7 +11637,7 @@
         } else if (state.flowStep === 4) {
             body.appendChild(buildXpTiersScreen());
         } else if (state.flowStep === 5) {
-            body.appendChild(buildShopItemsScreen());
+            body.appendChild(buildShopItemsSection());
         } else {
             body.appendChild(buildFlowTuningOverview());
         }

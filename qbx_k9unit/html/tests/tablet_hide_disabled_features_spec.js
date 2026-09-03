@@ -320,8 +320,6 @@ t.test('A RECORD THAT HAS NOT RESOLVED HIDES NOTHING -- "not loaded" must never 
 
 const ADMIN_SURFACE_TABS = [
     { surface: 'theme', tab: 'Tablet Theme' },
-    { surface: 'shop_locations', tab: 'Shop Locations' },
-    { surface: 'shop_items', tab: 'Shop Items' },
     { surface: 'runtime_control', tab: 'Runtime Control' },
     { surface: 'audit', tab: 'Audit Trail' },
     { surface: 'permission_keys', tab: 'Permission Keys' },
@@ -395,6 +393,28 @@ t.test('ADMIN SURFACES: turning AdminAuditCommands off does NOT also take away t
     t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'the Command Console is not');
 });
 
+t.test('ADMIN SURFACES: the ONE K9 Supply Shop tab needs only ONE of its two surfaces -- it is two sections behind two independent permissions', async () => {
+    // The two shop screens became one tab (plan item F), but the two
+    // server-side keys did NOT merge: 'k9.equipmentshoplocations' and
+    // 'k9.equipmentshopitems' stay independently delegable, and the
+    // sections inside the tab are gated separately. So the tab survives as
+    // long as EITHER half is available -- hiding it because one went off
+    // would take away the half that still works.
+    const onlyLocations = surfacesHarness({ shop_locations: true, shop_items: false });
+    await openTabletOnly(onlyLocations);
+    t.isTrue(findByText(onlyLocations.getRoot(), 'K9 Supply Shop').length >= 1, 'locations alone keeps the tab');
+
+    const onlyItems = surfacesHarness({ shop_locations: false, shop_items: true });
+    await openTabletOnly(onlyItems);
+    t.isTrue(findByText(onlyItems.getRoot(), 'K9 Supply Shop').length >= 1, 'items alone keeps the tab');
+});
+
+t.test('ADMIN SURFACES: with BOTH shop surfaces off the K9 Supply Shop tab is gone entirely', async () => {
+    const h = surfacesHarness({ shop_locations: false, shop_items: false });
+    await openTabletOnly(h);
+    t.equals(findByText(h.getRoot(), 'K9 Supply Shop').length, 0, 'nothing left in it, so nothing to offer');
+});
+
 t.test('ADMIN SURFACES: FAILS OPEN -- a payload with no `surfaces` object at all keeps every tab', async () => {
     const h = surfacesHarness(undefined);
     await openTabletOnly(h);
@@ -402,6 +422,7 @@ t.test('ADMIN SURFACES: FAILS OPEN -- a payload with no `surfaces` object at all
     for (const entry of ADMIN_SURFACE_TABS) {
         t.isTrue(findByText(h.getRoot(), entry.tab).length >= 1, entry.tab + ' survives a payload that never mentions surfaces');
     }
+    t.isTrue(findByText(h.getRoot(), 'K9 Supply Shop').length >= 1, 'and so does the shop tab, whose two surfaces are checked separately');
 });
 
 t.test('ADMIN SURFACES: FAILS OPEN -- a `surfaces` object that simply omits a key keeps that tab', async () => {

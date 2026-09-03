@@ -1023,7 +1023,7 @@ local TABLET_STRING_KEYS = {
     -- K9 Supply Shop location management (high command only) -- see this
     -- file's own header NUI CONTRACT section on the four
     -- tablet:equipmentShop*Location(s) callbacks.
-    'tab_shop_locations', 'shop_locations_heading', 'shop_locations_disabled_note',
+    'shop_locations_heading', 'shop_locations_disabled_note',
     'shop_locations_empty', 'column_coordinates', 'column_model', 'column_source',
     'source_config', 'source_runtime', 'shop_location_add_here_label',
     'shop_location_add_hint', 'shop_location_label_label', 'shop_location_label_placeholder',
@@ -1045,6 +1045,7 @@ local TABLET_STRING_KEYS = {
     -- page's OWN plain-language rendering of that file's `tier` field --
     -- see this file's own NUI CONTRACT note on why the server's raw `note`
     -- prose is never forwarded/rendered verbatim.
+    'tab_shop', 'help_tab_shop_desc',
     'tab_runtime_control', 'runtime_control_heading', 'runtime_control_intro',
     'runtime_control_disabled_note', 'runtime_features_heading',
     'runtime_features_empty', 'runtime_tunables_heading', 'runtime_tunables_empty',
@@ -1221,7 +1222,7 @@ local TABLET_STRING_KEYS = {
     -- NOT YET present as of the pass that added them, flagged to that
     -- file's owner -- they have since been added, so BuildTabletStrings()
     -- now resolves every one of them for real.
-    'tab_shop_items', 'shop_items_heading', 'shop_items_add_label', 'shop_items_empty',
+    'shop_items_heading', 'shop_items_add_label', 'shop_items_empty',
     'column_price', 'column_currency', 'column_required_tier', 'column_required_specialization',
     'shop_item_key_label', 'shop_item_key_placeholder', 'shop_item_price_label',
     'shop_item_label_label', 'shop_item_label_placeholder', 'shop_item_currency_label',
@@ -1472,7 +1473,7 @@ local TABLET_STRING_KEYS = {
     'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro', 'help_tab_home_desc',
     'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
     'help_tab_flows_desc', 'help_tab_theme_desc', 'help_tab_cert_tiers_desc', 'help_tab_permission_keys_desc',
-    'help_tab_shop_locations_desc', 'help_tab_shop_items_desc', 'help_tab_runtime_control_desc', 'help_tab_xp_tiers_desc',
+    'help_tab_runtime_control_desc', 'help_tab_xp_tiers_desc',
     'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
     'help_commands_admin_heading', 'help_commands_admin_intro', 'help_tasks_heading', 'help_task_get_certified_heading',
     'help_task_get_certified_1', 'help_task_get_certified_2', 'help_task_get_certified_3_template', 'help_task_partner_up_heading',

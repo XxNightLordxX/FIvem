@@ -21,7 +21,7 @@
          screens reachable from Home (progressive disclosure: High Command
          Tools appears for state.viewer.isHighCommand === true, OR for a
          non-high-command viewer holding one of the four delegable
-         capabilities -- Theme/Shop Locations/Shop Items/Runtime Control,
+         capabilities -- Theme/K9 Supply Shop/Runtime Control,
          see html/tablet.js's own canManageTabletTheme() doc comment --
          in which case only THAT capability's own shortcut shows, never
          the high-command-only ones alongside it).
@@ -145,7 +145,9 @@ t.test('HIGH COMMAND: Home shows role badge "High Command" and the High Command 
     // grouped into its own band (see html/tablet.css's own
     // ".k9tablet-tab-group--admin" comment) -- checked here as "exactly
     // one occurrence", never a second, arrow-suffixed copy on Home.
-    for (const label of ['Tablet Theme', 'Certification Tiers', 'Permission Keys', 'Shop Locations', 'Shop Items', 'Runtime Control', 'XP Ranks', 'Audit Trail']) {
+    // 'K9 Supply Shop' is ONE tab covering both shop sections (plan item
+    // F), and 'K9 Overrides' is no longer a tab at all (plan item D).
+    for (const label of ['Tablet Theme', 'Certification Tiers', 'Permission Keys', 'K9 Supply Shop', 'Runtime Control', 'XP Ranks', 'Audit Trail']) {
         t.equals(findByText(h.getRoot(), label).length, 1, `"${label}" tab appears exactly once -- no competing Home shortcut`);
     }
 
@@ -196,7 +198,7 @@ t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command 
     // and every OTHER delegable one this viewer does NOT hold stays
     // absent -- never a wider admin band than this viewer's own real
     // access, exactly as buildTabs() itself already gates.
-    for (const label of ['Guided Flows', 'Tablet Theme', 'Certification Tiers', 'Permission Keys', 'Shop Locations', 'Shop Items', 'XP Ranks', 'K9 Overrides', 'Audit Trail']) {
+    for (const label of ['Guided Flows', 'Tablet Theme', 'Certification Tiers', 'Permission Keys', 'K9 Supply Shop', 'XP Ranks', 'K9 Overrides', 'Audit Trail']) {
         t.equals(findByText(h.getRoot(), label).length, 0, `"${label}" tab must NOT appear for this viewer`);
     }
 
