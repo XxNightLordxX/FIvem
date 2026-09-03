@@ -2574,9 +2574,15 @@
         // the first thing a brand-new, uncertified player sees; burying it
         // under a wall of records would trade one problem for another.
         var myTab = mkButton(S('tab_my_record'), 'k9tablet-tab' + (state.screen === 'home' ? ' k9tablet-tab--active' : ''), function () {
-            state.screen = 'home';
-            render();
-            loadMyRecord();
+            // Calls goToMyRecordScreen() rather than repeating its body --
+            // the same way the Guide, Console and Partnerships tabs below
+            // call theirs. This tab inlined the three lines while the
+            // helper had other callers: the "View My Record" quick-action
+            // cards. The Home/My Record/Progression merge deleted those
+            // cards (they pointed at the screen they sat on), which left
+            // the helper with no caller at all and the duplication with
+            // nothing left to justify it.
+            goToMyRecordScreen();
         });
         tabs.appendChild(myTab);
 
@@ -2926,21 +2932,29 @@
     // NO CERTIFICATION IS NOT AN EMPTY SHELL: a viewer with zero active
     // certifications still gets a real, useful screen -- an explicit
     // "you're not certified yet, here is what to do" notice (see
-    // buildHomeIdentityCard() below) INSTEAD OF a blank card, and still
-    // gets the "View My Record" quick action (which itself already
-    // renders 'no_certifications'/'no_abilities' honestly, never a
-    // broken screen -- see buildHomeScreen() immediately below this
+    // buildHomeIdentityCard() below) INSTEAD OF a blank card, and the
+    // certification and ability lists further down this same screen
+    // still render 'no_certifications'/'no_abilities' honestly rather
+    // than going blank (see buildHomeScreen() immediately below this
     // block).
     //
-    // NAVIGATION HELPERS immediately below are COPIED VERBATIM from
-    // buildTabs()'s own matching tab onClick bodies (same screen, same
-    // fresh-entry draft/error/warning reset, same reload calls) --
-    // deliberately NOT a refactor of buildTabs() itself to share these
-    // (this file is being edited by several other agents concurrently
-    // this same pass; touching every existing tab's own closure body
-    // to share code carries far more conflict risk than one small,
-    // clearly-labelled, easy-to-audit duplication here). If buildTabs()
-    // ever changes one of these bodies, keep this block in sync.
+    // There is no longer a "View My Record" quick-action card pointing at
+    // those lists: the Home/My Record/Progression merge moved them onto
+    // THIS screen, so the card would have sent the viewer to the screen
+    // they were already on. tests/tablet_home_spec.js asserts it is gone.
+    //
+    // NAVIGATION HELPERS immediately below are the SINGLE definition of
+    // what entering each of these screens means -- same screen, same
+    // fresh-entry draft/error/warning reset, same reload calls.
+    //
+    // They began as verbatim copies of buildTabs()'s matching tab onClick
+    // bodies, duplicated on purpose because several agents were editing
+    // this file at once and touching every tab's closure carried more
+    // conflict risk than one clearly-labelled duplication. That debt has
+    // since been paid off in both directions: buildTabs() now CALLS each
+    // of these helpers instead of repeating it, so there is no second
+    // copy left to keep in sync, and changing entry behaviour here
+    // changes it for the tab too.
     // ------------------------------------------------------------------
 
     function goToMyRecordScreen() {
@@ -3854,24 +3868,6 @@
         return Array.isArray(perms) && perms.indexOf(capability) !== -1;
     }
 
-    /** @returns {boolean} gates the Guide's own admin task sections --
-     * true for isHighCommand OR any ONE of the three delegatable
-     * admin capabilities real COMMAND_REFERENCE entries actually use
-     * (k9.certify/k9.audit/k9.givexp -- see COMMAND_REFERENCE's own
-     * certification/xp/audit categories). Deliberately does NOT also check
-     * canManageTabletTheme()/canManageShopLocations()/canManageShopItems()/
-     * canManageRuntimeControl(): none of those four capabilities gate any
-     * real chat command at all (they are pure tablet-screen actions with
-     * no RegisterCommand equivalent), so including them here would show
-     * this heading to a shop/theme/runtime delegate who cannot actually
-     * use a single row in the table underneath it. */
-    function helpSeesAdminCommands() {
-        return helpHighCommandOnly()
-            || helpHasCapability('k9.certify')
-            || helpHasCapability('k9.audit')
-            || helpHasCapability('k9.givexp');
-    }
-
     /** @type {Array<{tabLabelKey:string, descKey:string, visible:() => boolean}>}
      * See this block's own header for the drift guard
      * (tests/helptabcoverage_spec.lua) that keeps this list's `tabLabelKey`
@@ -4030,13 +4026,16 @@
         ]));
 
         // ADDITIVE ONLY, the same posture the deleted admin command table
-        // used to take --
-        // but each of these four gets its OWN real gate rather than one
-        // blanket flag, because each is genuinely different:
+        // used to take -- but each of these four gets its OWN real gate
+        // rather than one blanket flag, because each is genuinely
+        // different. (The blanket helper this block used to share,
+        // helpSeesAdminCommands(), was deleted with the last of its
+        // callers: four precise gates strictly beat one loose one, since
+        // the loose one showed a heading to delegates who could not use a
+        // single row underneath it.)
         //   - Certify Someone: isHighCommand OR the k9.certify capability
         //     (server/certifications/'s own rank-based-certifier-or-grant
-        //     shape -- matches helpSeesAdminCommands()'s own certification
-        //     row check).
+        //     shape).
         //   - Turn Someone Into a K9: TRUE high command only, verified
         //     directly against server/tablet.lua's tabletAssignK9Role (a
         //     thin wrapper over server/appearance.lua's ApplyK9PedRole,

@@ -22,7 +22,7 @@ encryption, is what stops redistribution.
 **This is the one document for installing, configuring, and running this
 resource.** Everything about *playing* it — every command, what each one
 needs, and step-by-step walkthroughs for setting up a handler, running a
-search, and so on — lives in the K9 Command Tablet's own in-game Help tab
+search, and so on — lives in the K9 Command Tablet's own in-game Guide tab
 (`/k9tablet`), not here. This document covers what that tablet can't:
 getting the resource running in the first place, the decisions you need
 to make before real players touch it, and what to do if it misbehaves.
@@ -35,7 +35,7 @@ The full feature set, in brief, so nothing here is a surprise you find
 out about from a support ticket. All of these ship **on** by default
 unless noted; every one is an independent switch in `Config.Features`
 and can be turned off. Full command syntax for all of these is in the
-tablet's own Help tab, not here.
+tablet's own Guide tab, not here.
 
 - **Certification** — the access-control core: a supervisor certifies a
   department member as a K9 handler, or high command assigns the role
@@ -300,7 +300,7 @@ and step 2 of "Your first session" below) — you can check almost everything
 by yourself: reaching High Command (a
 department boss already qualifies, and so does anyone at the configured
 `highCommandGrade`), self-certifying (on by default), turning into the
-K9, opening `/k9tablet`, reading its Help tab, and using every
+K9, opening `/k9tablet`, reading its Guide tab, and using every
 single-player ability (search, tracking, vision, wellbeing, the radial
 menu, and so on).
 
@@ -627,8 +627,8 @@ verified against the current code, not a guess.)*
 `/k9tablet` (or an item, depending on `Config.CommandTablet.openMode`)
 opens the K9 Command Tablet — the in-game control panel for everything
 in this resource, and the place to go for a full command reference and
-guided walkthroughs (its own Help/Commands tabs cover that; this
-section only covers what you need to know *before* you trust it).
+guided walkthroughs (its own Guide tab covers both; this section only
+covers what you need to know *before* you trust it).
 
 It is a **view only** — every action it offers is re-checked
 server-side exactly as if the matching chat command had been typed, so
@@ -814,4 +814,4 @@ needed to get this resource running:
   They are listed here only so that finding them in the folder does not
   send you off reading the wrong thing — `docs/history/TABLET_REWORK_SPEC.md` in
   particular is named after a feature you *will* use, and is not its
-  documentation. The tablet documents itself, in its own Help tab.
+  documentation. The tablet documents itself, in its own Guide tab.
