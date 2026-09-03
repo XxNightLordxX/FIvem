@@ -374,7 +374,7 @@
         html/tablet-bridge.js's own top-level Escape listener as a second,
         independent path for when keyboard focus is on the parent document
         instead of this iframe) and never waits for its response before
-        hiding itself locally (see closeTablet() below -- the close path
+        hiding itself locally (see requestClose() below -- the close path
         must never depend on a round trip succeeding).
 
       tablet:equipmentShopGetLocations {} -> cb({ ok, locations?, error? })
@@ -666,7 +666,7 @@
 
     /** How long a destructive action button (Decertify/Revoke/Block) shows
      * its "Confirm?" state before reverting, if not clicked again -- see
-     * makeConfirmButton() below. Deliberately NOT window.confirm()/alert():
+     * mkConfirmButton() below. Deliberately NOT window.confirm()/alert():
      * FiveM's CEF-based NUI does not reliably support native browser
      * dialogs, so a real, in-DOM two-click confirm is used instead. */
     var CONFIRM_WINDOW_MS = 3000;
@@ -1189,7 +1189,7 @@
         // entirely server-side (FEATURE_TIERS/TUNABLE_REGISTRY), never
         // duplicated here.
         runtimeControlEnabled: false, // Config.Features.RuntimeFeatureControl -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
-        runtimeFeatures: null, // [{ name, currentValue, configLuaDefault, tier, note, overridden, overriddenBy, overriddenAt, protected }, ...] -- the COMPLETE server inventory; the table below renders only the `live` ones, see liveRuntimeFeatures()
+        runtimeFeatures: null, // [{ name, currentValue, configLuaDefault, tier, note, overridden, overriddenBy, overriddenAt, protected }, ...] -- the COMPLETE server inventory; the table below renders only the `live` ones, see splitRuntimeFeaturesByReachability()
         runtimeFeaturesLoading: false,
         runtimeFeaturesError: null,
         runtimeFeaturesRequestId: 0, // STALE-RESPONSE GUARD -- same request-id shape as shopLocationsRequestId above (this list has no per-request identity to compare against arrival order)
@@ -1292,7 +1292,7 @@
         auditEnabled: false, // Config.Features.AdminAuditCommands -- UX hint only, but see this file's own NUI CONTRACT note on why this one specifically disables the query controls rather than just showing a note
         auditMode: 'cert', // 'cert' | 'partner' | 'search' | 'xp' | 'dept' | 'catalog' -- which of the six tabletAudit* callbacks the query form below currently targets
         auditCitizenId: '', // shared free-text input for the cert/partner/xp modes
-        auditDepartment: '', // tabletAuditDept's own `departmentKey` input -- free text, but pre-offered as a <select> from state.myRecord.certifications' own real departmentKey list (never a hardcoded department list -- see buildAuditDeptFields())
+        auditDepartment: '', // tabletAuditDept's own `departmentKey` input -- free text, but pre-offered as a <select> from state.myRecord.certifications' own real departmentKey list (never a hardcoded department list -- see buildAuditForm()'s own 'dept' branch, which offers knownDepartmentKeys() as a datalist)
         auditSearchMode: 'officer', // 'officer' | 'plate' | 'person' | 'recent' -- tabletAuditSearch's own `mode`
         auditSearchValue: '', // citizenid (officer/person) or plate (plate); unused for 'recent'
         auditCatalogName: 'certTiers', // tabletAuditCatalog's own `catalogName` -- one of AUDIT_CATALOG_NAMES' 8 keys; 'certTiers' (that array's first entry) is the default, same "first entry of the fixed list" convention auditSearchMode's own 'officer' default already uses
@@ -10984,11 +10984,21 @@
                 // never guessed when the server itself sent nothing usable.
                 job: (result.job && typeof result.job === 'object') ? result.job : null,
                 partnership: (result.partnership && typeof result.partnership === 'object') ? result.partnership : null,
-                // server/tablet.lua's OWN re-derivation field for the
-                // Onboarding flow's K9 Role step -- see that file's doc
-                // comment on this field and buildFlowOnboardK9RoleSummaryLine()
-                // below for why the summary reads THIS, never a click's own
-                // claimed result. string|null, never guessed.
+                // server/tablet.lua's OWN re-derivation field: which ped
+                // model this person is actually assigned, read back from
+                // the server rather than inferred from any click's claimed
+                // result. string|null, never guessed.
+                //
+                // NOTHING CURRENTLY RENDERS IT. Its only reader was the
+                // Onboarding flow's K9 Role summary line, which went with
+                // that flow when the three person-shaped flows were
+                // retired. Kept normalised here rather than dropped
+                // because the server still sends it and the Person
+                // screen's K9 profile section is its natural home if
+                // anyone wants it shown -- surfacing it would be a new
+                // feature, which this pass deliberately does not add. Said
+                // plainly so the next reader does not go hunting for the
+                // display code that renders it.
                 assignedK9Model: (typeof result.assignedK9Model === 'string' && result.assignedK9Model.length > 0) ? result.assignedK9Model : null,
             };
             if (result.target && typeof result.target.name === 'string' && state.person) {
@@ -11278,7 +11288,7 @@
      * buildTabs()) -- NEVER a hardcoded list, same posture as
      * loadCertTiers() just above. High command OR a delegated
      * 'k9.equipmentshoplocations' grant (server-side gate -- see this
-     * screen's own buildShopLocationsScreen() doc comment; client-side
+     * section's own buildShopLocationsSection() doc comment; client-side
      * display gate -- canManageShopLocations()). */
     function loadShopLocations() {
         state.shopLocationsLoading = true;
