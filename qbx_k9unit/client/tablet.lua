@@ -1182,8 +1182,8 @@ local TABLET_STRING_KEYS = {
     -- buildK9ProfilesScreen(). Sits alongside the XP Rank Editor block
     -- immediately above (this pass composes ON TOP OF that ladder, see
     -- server/k9profiles.lua's own header "RESOLUTION ORDER").
-    'tab_k9_profiles', 'k9_profiles_heading', 'k9_profiles_intro', 'k9_profiles_list_heading',
-    'k9_profiles_empty', 'column_note', 'k9_profile_lookup_placeholder', 'k9_profile_lookup_button',
+    'k9_profiles_intro', 'k9_profiles_list_heading',
+    'k9_profiles_empty', 'column_note',
     'k9_profile_manage_label', 'k9_profile_field_not_overridden', 'k9_profile_tier_label_prefix', 'k9_profile_effective_speed_prefix',
     'k9_profile_effective_scent_prefix', 'k9_profile_effective_medkit_prefix', 'k9_profile_overridden_suffix', 'k9_profile_from_tier_suffix',
     'k9_profile_not_yet_live_hint', 'k9_profile_speed_multiplier_label', 'k9_profile_speed_multiplier_hint', 'k9_profile_scent_range_multiplier_label',
@@ -1473,7 +1473,7 @@ local TABLET_STRING_KEYS = {
     'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
     'help_tab_flows_desc', 'help_tab_theme_desc', 'help_tab_cert_tiers_desc', 'help_tab_permission_keys_desc',
     'help_tab_shop_locations_desc', 'help_tab_shop_items_desc', 'help_tab_runtime_control_desc', 'help_tab_xp_tiers_desc',
-    'help_tab_k9_profiles_desc', 'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
+    'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
     'help_commands_admin_heading', 'help_commands_admin_intro', 'help_tasks_heading', 'help_task_get_certified_heading',
     'help_task_get_certified_1', 'help_task_get_certified_2', 'help_task_get_certified_3_template', 'help_task_partner_up_heading',
     'help_task_partner_up_1', 'help_task_partner_up_2', 'help_task_partner_up_3', 'help_task_partner_up_4',

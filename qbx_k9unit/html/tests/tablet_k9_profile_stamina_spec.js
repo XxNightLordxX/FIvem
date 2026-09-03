@@ -33,12 +33,37 @@ function findByTextContaining(node, substring) {
     return findAll(node, (n) => typeof n._textContent === 'string' && n._textContent.indexOf(substring) !== -1);
 }
 
+/**
+ * ROUTE CHANGED, NOT THE CAPABILITY (plan item D). Per-dog overrides used
+ * to have a tab of their own, with its own citizen-ID lookup box. The
+ * editor was always the Person screen's (buildPersonK9ProfileSection); the
+ * tab added a duplicate lookup and a second copy of the same panel. The tab
+ * is gone, its list of who-holds-an-override moved to the Command Console,
+ * and the editor is reached the way everything else about a person is: open
+ * the person.
+ *
+ * So every test below still exercises the identical editor and the
+ * identical callbacks -- only the two clicks that get there changed.
+ */
+const PERSON_ROUTE_DEFAULTS = {
+    'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
+    'tablet:requestOnlinePlayers': () => ({ ok: true, rows: [], truncated: false }),
+    'tablet:k9ProfilesList': () => ({ ok: true, overrides: [] }),
+    'tablet:requestPersonSummary': (body) => ({ ok: true, target: { citizenid: body.targetCitizenId, name: body.targetCitizenId }, certifications: [], xp: 0, tierLabel: null, permissions: [], partnership: null }),
+    'tablet:requestPersonFeatures': () => ({ ok: true, target: { citizenid: 'DOG1', name: 'DOG1' }, features: [] }),
+    'tablet:permKeysList': () => ({ ok: true, keys: [] }),
+    'tablet:certTiersList': () => ({ ok: true, tiers: [] }),
+    'tablet:rosterList': () => ({ ok: true, k9: [], handlers: [], unassigned: [] }),
+    'tablet:requestPartnershipsForTarget': () => ({ ok: false, error: 'not_stubbed' }),
+};
+
 function routeFetch(handlers, calls) {
+    const merged = Object.assign({}, PERSON_ROUTE_DEFAULTS, handlers);
     return function (url, init) {
         const name = url.split('/').pop();
         const body = init && init.body ? JSON.parse(init.body) : undefined;
         if (calls) calls.push({ name: name, body: body });
-        const h = handlers[name];
+        const h = merged[name];
         if (!h) return Promise.reject(new Error('tablet_k9_profile_stamina_spec: unhandled NUI callback ' + name));
         return Promise.resolve(jsonResponse(h(body)));
     };
@@ -51,17 +76,41 @@ async function settle(times) {
 const HC_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
 const ORDINARY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.access'], allowSelfGrant: false };
 
+/** The Console's "open by exact citizen ID" box -- the one person-finder
+ * this tablet keeps, and the route to the override editor now that the K9
+ * Overrides tab and its duplicate lookup are gone. */
 function lookupInput(h) {
-    return findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Enter a citizen ID...')[0];
+    return findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Open by exact citizen ID...')[0];
+}
+
+/**
+ * The override editor's own number fields, in DOM order.
+ *
+ * SCOPED BY CLASS, not "every number input on screen" -- and that is the
+ * whole point of the change, not an inconvenience from it. The editor now
+ * renders on the PERSON screen, which also carries the Give XP control (a
+ * number input) and the capability list (checkboxes). A bare
+ * "first number input" or "first checkbox" lookup would silently grab one
+ * of those and the test would pass or fail for entirely the wrong reason.
+ */
+function overrideNumberInputs(h) {
+    return findByTag(h.getRoot(), 'input').filter((i) =>
+        i.getAttribute('type') === 'number' && i.getAttribute('step') === 'any');
+}
+
+/** The override editor's "Never runs out (permanent)" checkbox -- NOT one of
+ * the Person screen's capability checkboxes, which carry their own class. */
+function permanentStaminaCheckbox(h) {
+    return findByTag(h.getRoot(), 'input').filter((i) =>
+        i.getAttribute('type') === 'checkbox'
+        && !(i.classList && i.classList.contains('k9tablet-capability-checkbox')))[0];
 }
 
 async function openK9OverridesTab(h) {
     h.postMessage('tablet:open', {});
     await settle();
     findByText(h.getRoot(), 'Command Console')[0].click();
-    await settle();
-    findByText(h.getRoot(), 'K9 Overrides')[0].click();
-    await settle();
+    await settle(4);
 }
 
 t.test('a NON-high-command viewer gets NO K9 Overrides control rendered at all -- not merely hidden, never constructed', async () => {
@@ -72,7 +121,7 @@ t.test('a NON-high-command viewer gets NO K9 Overrides control rendered at all -
     });
     h.postMessage('tablet:open', {});
     await settle();
-    t.equals(findByText(h.getRoot(), 'K9 Overrides').length, 0, 'the tab itself never appears');
+    t.equals(findByText(h.getRoot(), 'K9 Overrides').length, 0, 'no such tab exists for anyone any more (plan item D) -- and certainly not for this viewer');
 });
 
 t.test('a NON-high-command viewer\'s own Person screen (reached via k9.certify) never shows the K9 Individual Override section either -- the server re-verifies regardless, but this page must not offer a control that will only error', async () => {
@@ -105,11 +154,12 @@ t.test('NO CLIENT-SIDE CEILING: a speed multiplier far above the old hardcoded 3
     await openK9OverridesTab(h);
 
     lookupInput(h).typeValue('DOG1');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
-    const speedInput = findByTag(h.getRoot(), 'input').find((i) => i.getAttribute('type') === 'number' && i.getAttribute('max') === null && i.value === '');
-    t.isDefined(speedInput, 'the speed input has NO max attribute at all');
+    const speedInput = overrideNumberInputs(h)[0];
+    t.isDefined(speedInput, 'the speed input exists');
+    t.isTrue(speedInput.getAttribute('max') === null, 'and has NO max attribute at all');
 
     speedInput.typeValue('7.5');
     findByText(h.getRoot(), 'Save Override')[0].click();
@@ -139,10 +189,10 @@ t.test('PERMANENT STAMINA: checking "Never runs out" saves sprintDecayPerTick = 
     await openK9OverridesTab(h);
 
     lookupInput(h).typeValue('DOG2');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
-    const permanentCheckbox = findByTag(h.getRoot(), 'input').find((i) => i.getAttribute('type') === 'checkbox');
+    const permanentCheckbox = permanentStaminaCheckbox(h);
     t.isDefined(permanentCheckbox, 'a real checkbox affordance exists for permanent stamina, not just a number field');
     permanentCheckbox.checked = true;
     permanentCheckbox._dispatch('change', { target: permanentCheckbox });
@@ -175,10 +225,10 @@ t.test('a stamina override already at 0 reopens with the permanent checkbox CHEC
     });
     await openK9OverridesTab(h);
     lookupInput(h).typeValue('DOG3');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
-    const permanentCheckbox = findByTag(h.getRoot(), 'input').find((i) => i.getAttribute('type') === 'checkbox');
+    const permanentCheckbox = permanentStaminaCheckbox(h);
     t.isTrue(permanentCheckbox.checked, 'reopening an existing permanent override shows the checkbox already checked');
     t.isTrue(findByTextContaining(h.getRoot(), 'Never runs out (permanent)').length >= 1, 'the effective-value line reads as "permanent" in plain language, not a bare 0');
 });
@@ -205,8 +255,8 @@ t.test('RESET actually restores default behaviour -- after resetting, the profil
     });
     await openK9OverridesTab(h);
     lookupInput(h).typeValue('DOG4');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     t.isTrue(findByText(h.getRoot(), 'Reset All Overrides').length >= 1, 'a live override exists, so Reset is offered');
     // Two-click confirm (mkConfirmButton) -- click twice.
@@ -260,13 +310,13 @@ t.test('NO CLIENT-SIDE CEILING FOR STAMINA EITHER (post migration 0021: the serv
     await openK9OverridesTab(h);
 
     lookupInput(h).typeValue('DOG5');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     // Speed, scent and stamina all now lack a `max` attribute; medkit
     // keeps its real 1.0 ceiling (`max: '1'`). Stamina is the LAST such
     // input in DOM order (appended after speed/scent/medkit).
-    const noMaxNumberInputs = findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('type') === 'number' && i.getAttribute('max') === null);
+    const noMaxNumberInputs = overrideNumberInputs(h).filter((i) => i.getAttribute('max') === null);
     const staminaInput = noMaxNumberInputs[noMaxNumberInputs.length - 1];
     t.isDefined(staminaInput, 'the stamina input has NO max attribute at all');
 
@@ -299,8 +349,8 @@ t.test('STAMINA PERSISTENCE WARNING IS CONDITIONAL (post migration 0021, commit 
     });
     await openK9OverridesTab(h);
     lookupInput(h).typeValue('DOG6');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     t.equals(findByClass(h.getRoot(), 'k9tablet-warning-note').length, 0, 'no .k9tablet-warning-note element is rendered when the server omits staminaPersistenceWarning');
 });
@@ -333,8 +383,8 @@ t.test('INSPECTING an already-set high speed override shows the server\'s ceilin
     });
     await openK9OverridesTab(h);
     lookupInput(h).typeValue('DOG9');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     t.isTrue(findByText(h.getRoot(), NOTE).length > 0,
         "the server owns this wording verbatim and computes it precisely so an inspecting officer is not met with silence");
@@ -356,8 +406,8 @@ t.test('CONTROL: a profile with no ceiling note renders no ceiling note (and nev
     });
     await openK9OverridesTab(h);
     lookupInput(h).typeValue('DOG1');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     t.equals(findByText(h.getRoot(), 'undefined').length, 0,
         'an omitted note must render nothing at all, never a placeholder');

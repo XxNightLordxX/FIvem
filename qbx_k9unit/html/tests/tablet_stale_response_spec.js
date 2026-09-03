@@ -205,7 +205,20 @@ t.test('a late tablet:k9ProfileGet response for a K9 profile the operator has si
 
             if (name === 'tablet:requestMyRecord') return Promise.resolve(jsonResponse(HIGH_COMMAND_MY_RECORD()));
             if (name === 'tablet:requestRoster') return Promise.resolve(jsonResponse({ ok: true, rows: [], truncated: false }));
+            if (name === 'tablet:requestOnlinePlayers') return Promise.resolve(jsonResponse({ ok: true, rows: [], truncated: false }));
             if (name === 'tablet:k9ProfilesList') return Promise.resolve(jsonResponse({ ok: true, overrides: [] }));
+            // The override editor now lives on the PERSON screen (plan item
+            // D), reached through the Console's one open-by-id box instead
+            // of the deleted K9 Overrides tab's own duplicate lookup. These
+            // are the extra loads opening a person fires; none of them is
+            // what this test is about, so they answer plainly and get out
+            // of the way.
+            if (name === 'tablet:requestPersonSummary') return Promise.resolve(jsonResponse({ ok: true, target: { citizenid: body.targetCitizenId, name: body.targetCitizenId }, certifications: [], xp: 0, tierLabel: null, permissions: [], partnership: null }));
+            if (name === 'tablet:requestPersonFeatures') return Promise.resolve(jsonResponse({ ok: true, target: { citizenid: body.targetCitizenId, name: body.targetCitizenId }, features: [] }));
+            if (name === 'tablet:permKeysList') return Promise.resolve(jsonResponse({ ok: true, keys: [] }));
+            if (name === 'tablet:certTiersList') return Promise.resolve(jsonResponse({ ok: true, tiers: [] }));
+            if (name === 'tablet:rosterList') return Promise.resolve(jsonResponse({ ok: true, k9: [], handlers: [], unassigned: [] }));
+            if (name === 'tablet:requestPartnershipsForTarget') return Promise.resolve(jsonResponse({ ok: false, error: 'not_stubbed' }));
             if (name === 'tablet:k9ProfileGet' && body.citizenid === 'CITIZEN_A') {
                 // Held open deliberately -- see this file's header. Resolved
                 // manually, LATE, well after the operator has moved on to
@@ -236,25 +249,32 @@ t.test('a late tablet:k9ProfileGet response for a K9 profile the operator has si
     h.postMessage('tablet:open', {});
     await settle();
     findByText(h.getRoot(), 'Command Console')[0].click();
-    await settle();
-    findByText(h.getRoot(), 'K9 Overrides')[0].click();
-    await settle();
+    await settle(4);
 
+    /** The Console's open-by-id box -- the one person-finder this tablet
+     * keeps, and the route to the override editor since the K9 Overrides
+     * tab and its duplicate lookup were removed (plan item D). The
+     * stale-response hazard this test exists for is unchanged: the editor
+     * still reads the SAME shared state.k9ProfileSelected*, so a late
+     * response for a person the operator has navigated away from must
+     * still never render over the one now open. */
     function lookupInput() {
-        return findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Enter a citizen ID...')[0];
+        return findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Open by exact citizen ID...')[0];
     }
 
-    // Look up A -- fires the request that will be held open.
+    // Open A -- fires the request that will be held open.
     lookupInput().typeValue('CITIZEN_A');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
     t.isDefined(resolveStaleA, 'CITIZEN_A\'s tablet:k9ProfileGet request was sent (and is being held unresolved)');
 
     // Navigate to a DIFFERENT citizenid via the SAME lookup box, WITHOUT
     // A's request ever resolving.
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(4);
     lookupInput().typeValue('CITIZEN_B');
-    findByText(h.getRoot(), 'Look Up')[0].click();
-    await settle();
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
 
     t.isTrue(findByText(h.getRoot(), 'CITIZEN_B').length >= 1, 'CITIZEN_B is now the profile on screen');
     t.equals(findByText(h.getRoot(), 'CITIZEN_A').length, 0, 'CITIZEN_A is no longer shown once navigated away from');

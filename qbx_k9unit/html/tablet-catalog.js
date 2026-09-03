@@ -642,14 +642,10 @@
         // everything related to that K9" pass) -- buildK9ProfilesScreen()
         // below. Sits alongside the xp_tier_*/tab_xp_tiers keys above, same
         // "compose on top of the XP ladder, per-citizenid" domain.
-        tab_k9_profiles: 'K9 Overrides',
-        k9_profiles_heading: 'K9 Individual Overrides',
         k9_profiles_intro: "Hand-tune one dog's sprint speed, scent range, medkit cooldown, and stamina drain rate beyond what its handler's XP rank already gives it, without moving the whole rank.",
         k9_profiles_list_heading: 'Currently Overridden K9s',
         k9_profiles_empty: 'No K9 currently has a hand-tuned override.',
         column_note: 'Note',
-        k9_profile_lookup_placeholder: 'Enter a citizen ID...',
-        k9_profile_lookup_button: 'Look Up',
         k9_profile_manage_label: 'Manage',
         k9_profile_field_not_overridden: 'Not overridden',
         k9_profile_tier_label_prefix: "This K9's XP rank: ",
@@ -1225,7 +1221,6 @@
         help_tab_shop_items_desc: "Decide what the K9 supply shop sells, at what price, and which certification tier is required to buy each item. Open it to change the shop's catalog.",
         help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
         help_tab_xp_tiers_desc: "Decide how much XP is needed to reach each rank. Open it to change the pace of progression.",
-        help_tab_k9_profiles_desc: "Give one specific K9 its own personal adjustments (speed, scent range, medkit cooldown) that are different from every other K9 on the server. Open it for a one-off exception, not a server-wide change.",
         help_tab_audit_desc: "A read-only history of who certified whom, who partnered with whom, who searched whom, XP grants, and department-wide activity. This is privacy-sensitive -- it shows real names and real actions. Open it to investigate something that already happened.",
         help_commands_heading: "Commands You Can Use",
         help_commands_intro: "Every command below is real -- typing it does exactly what it says. Most of them only work while you are currently playing as the K9 (wearing a dog model); a few work from either side. If a default key is shown, that key runs the same command without you typing anything, unless you have already changed that key yourself in Settings > Key Bindings > FiveM.",

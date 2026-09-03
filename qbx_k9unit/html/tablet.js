@@ -1244,7 +1244,7 @@
         // STALE-RESPONSE GUARD identity, same shape as state.person.citizenid
         // for loadPersonSummary/loadPersonFeatures: set synchronously by
         // loadK9Profile() itself (the only entry point into this panel)
-        // BEFORE its fetch even starts, and nulled by goToK9ProfilesScreen()
+        // BEFORE its fetch even starts, and nulled by resetAndLoadK9Profiles()
         // on the way in. loadK9Profile()'s own .then() compares its
         // captured citizenid against this field, never against
         // k9ProfileLookupInput (that one keeps changing on every keystroke
@@ -2336,8 +2336,6 @@
             panel.appendChild(buildRuntimeControlScreen());
         } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand && surfaceEnabled('xp_tiers')) {
             panel.appendChild(buildXpTiersScreen());
-        } else if (state.screen === 'k9_profiles' && state.viewer.isHighCommand) {
-            panel.appendChild(buildK9ProfilesScreen());
         } else if (state.screen === 'flows' && state.viewer.isHighCommand) {
             panel.appendChild(buildFlowsHubScreen());
         } else if (state.screen === 'flow_onboard' && state.viewer.isHighCommand) {
@@ -2667,13 +2665,11 @@
         // this tab is never a dead end for them, just a smaller room than
         // an audit/high-command viewer sees behind the same door.
         if (canOpenPersonRecord()) {
+            // Calls goToConsoleScreen() rather than repeating its body: it
+            // now also loads the overrides list (plan item D), and a second
+            // copy here would have silently missed it.
             var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'console';
-                render();
-                if (canAccessConsole()) {
-                    loadRoster(state.rosterQuery);
-                    loadOnlinePlayers(state.onlinePlayersQuery);
-                }
+                goToConsoleScreen();
             });
             tabs.appendChild(consoleTab);
         }
@@ -2900,18 +2896,11 @@
                 appendAdminTab(xpTiersTab);
             }
 
-            // K9 Individual Overrides -- SAME high-command gate as every tab
-            // in this block (a UX convenience only: CanManageK9Profiles is
-            // re-verified server-side on every one of the four callbacks
-            // this screen calls regardless of whether this tab was ever
-            // shown -- see server/k9profiles.lua's own header
-            // "AUTHORIZATION / CONCURRENCY"). Fresh entry clears any
-            // leftover lookup/draft/refusal/warning from a previous visit,
-            // same reset discipline as every other tab switch on this page.
-            var k9ProfilesTab = mkButton(S('tab_k9_profiles'), 'k9tablet-tab' + (state.screen === 'k9_profiles' ? ' k9tablet-tab--active' : ''), function () {
-                goToK9ProfilesScreen();
-            });
-            appendAdminTab(k9ProfilesTab);
+            // NO "K9 Overrides" TAB (plan item D). Its editor was always
+            // the Person screen's (buildPersonK9ProfileSection), its lookup
+            // box was a duplicate of the Console's, and its one unique part
+            // -- the list of who holds an override -- is now a section on
+            // the Command Console (buildK9ProfilesOverviewSection).
         }
 
         // K9 Audit Trail viewer -- DELIBERATELY its own gate, NOT nested in
@@ -3023,6 +3012,14 @@
         if (canAccessConsole()) {
             loadRoster(state.rosterQuery);
             loadOnlinePlayers(state.onlinePlayersQuery);
+        }
+        // THE OVERRIDES LIST (plan item D) -- a third console-only list,
+        // gated the same way the tab it replaces was. Deliberately keyed on
+        // isHighCommand rather than canAccessConsole(): that is the gate the
+        // old K9 Overrides tab used, and server/k9profiles.lua's own
+        // CanManageK9Profiles refuses anyone else regardless.
+        if (state.viewer && state.viewer.isHighCommand) {
+            resetAndLoadK9Profiles();
         }
     }
 
@@ -3811,7 +3808,6 @@
         { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: canManageShopItems },
         { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: canManageRuntimeControl },
         { tabLabelKey: 'tab_xp_tiers', descKey: 'help_tab_xp_tiers_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_k9_profiles', descKey: 'help_tab_k9_profiles_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_audit', descKey: 'help_tab_audit_desc', visible: canViewAudit },
     ];
 
@@ -4847,6 +4843,13 @@
         // section's own header for why this stays the narrower gate.
         if (fullAccess) {
             wrap.appendChild(buildOnlinePlayersSection());
+        }
+
+        // WHO HOLDS A PER-DOG OVERRIDE (plan item D) -- the one unique part
+        // of the old K9 Overrides tab, moved here beside the other "who has
+        // what" lists. High command only, matching the gate that tab had.
+        if (state.viewer && state.viewer.isHighCommand) {
+            wrap.appendChild(buildK9ProfilesOverviewSection());
         }
 
         if (fullAccess) {
@@ -9727,8 +9730,18 @@
     /** Mirrors server/k9profiles.lua's own MAX_NOTE_LENGTH exactly. */
     var K9_PROFILE_MAX_NOTE_LENGTH = 120;
 
-    function goToK9ProfilesScreen() {
-        state.screen = 'k9_profiles';
+    /**
+     * Clears every per-person override draft/refusal and reloads the
+     * overview list.
+     *
+     * WAS goToK9ProfilesScreen() -- it navigated to a tab that no longer
+     * exists (plan item D). The reset it performs is still needed, and for
+     * the same reason it always was: state.k9ProfileSelected* is SHARED
+     * between the overview list and the Person screen's own embedded
+     * editor, so a citizenid opened earlier must never bleed into the next
+     * thing that reads it. Called when the Console screen is entered.
+     */
+    function resetAndLoadK9Profiles() {
         state.k9ProfileSelectedCitizenId = null;
         state.k9ProfileSelected = null;
         state.k9ProfileSelectedError = null;
@@ -10068,39 +10081,35 @@
         });
     }
 
-    function buildK9ProfilesScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('k9_profiles_heading') }));
+    /**
+     * WHO CURRENTLY HOLDS A PER-DOG OVERRIDE -- a section on the Command
+     * Console, not a tab of its own any more (plan item D).
+     *
+     * The K9 Overrides tab contributed three things, and two of them were
+     * already somewhere else. Its EDITOR is buildK9ProfileDetail(), which
+     * the Person screen has rendered all along through
+     * buildPersonK9ProfileSection(). Its LOOKUP BOX was one of the several
+     * person-finding inputs this pass is collapsing, and it reached exactly
+     * the same Person screen the Console's own box reaches. Only the LIST
+     * was unique -- "who has an override at all", which nothing else
+     * answers -- so the list is what survives, and it moved here beside the
+     * roster and the online-players list, where this page's other "who has
+     * what" answers already live.
+     *
+     * Each row's Manage button now opens the PERSON rather than an inline
+     * detail panel, so editing an override happens in the same place as
+     * everything else about that person: certifications, capabilities,
+     * abilities, roster role, partnership history.
+     * @returns {Element}
+     */
+    function buildK9ProfilesOverviewSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('k9_profiles_list_heading') }));
         wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profiles_intro') }));
 
         if (state.k9ProfileWarning) {
             wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.k9ProfileWarning }));
         }
-
-        // Lookup box -- opens ANY citizenid's detail directly, whether or
-        // not it already has a live override (mirrors the Console screen's
-        // own "Open by exact citizen ID" box, same reasoning: a brand-new
-        // override must be reachable for a citizenid that has never had
-        // one yet, not only for one already in the list below).
-        var lookupBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
-        var lookupInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('k9_profile_lookup_placeholder') } });
-        lookupInput.value = state.k9ProfileLookupInput;
-        lookupInput.addEventListener('input', function (e) { state.k9ProfileLookupInput = e.target.value; });
-        lookupBar.appendChild(lookupInput);
-        lookupBar.appendChild(mkButton(S('k9_profile_lookup_button'), 'k9tablet-btn', function () {
-            loadK9Profile(lookupInput.value);
-        }, { disabled: state.pendingAction }));
-        wrap.appendChild(lookupBar);
-
-        if (state.k9ProfileSelectedLoading) {
-            wrap.appendChild(mk('p', { text: S('loading') }));
-        } else if (state.k9ProfileSelectedError) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: k9ProfileErrorText(state.k9ProfileSelectedError) }));
-        } else if (state.k9ProfileSelected) {
-            wrap.appendChild(buildK9ProfileDetail());
-        }
-
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('k9_profiles_list_heading') }));
 
         if (state.k9ProfilesLoading && !state.k9Profiles) {
             wrap.appendChild(mk('p', { text: S('loading') }));
@@ -10183,8 +10192,12 @@
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.note === 'string' && row.note.length > 0) ? row.note : '' }));
         var actionsTd = mk('td');
         actionsTd.appendChild(mkButton(S('k9_profile_manage_label'), 'k9tablet-btn', function () {
-            state.k9ProfileLookupInput = row.citizenid;
-            loadK9Profile(row.citizenid);
+            // OPENS THE PERSON (plan item D), not an inline detail panel.
+            // The editor lives on the Person screen and always has
+            // (buildPersonK9ProfileSection); opening it there puts this
+            // person's override beside everything else about them instead
+            // of in a second, parallel place.
+            openPerson(row.citizenid, null);
         }, { disabled: state.pendingAction }));
         tr.appendChild(actionsTd);
         return tr;
