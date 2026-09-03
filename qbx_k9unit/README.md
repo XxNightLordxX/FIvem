@@ -778,8 +778,8 @@ proceed unless you see `BACKUP OK`.
 If you want another one of your resources to react to this one — a
 dispatch alert on a K9 going down, a scoreboard reading someone's XP —
 this resource exposes a small, deliberately **read-only** API: 9
-exports server-side, 19 client-side (each side carries its own
-`GetAPIVersion()`), plus fourteen outbound events fired under real
+exports server-side, 17 client-side (each side carries its own
+`GetAPIVersion()`), plus 11 outbound events fired under real
 gameplay conditions (certification changes, partnership changes,
 search results, XP tier changes, and a few more). No export grants,
 revokes, or mints anything; every self-initiated action keeps its own

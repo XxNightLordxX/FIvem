@@ -2721,27 +2721,38 @@ since their reasoning is still what a citation is pointing at.
 1. **K9 handler roster / admin listing UI** — `/k9roster` or an ox_target
    option listing everyone certified in a department, with one-click
    revoke. Closes a gap `§4.3`'s own rationale implied should exist.
+   **Shipped**, as a tablet screen rather than the command this entry
+   guessed at — see `server/roster.lua`, the tablet's own roster/person
+   screens, and `docs/history/ROSTER_SPEC.md`. Callsigns and an
+   "Unassigned" bucket came with it.
 2. **Revoke reason code** — an optional `reason` on `/k9decertify`, stored
    in a new nullable column. Deepens the audit trail `§4.3` already
    justifies. **Shipped** — see `sql/migrations/0006_add_k9_certification_lifecycle.sql`.
 3. **Leash "Heel"/recall command** for the handler side of an active leash
    pairing — the handler side currently can only detach, never actively
-   summon.
+   summon. Still unbuilt, and note the history before rebuilding it: a
+   general Recall WAS built and then removed on 2026-09-02 at the owner's
+   request, along with the whole "calling your K9 off" category. A
+   leash-scoped heel is a narrower idea than the one that was removed, but
+   check with the owner before starting.
 4. **Give `Config.Peds`' breed data actual mechanical weight** (scent/speed/
-   bite bonuses per model) — the config already telegraphs this was
-   anticipated (`label` was unused for a long time) and never delivered.
+   bite bonuses per model) — the config already telegraphed this was
+   anticipated (`label` was unused for a long time). **Shipped** — see
+   client/movement.lua's own "BREED MOVE-RATE WEIGHT" section, which cites
+   this very entry, and the `breed` slot in `K9MoveRateModifiers`.
 
 **Tier B (medium effort, time-sensitive before Phase 3 hard-codes a binary model):**
 5. **Tiered certification** (Trainee → Certified → Senior) instead of a
    single active/inactive boolean — cheap to design before Phase 3's
    combat gates all hard-code a flat boolean check in a dozen places,
-   expensive to retrofit after.
+   expensive to retrofit after. **Shipped** — see `server/certtiers.lua`
+   and `Config.CertificationTiers`.
 6. **Training-mode/practice sandbox** distinct from live duty, so a search
    or bite-hold's first live use isn't also a rookie's first attempt at the
    mechanic. **Partially shipped**, then removed on 2026-09-02.
 7. **K9-down dispatch integration hook** — an event fired when a certified,
-   on-duty K9's health crosses a threshold, mirroring `HandlerDownDefense`'s
-   health-monitoring logic in the opposite direction. **Shipped** — see
+   on-duty K9's health crosses a threshold, mirroring the health-monitoring
+   logic a since-removed feature used in the opposite direction. **Shipped** — see
    `server/integrations.lua`.
 
 **Tier C (lower urgency):**
@@ -2755,11 +2766,13 @@ since their reasoning is still what a citation is pointing at.
 
 **Already shipped** (kept below as the original reasoning, not an open ask):
 1. **Real export/event API** — prerequisite for everything else in this
-   section. Shipped: `server/exports.lua`/`client/exports.lua`, outbound
-   `qbx_k9unit:events:*` events (six at the time this line was first
-   written; fourteen as of 2026-08-26, per `server/exports.lua`'s own
-   header) — see `README.md`'s "Public API" section for the current,
-   authoritative list and count.
+   section. **Shipped**: `server/exports.lua`/`client/exports.lua`, plus
+   the outbound `qbx_k9unit:events:*` events (six when this line was first
+   written, fourteen by 2026-08-26, 11 today after the 2026-09-02
+   removals). Do not trust a count quoted here or in `README.md` without
+   re-measuring: both are hand-maintained prose, they have cited each
+   other as authoritative while both were stale, and
+   tests/publicapicounts_spec.lua is what actually pins them now.
 2. **Dispatch integration** (`ps-dispatch` confirmed real/current;
    `cd_dispatch`/`qs-dispatch` named by convention only, not independently
    verified) — outbound alert on a contraband find; inbound via
