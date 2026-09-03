@@ -1312,8 +1312,14 @@ local COMBAT_FEATURE_DISPLAY_LABEL = {
 --- @return string
 --- @param reason string
 --- @param featureKey string|nil -- 'BiteAndHold'|'NonLethalTakedown'|'PropDragging'
---- @param remainingMs number|nil -- only meaningful for 'on_cooldown'
-local function CombatRejectMessage(reason, featureKey, remainingMs)
+--- @param detail table|nil -- per-reason numbers the message can name:
+---   { remainingMs = number }   for 'on_cooldown'
+---   { observedSpeed = number } for 'not_fleeing'
+--- A TABLE RATHER THAN MORE POSITIONAL ARGUMENTS on purpose: each reason
+--- needs a different number, and two or three optional numbers in a row is
+--- the kind of signature where a caller eventually passes the right value
+--- in the wrong slot and the message quietly lies.
+local function CombatRejectMessage(reason, featureKey, detail)
     local label = COMBAT_FEATURE_DISPLAY_LABEL[featureKey] or featureKey or '?'
     if reason == 'combat_blocked' then
         return locale('combat.denied_blocked', label)
@@ -1354,8 +1360,34 @@ local function CombatRejectMessage(reason, featureKey, remainingMs)
     -- 'on_cooldown' now says how many seconds are left. Rounded UP, so it
     -- never reads "0s" while still refusing, and never promises a shorter
     -- wait than the player actually has.
-    if reason == 'on_cooldown' and type(remainingMs) == 'number' and remainingMs > 0 then
+    local remainingMs = type(detail) == 'table' and tonumber(detail.remainingMs)
+    if reason == 'on_cooldown' and remainingMs and remainingMs > 0 then
         return locale('combat.on_cooldown_seconds', tostring(math.ceil(remainingMs / 1000)))
+    end
+
+    -- 'not_fleeing' USED TO BE THE MOST MYSTIFYING REFUSAL IN THE FILE, and
+    -- it lands mid-chase. The player presses takedown, the server samples
+    -- the target's position twice across speedSampleWindowMs, and only THEN
+    -- refuses -- so the button feels laggy and then says "the target does
+    -- not appear to be fleeing" about someone the player is watching run.
+    --
+    -- It now names what was measured and what was needed, so the refusal is
+    -- a fact about a speed rather than an opinion about intent. Both numbers
+    -- are already in scope at the one call site.
+    --
+    -- WORTH KNOWING, and NOT changed here because it is a balance decision:
+    -- the measurement is straight-line displacement between two samples, so
+    -- a suspect who turns a hard corner or circles inside that window reads
+    -- as slower than they are actually running, and can defeat the check
+    -- without ever slowing down.
+    local observed = type(detail) == 'table' and tonumber(detail.observedSpeed)
+    if reason == 'not_fleeing' and observed then
+        local cfg = type(Config) == 'table' and type(Config.Combat) == 'table' and Config.Combat.NonLethalTakedown
+        local needed = type(cfg) == 'table' and tonumber(cfg.minTargetSpeed)
+        if needed and needed > 0 then
+            return locale('combat.not_fleeing_speed',
+                string.format('%.1f', observed), string.format('%.1f', needed))
+        end
     end
 
     return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
@@ -2928,7 +2960,7 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
         -- that expires first would have them try again and be refused by
         -- the other.
         local waitMs = math.max(BiteHoldCooldown.RemainingMs(src), BiteHoldTargetCooldown.RemainingMs(targetNetId))
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'BiteAndHold', waitMs), 'error')
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'BiteAndHold', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3139,7 +3171,7 @@ local function HandleTakedownRequest(src, targetNetId)
     if TakedownCooldown.IsOnCooldown(src)
         or TakedownTargetCooldown.IsOnCooldown(targetNetId) then
         local waitMs = math.max(TakedownCooldown.RemainingMs(src), TakedownTargetCooldown.RemainingMs(targetNetId))
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', waitMs), 'error')
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3182,7 +3214,8 @@ local function HandleTakedownRequest(src, targetNetId)
     local dtSeconds = Config.Combat.NonLethalTakedown.speedSampleWindowMs / 1000.0
     local observedSpeed = dtSeconds > 0 and (#(afterPos - basePos) / dtSeconds) or 0.0
     if observedSpeed < Config.Combat.NonLethalTakedown.minTargetSpeed then
-        NotifyPlayer(src, CombatRejectMessage('not_fleeing'), 'error')
+        NotifyPlayer(src, CombatRejectMessage('not_fleeing', 'NonLethalTakedown',
+            { observedSpeed = observedSpeed }), 'error')
         return
     end
 
@@ -3198,7 +3231,14 @@ local function HandleTakedownRequest(src, targetNetId)
         -- cooldowns during the wait above despite the pre-check. Fail
         -- closed rather than apply a takedown with an inconsistent
         -- cooldown state.
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        --
+        -- Says the wait here too. This is the rarest of the four cooldown
+        -- refusals, and the ONE most likely to feel like a bug from the
+        -- player's side: the pre-check passed, they waited out the speed
+        -- sample, and only then were refused. A silent "you must wait"
+        -- after that sequence reads as the takedown being broken.
+        local waitMs = math.max(TakedownCooldown.RemainingMs(src), TakedownTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3561,7 +3601,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     if DragCooldown.IsOnCooldown(src)
         or DragTargetCooldown.IsOnCooldown(targetNetId) then
         local waitMs = math.max(DragCooldown.RemainingMs(src), DragTargetCooldown.RemainingMs(targetNetId))
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'PropDragging', waitMs), 'error')
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'PropDragging', { remainingMs = waitMs }), 'error')
         return
     end
 

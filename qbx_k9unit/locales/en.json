@@ -180,6 +180,7 @@
     "noncompliance_target_player": "player source %s",
     "not_eligible_target": "That target is not currently eligible.",
     "not_fleeing": "The target does not appear to be fleeing.",
+    "not_fleeing_speed": "They were moving at %s m/s -- a takedown needs at least %s m/s, so they have to be running.",
     "offline": "Unable to resolve your own K9.",
     "on_cooldown": "You must wait before attempting that again.",
     "reject_fallback": "Unable to complete that action.",
