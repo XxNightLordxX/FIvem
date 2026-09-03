@@ -410,6 +410,135 @@ t.test('tabletRequestMyRecord: everyoneCanViewOwnRecord == false does NOT deny a
     t.isTrue(result.viewer.isHighCommand)
 end)
 
+-- ======================================================================
+-- viewer.surfaces -- WHICH ADMIN SCREENS THIS SERVER ACTUALLY HAS
+--
+-- Owner directive, verbatim: "ensure anything disabled in the config or
+-- requires a restart wont show up in the tablet".
+--
+-- Every admin tab in html/tablet.js was gated on the viewer's CAPABILITY
+-- alone. A capability says "you are allowed to use this screen"; it says
+-- nothing about whether the screen's feature is switched on. So with
+-- Config.Features.TabletTheming = false a holder of 'k9.tablettheme' still
+-- got a Theme tab, opened it, edited every field, and had every save
+-- refused by a server-side flag check the tab never mirrored. Audit was
+-- worse: server/admin.lua does not even REGISTER its tabletAudit*
+-- callbacks with AdminAuditCommands off, so that tab did not fail with a
+-- message -- it hung until the callback timed out.
+--
+-- BuildAvailableSurfaces resolves this here, from the same Config.Features
+-- flags those callbacks enforce, so the tab and the callback behind it
+-- cannot disagree.
+-- ======================================================================
+
+--- @param features table -- the Config.Features table to run against
+--- @return table surfaces
+local function surfacesFor(features)
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        config = {
+            Features = features,
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    return result.viewer.surfaces
+end
+
+t.test('viewer.surfaces: every admin surface reports TRUE when its own Config.Features flag is on', function()
+    local surfaces = surfacesFor({
+        CommandTablet = true,
+        TabletTheming = true,
+        K9EquipmentShop = true,
+        RuntimeFeatureControl = true,
+        AdminAuditCommands = true,
+        PermissionGrants = true,
+        XPProgression = true,
+    })
+    t.isTrue(surfaces.theme)
+    t.isTrue(surfaces.shop_locations)
+    t.isTrue(surfaces.shop_items)
+    t.isTrue(surfaces.runtime_control)
+    t.isTrue(surfaces.audit)
+    t.isTrue(surfaces.permission_keys)
+    t.isTrue(surfaces.xp_tiers)
+end)
+
+t.test('viewer.surfaces: each admin surface reports FALSE when its own flag is off, and does not drag the others down with it', function()
+    -- ONE flag off at a time, everything else on, so a failure can only be
+    -- the specific mapping under test -- never "the whole map collapsed".
+    local cases = {
+        { flag = 'TabletTheming',         surface = 'theme' },
+        { flag = 'RuntimeFeatureControl', surface = 'runtime_control' },
+        { flag = 'AdminAuditCommands',    surface = 'audit' },
+        { flag = 'PermissionGrants',      surface = 'permission_keys' },
+    }
+    for _, case in ipairs(cases) do
+        local features = {
+            CommandTablet = true, TabletTheming = true, K9EquipmentShop = true,
+            RuntimeFeatureControl = true, AdminAuditCommands = true,
+            PermissionGrants = true, XPProgression = true,
+        }
+        features[case.flag] = false
+        local surfaces = surfacesFor(features)
+        t.isFalse(surfaces[case.surface], case.flag .. ' off must hide ' .. case.surface)
+        for _, other in ipairs(cases) do
+            if other.surface ~= case.surface then
+                t.isTrue(surfaces[other.surface], other.surface .. ' must be unaffected by ' .. case.flag)
+            end
+        end
+    end
+end)
+
+t.test('viewer.surfaces: the two shop screens share ONE flag -- K9EquipmentShop off hides both', function()
+    local surfaces = surfacesFor({ CommandTablet = true, K9EquipmentShop = false })
+    t.isFalse(surfaces.shop_locations)
+    t.isFalse(surfaces.shop_items)
+end)
+
+t.test('viewer.surfaces: XP Ranks needs only ONE ladder -- either XPProgression or HandlerXPProgression keeps it', function()
+    -- The editor edits both Config.XPTiers and Config.HandlerXPTiers, so a
+    -- server running exactly one ladder still has real work to do there.
+    -- Only with BOTH off does the screen have nothing to edit.
+    t.isTrue(surfacesFor({ CommandTablet = true, XPProgression = true, HandlerXPProgression = false }).xp_tiers)
+    t.isTrue(surfacesFor({ CommandTablet = true, XPProgression = false, HandlerXPProgression = true }).xp_tiers)
+    t.isFalse(surfacesFor({ CommandTablet = true, XPProgression = false, HandlerXPProgression = false }).xp_tiers)
+end)
+
+t.test('viewer.surfaces: a flag that is entirely ABSENT from Config.Features reads as off, exactly like an explicit false', function()
+    -- Config.Features[key] == true is the comparison every one of these
+    -- screens' own server-side callbacks makes, and nil fails it the same
+    -- way false does. This map must agree with them, or the tab would show
+    -- for a feature the callback refuses.
+    local surfaces = surfacesFor({ CommandTablet = true })
+    t.isFalse(surfaces.theme)
+    t.isFalse(surfaces.shop_locations)
+    t.isFalse(surfaces.shop_items)
+    t.isFalse(surfaces.runtime_control)
+    t.isFalse(surfaces.audit)
+    t.isFalse(surfaces.permission_keys)
+    t.isFalse(surfaces.xp_tiers)
+end)
+
+t.test('viewer.surfaces: NO key is sent for a screen with no owning feature flag -- an absent key means available, so inventing one would invent a switch', function()
+    -- Cert Tiers, K9 Profiles, the two Roster tabs, Guided Flows and the
+    -- Command Console have no Config.Features flag of their own (verified
+    -- by reading server/certtiers.lua, server/k9profiles.lua and
+    -- server/roster.lua -- roster.lua's only flag gate is
+    -- Config.Features.CommandTablet, already true for anyone holding an
+    -- open tablet). html/tablet.js's surfaceEnabled() treats an absent key
+    -- as available, so adding one here with a made-up source would be
+    -- describing a setting that does not exist.
+    local surfaces = surfacesFor({ CommandTablet = true, TabletTheming = true })
+    for _, key in ipairs({ 'cert_tiers', 'k9_profiles', 'roster_k9', 'roster_handlers', 'flows', 'console' }) do
+        t.isNil(surfaces[key], key .. ' must not be described here -- it has no owning Config.Features flag')
+    end
+end)
+
 t.test('tabletRequestMyRecord: SECURITY -- never trusts a client-supplied identity; resolves everything from `source`', function()
     local f = newFixture({ isHighCommand = function(source) return source == 1 end })
     f.registerPlayer(1, 'REAL-CALLER', { name = 'police', isboss = true, grade = { level = 0 } })

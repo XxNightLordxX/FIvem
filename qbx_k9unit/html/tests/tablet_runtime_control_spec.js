@@ -190,30 +190,35 @@ function mixedTierHarness() {
     });
 }
 
-t.test('TIER BANDS: the features table is sectioned by tier instead of one flat alphabetical wall', async () => {
+t.test('TIER BANDS: the features table is still banded, and the ONLY band left is Live -- the others are not listed at all now', async () => {
     const h = mixedTierHarness();
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
+    // The banding machinery is deliberately kept rather than ripped out:
+    // it is what makes a future second actionable tier render correctly
+    // without another rewrite, and it is what still states the Live
+    // explanation exactly once. What changed is the INPUT -- only live rows
+    // reach the table now (splitRuntimeFeaturesByReachability), so on any
+    // real server exactly one band survives.
     const labels = tierBandLabels(h);
-    t.isTrue(labels.length >= 2, 'more than one band rendered -- one band would be the flat wall again');
-    t.isTrue(labels.indexOf('Live') !== -1, 'the live features got their own band');
-    t.isTrue(labels.indexOf('Protected') !== -1, 'so did the untouchable ones');
+    t.equals(labels.length, 1, 'exactly one band, because only live rows are listed');
+    t.equals(labels[0], 'Live');
+    t.isTrue(labels.indexOf('Protected') === -1, 'the untouchable ones are no longer given a section of their own');
 });
 
-t.test('TIER BANDS: sections run in SAFETY order -- what you can change now first, what you can never change here last', async () => {
+t.test('TIER BANDS: the surviving band is Live, whatever order the server sent its rows in', async () => {
     const h = mixedTierHarness();
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
+    // The fixture sends a protected row FIRST and a live row second. The
+    // safety-ordered walk still runs; it simply has one populated bucket.
     const labels = tierBandLabels(h);
-    // The fixture sends protected FIRST and live second; safety order must
-    // override whatever order the server happened to use.
     t.equals(labels[0], 'Live', 'Live is first, whatever order the server sent');
-    t.equals(labels[labels.length - 1], 'Protected', 'Protected is last -- nothing here can be acted on');
-    t.isTrue(labels.indexOf('Restart Required') > labels.indexOf('Live'), 'restart-required sits after live');
+    t.equals(labels.indexOf('Restart Required'), -1, 'restart-required is not a section any more -- it is a line under the table');
 });
 
 t.test('TIER BANDS: each tier explanation is stated ONCE, not repeated on every row of that tier', async () => {
@@ -244,27 +249,41 @@ t.test('TIER BANDS: the explanation is still on screen without a hover -- the ho
     t.isNull(desc.getAttribute('title'), 'and it is not a tooltip');
 });
 
-t.test('TIER BANDS: a tier string this client has never heard of is grouped and shown, never silently dropped', async () => {
+t.test('TIER BANDS: a tier string this client has never heard of is still named on screen, never silently dropped', async () => {
     const h = mixedTierHarness();
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
-    // The real risk of bucketing by a declared order: an unrecognised tier
-    // matches no bucket and its rows vanish, so an operator has no idea the
-    // feature exists at all.
-    t.isTrue(findByText(h.getRoot(), 'EeeFromTheFuture').length >= 1, 'the unknown-tier feature is on screen');
-    t.isTrue(tierBandLabels(h).indexOf('Not Yet Classified') !== -1, 'under the same band an unclassified feature gets');
+    // THE RISK THIS GUARDS, unchanged in substance from before the filter:
+    // an unrecognised tier must never make a feature disappear without
+    // trace. It is no longer offered as a toggle (this client cannot know
+    // that an unknown tier is safe to flip), but it MUST still be named --
+    // now in the config-file-only note rather than in a table band.
+    const note = configOnlyNote(h);
+    t.isTrue(note !== null, 'the note exists');
+    t.isTrue(note.indexOf('EeeFromTheFuture') !== -1, 'and names the unknown-tier feature');
 });
 
-t.test('TIER BANDS: every feature reaches the table exactly once -- banding groups, it never filters', async () => {
+t.test('TIER BANDS: every LIVE feature reaches the table exactly once -- banding still groups, it never duplicates', async () => {
     const h = mixedTierHarness();
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
     for (const f of MIXED_TIER_FEATURES) {
+        if (f.tier !== 'live') continue;
         t.equals(findByText(h.getRoot(), f.name).length, 1, f.name + ' appears exactly once');
+    }
+
+    // And nothing non-live leaked into the table as a row. Checked against
+    // the table specifically, not the whole screen: these names DO appear
+    // once more on screen, inside the config-file-only note, which is the
+    // point.
+    const cellText = findAll(h.getRoot(), (n) => n.tagName === 'td').map((n) => n.textContent);
+    for (const f of MIXED_TIER_FEATURES) {
+        if (f.tier === 'live') continue;
+        t.isTrue(cellText.indexOf(f.name) === -1, f.name + ' must not be a table row');
     }
 });
 
@@ -336,82 +355,106 @@ t.test('a "live" feature shows the Live badge + its own honest description, and 
     t.isTrue(findByText(h.getRoot(), 'Disable').length >= 1, 'currently on -- offers Disable');
 });
 
-t.test('an "onstart" feature is honestly labelled Restart Required with its own explanation', async () => {
-    const h = createHarness({
+// ======================================================================
+// CONFIG-FILE-ONLY FEATURES ARE NOT LISTED AS TOGGLES
+//
+// Owner directive, verbatim: "ensure anything disabled in the config or
+// requires a restart wont show up in the tablet".
+//
+// WHAT THESE TESTS USED TO PIN, AND WHY IT CHANGED. There was one test per
+// non-live tier here, each asserting the row rendered with an honest badge
+// and an honest explanation ("Restart Required", "Config Edit + Restart
+// Required", "Client-Side Only", "Protected", "Not Yet Classified"). That
+// was a defensible design -- the labels really were honest -- but it meant
+// roughly two thirds of the rows on a real server were controls that
+// cannot control anything from this screen, burying the third that can.
+// A toggle that silently needs a restart reads as broken, not documented.
+//
+// The rows are now filtered out of the table entirely
+// (splitRuntimeFeaturesByReachability() in html/tablet.js) and reported
+// instead as ONE line naming every one of them. So the pair of properties
+// each test below asserts is deliberate and must stay a pair: the feature
+// is NOT offered as a control, AND it is still named on screen. Dropping
+// the second half would turn this from "moved to config.lua" into
+// "silently vanished", which is the failure this whole screen exists to
+// avoid.
+// ======================================================================
+
+/** The one line that names every feature this screen deliberately does not offer. */
+function configOnlyNote(h) {
+    const hits = findAll(h.getRoot(), (n) => typeof n.textContent === 'string'
+        && n.textContent.indexOf('cannot be changed from the tablet') !== -1
+        && (!n.children || n.children.length === 0));
+    return hits.length > 0 ? hits[0].textContent : null;
+}
+
+function singleFeatureHarness(feature) {
+    return createHarness({
         fetchImpl: routeFetch(baseHandlers({
-            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'AdminAuditCommands', currentValue: true, tier: 'onstart', overridden: false, protected: false }] }),
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [feature] }),
             'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
         })),
     });
+}
+
+const NON_LIVE_TIER_CASES = [
+    { tier: 'onstart', name: 'AdminAuditCommands', why: 'saved, but nothing changes until a restart' },
+    { tier: 'rawtoplevel', name: 'FetchMechanic', why: 'needs a config.lua edit, not just a restart' },
+    { tier: 'clientonly', name: 'RadialMenu', why: 'nothing server-side to flip for a connected client' },
+    { tier: 'protected', name: 'HighCommand', why: 'refused outright -- toggling it is a self-lockout' },
+    { tier: 'unaudited', name: 'BrandNewFeature', why: 'no confirmed enforcement point' },
+];
+
+for (const testCase of NON_LIVE_TIER_CASES) {
+    t.test('a "' + testCase.tier + '" feature is NOT offered as a toggle (' + testCase.why + ') but IS named in the config-file-only note', async () => {
+        const h = singleFeatureHarness({
+            name: testCase.name, currentValue: true, tier: testCase.tier,
+            overridden: false, protected: testCase.tier === 'protected',
+        });
+        await openTablet(h);
+        openRuntimeControlTab(h);
+        await settle();
+
+        // NO CONTROL. Neither an Enable nor a Disable button exists for it,
+        // and the empty-state note stands in for the table, because this
+        // server sent exactly one feature and it is not actionable here.
+        t.equals(findByText(h.getRoot(), 'Enable').length, 0, 'no Enable button');
+        t.equals(findByText(h.getRoot(), 'Disable').length, 0, 'no Disable button');
+
+        // STILL NAMED. This is the half that stops "hidden" from becoming
+        // "disappeared" -- an operator looking for this exact switch is told
+        // where it lives instead of concluding the tablet is broken.
+        const note = configOnlyNote(h);
+        t.isTrue(note !== null, 'the config-file-only note is on screen');
+        t.isTrue(note.indexOf(testCase.name) !== -1, note + ' must name ' + testCase.name);
+        t.isTrue(note.indexOf('config.lua') !== -1, 'and must say where to change it');
+    });
+}
+
+t.test('CONFIG-FILE-ONLY: with every tier present, the note names every non-live feature and no live one', async () => {
+    const h = mixedTierHarness();
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
-    t.isTrue(findByText(h.getRoot(), 'Restart Required').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'Saved now, but only takes effect after this resource is restarted. Nothing changes for players in this session.').length >= 1);
+    const note = configOnlyNote(h);
+    t.isTrue(note !== null, 'the config-file-only note is on screen');
+    for (const f of MIXED_TIER_FEATURES) {
+        if (f.tier === 'live') {
+            t.isTrue(note.indexOf(f.name) === -1, f.name + ' is live and must NOT be in the note');
+        } else {
+            t.isTrue(note.indexOf(f.name) !== -1, f.name + ' is not live and must be named in the note');
+        }
+    }
 });
 
-t.test('a "rawtoplevel" feature is honestly labelled Config Edit + Restart Required', async () => {
-    const h = createHarness({
-        fetchImpl: routeFetch(baseHandlers({
-            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'FetchMechanic', currentValue: true, tier: 'rawtoplevel', overridden: false, protected: false }] }),
-            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
-        })),
-    });
+t.test('CONFIG-FILE-ONLY: a server with nothing but live features shows no note at all -- it is a redirection, not decoration', async () => {
+    const h = singleFeatureHarness({ name: 'BiteAndHold', currentValue: true, tier: 'live', overridden: false, protected: false });
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
 
-    t.isTrue(findByText(h.getRoot(), 'Config Edit + Restart Required').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'Saved, but a restart of this resource alone is NOT enough -- config.lua itself must also be edited to match, and the server restarted, for this to actually take effect.').length >= 1);
-});
-
-t.test('a "clientonly" feature is honestly labelled Client-Side Only', async () => {
-    const h = createHarness({
-        fetchImpl: routeFetch(baseHandlers({
-            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'RadialMenu', currentValue: true, tier: 'clientonly', overridden: false, protected: false }] }),
-            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
-        })),
-    });
-    await openTablet(h);
-    openRuntimeControlTab(h);
-    await settle();
-
-    t.isTrue(findByText(h.getRoot(), 'Client-Side Only').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'This feature has no confirmed server-side effect. Saving this value cannot be confirmed to change anything for a connected player.').length >= 1);
-});
-
-t.test('a "protected" feature renders NO toggle/reset at all -- only the explanation', async () => {
-    const h = createHarness({
-        fetchImpl: routeFetch(baseHandlers({
-            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'HighCommand', currentValue: true, tier: 'protected', overridden: false, protected: true }] }),
-            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
-        })),
-    });
-    await openTablet(h);
-    openRuntimeControlTab(h);
-    await settle();
-
-    t.isTrue(findByText(h.getRoot(), 'Protected').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'This feature protects the authorization system this panel itself depends on, and can never be toggled from here. Change it in config.lua and restart if you are certain.').length >= 1);
-    t.equals(findByText(h.getRoot(), 'Enable').length, 0);
-    t.equals(findByText(h.getRoot(), 'Disable').length, 0);
-});
-
-t.test('an "unaudited" feature (a future 57th feature) renders NO toggle either -- shown, but refused for safety', async () => {
-    const h = createHarness({
-        fetchImpl: routeFetch(baseHandlers({
-            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BrandNewFeature', currentValue: false, tier: 'unaudited', overridden: false, protected: false }] }),
-            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
-        })),
-    });
-    await openTablet(h);
-    openRuntimeControlTab(h);
-    await settle();
-
-    t.isTrue(findByText(h.getRoot(), 'Not Yet Classified').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'This feature has not yet been classified for runtime control, and is refused for safety. Ask a developer to audit it before it can be toggled here.').length >= 1);
-    t.equals(findByText(h.getRoot(), 'Enable').length, 0);
+    t.isTrue(configOnlyNote(h) === null, 'nothing was hidden, so there is nothing to explain');
 });
 
 t.test('a per-feature server-authored `note` (e.g. ScentTracking\'s drop-hook caveat) is shown as supplementary text, alongside the tier explanation', async () => {
@@ -923,7 +966,11 @@ t.test('a lockoutRisk feature that is NOT sessionOnly (e.g. CommandTablet) shows
         fetchImpl: routeFetch(baseHandlers({
             'tablet:runtimeListFeatures': () => ({
                 ok: true,
-                features: [{ name: 'CommandTablet', currentValue: true, tier: 'rawtoplevel', overridden: false, protected: false, lockoutRisk: true, sessionOnly: false, lockoutWarning: 'Disabling this removes the tablet entirely once a config.lua edit and restart both happen.' }],
+                // tier 'live', deliberately -- this test is about the BADGE
+                // pair, not about tiers, and a non-live tier is no longer
+                // listed as a row at all (see the CONFIG-FILE-ONLY block
+                // above), so a rawtoplevel fixture here would test nothing.
+                features: [{ name: 'CommandTablet', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: false, lockoutWarning: 'Disabling this removes the tablet entirely for every player, immediately.' }],
             }),
             'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
         })),

@@ -409,6 +409,7 @@
         // BEFORE a viewer started reading individual rows. This legend is
         // shown once, above the Features table, in the same plain language
         // as the row-level hint immediately below it.
+        runtime_config_only_note: '{count} further feature(s) are not shown here because they cannot be changed from the tablet: they need an edit to config.lua and/or a server restart to take effect. Change these in config.lua: {names}',
         runtime_lockout_legend: "A warning triangle means extra care is needed: some settings can lock High Command out of the tablet entirely, others only warn while a player is doing that thing right now. Either way, you'll need to read the warning and type the setting's name before anything changes.",
         // LOCKOUT-RISK CONFIRMATION (this pass) -- server/runtimecontrol.lua's
         // own runtimeListFeatures already returned `lockoutRisk`/`sessionOnly`/

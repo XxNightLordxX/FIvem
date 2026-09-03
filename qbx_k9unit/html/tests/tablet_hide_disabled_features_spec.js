@@ -287,4 +287,132 @@ t.test('A RECORD THAT HAS NOT RESOLVED HIDES NOTHING -- "not loaded" must never 
     );
 });
 
+
+// ======================================================================
+// ADMIN SURFACES -- a TAB for a feature this server has switched off
+//
+// Owner directive, verbatim: "ensure anything disabled in the config or
+// requires a restart wont show up in the tablet".
+//
+// The rule above ("a feature whose Config.Features key is false does not
+// exist on this server") was implemented for the in-use LISTS -- abilities,
+// person abilities, the command reference -- and never for the TABS. Every
+// admin tab was gated on the viewer's CAPABILITY alone: do they hold
+// 'k9.tablettheme', 'k9.runtimecontrol', and so on. A capability says "you
+// are allowed to use this screen"; it says nothing about whether the
+// screen's feature is on. So Config.Features.TabletTheming = false still
+// produced a Theme tab you could open and edit, with every save refused by
+// a server-side flag check the tab never mirrored -- and the Audit tab was
+// worse: server/admin.lua does not even REGISTER its tabletAudit* callbacks
+// with AdminAuditCommands off, so that tab did not fail, it hung.
+//
+// server/tablet.lua's BuildAvailableSurfaces() now resolves this from the
+// same flags those callbacks enforce and ships it as `viewer.surfaces`;
+// html/tablet.js's surfaceEnabled() reads it.
+//
+// FAIL-OPEN IS PART OF THE CONTRACT, not a loophole: an absent key, and an
+// absent `surfaces` object entirely, both mean available. An older server,
+// or a payload that lost the field, must keep every tab it has always had
+// rather than silently shedding admin screens. That is safe because this
+// is a convenience gate, never a security one -- every screen behind it
+// re-authorizes server-side regardless of whether its tab was shown.
+// ======================================================================
+
+const ADMIN_SURFACE_TABS = [
+    { surface: 'theme', tab: 'Tablet Theme' },
+    { surface: 'shop_locations', tab: 'Shop Locations' },
+    { surface: 'shop_items', tab: 'Shop Items' },
+    { surface: 'runtime_control', tab: 'Runtime Control' },
+    { surface: 'audit', tab: 'Audit Trail' },
+    { surface: 'permission_keys', tab: 'Permission Keys' },
+    { surface: 'xp_tiers', tab: 'XP Ranks' },
+];
+
+/** A high-command viewer holding every delegated capability, with `surfaces` overridden. */
+function surfacesHarness(surfaces) {
+    const viewer = Object.assign({}, HIGH_COMMAND_VIEWER, {
+        effectivePermissions: [
+            'k9.access', 'k9.certify', 'k9.audit', 'k9.givexp',
+            'k9.runtimecontrol', 'k9.tablettheme',
+            'k9.equipmentshoplocations', 'k9.equipmentshopitems',
+        ],
+    });
+    if (surfaces !== undefined) viewer.surfaces = surfaces;
+    return createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true, viewer: viewer, certifications: [], xp: null, tierLabel: null,
+                myFeatures: MIXED_STATES,
+            }),
+        }),
+    });
+}
+
+async function openTabletOnly(h) {
+    h.postMessage('tablet:open', {});
+    await settle();
+}
+
+t.test('ADMIN SURFACES: with everything on, a fully-capable viewer sees every admin tab -- the baseline the hiding tests are measured against', async () => {
+    const all = {};
+    for (const entry of ADMIN_SURFACE_TABS) all[entry.surface] = true;
+    const h = surfacesHarness(all);
+    await openTabletOnly(h);
+
+    for (const entry of ADMIN_SURFACE_TABS) {
+        t.isTrue(findByText(h.getRoot(), entry.tab).length >= 1, entry.tab + ' tab is present when its feature is on');
+    }
+});
+
+for (const entry of ADMIN_SURFACE_TABS) {
+    t.test('ADMIN SURFACES: the ' + entry.tab + ' tab is hidden when its feature is off in the config, even for a viewer who holds the capability', async () => {
+        // Every OTHER surface stays on, so a failure here cannot be "all
+        // tabs vanished" -- it has to be this one specifically.
+        const surfaces = {};
+        for (const other of ADMIN_SURFACE_TABS) surfaces[other.surface] = other.surface !== entry.surface;
+        const h = surfacesHarness(surfaces);
+        await openTabletOnly(h);
+
+        t.equals(findByText(h.getRoot(), entry.tab).length, 0, entry.tab + ' must not be offered');
+
+        for (const other of ADMIN_SURFACE_TABS) {
+            if (other.surface === entry.surface) continue;
+            t.isTrue(findByText(h.getRoot(), other.tab).length >= 1, other.tab + ' must be unaffected');
+        }
+    });
+}
+
+t.test('ADMIN SURFACES: turning AdminAuditCommands off does NOT also take away the Command Console -- two screens, one flag, kept apart', async () => {
+    // canAccessConsole() returns canViewAudit() verbatim (the two share the
+    // 'k9.audit' capability by design), so folding the audit SURFACE check
+    // into canViewAudit would have removed the Console too. That is exactly
+    // the conflation this pass exists to undo, which is why the audit gate
+    // is its own canOpenAuditScreen().
+    const h = surfacesHarness({ audit: false });
+    await openTabletOnly(h);
+
+    t.equals(findByText(h.getRoot(), 'Audit Trail').length, 0, 'the Audit tab is gone');
+    t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'the Command Console is not');
+});
+
+t.test('ADMIN SURFACES: FAILS OPEN -- a payload with no `surfaces` object at all keeps every tab', async () => {
+    const h = surfacesHarness(undefined);
+    await openTabletOnly(h);
+
+    for (const entry of ADMIN_SURFACE_TABS) {
+        t.isTrue(findByText(h.getRoot(), entry.tab).length >= 1, entry.tab + ' survives a payload that never mentions surfaces');
+    }
+});
+
+t.test('ADMIN SURFACES: FAILS OPEN -- a `surfaces` object that simply omits a key keeps that tab', async () => {
+    // A newer tab shipping before the server learns to describe it must not
+    // disappear. Only an explicit `false` hides anything.
+    const h = surfacesHarness({ theme: true });
+    await openTabletOnly(h);
+
+    for (const entry of ADMIN_SURFACE_TABS) {
+        t.isTrue(findByText(h.getRoot(), entry.tab).length >= 1, entry.tab + ' survives an incomplete surfaces map');
+    }
+});
+
 t.run();

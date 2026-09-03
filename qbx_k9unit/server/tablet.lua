@@ -1020,6 +1020,78 @@ end
 --- @param activePermSet table<string, boolean>
 --- @param isHighCommandCaller boolean
 --- @return table -- sorted array of qualifying permission-catalog keys
+--- Which of this tablet's ADMIN SCREENS this server can actually serve
+--- right now, as a plain screen-key -> boolean map, sent once per
+--- tabletRequestMyRecord inside `viewer.surfaces`.
+---
+--- THE BUG THIS CLOSES (owner directive, verbatim: "ensure anything
+--- disabled in the config or requires a restart wont show up in the
+--- tablet"). Every admin tab in html/tablet.js was gated on the viewer's
+--- CAPABILITY alone -- do they hold 'k9.tablettheme', 'k9.runtimecontrol',
+--- and so on. A capability says "you are allowed to use this screen"; it
+--- says nothing about whether the screen's feature is switched on. So an
+--- operator who set Config.Features.TabletTheming = false still got a Theme
+--- tab, could open it, could edit every field, and every save came back
+--- refused -- the server's own tabletSetTheme/tabletResetTheme check that
+--- flag, this tab never did. Same shape for Shop Locations/Shop Items
+--- (K9EquipmentShop), Runtime Control (RuntimeFeatureControl -- worse
+--- there, since runtimeListFeatures itself has no flag check, so the whole
+--- inventory rendered and every single toggle was refused), Permission
+--- Keys (PermissionGrants), XP Tiers (both XP ladders off), and Audit,
+--- whose callbacks are not even REGISTERED when AdminAuditCommands is off
+--- -- that tab did not fail with a message, it hung until the callback
+--- timed out.
+---
+--- RESOLVED SERVER-SIDE, FROM THE SAME FLAGS THE CALLBACKS ENFORCE, and
+--- never inferred client-side from `myFeatures`: that array is a
+--- PER-PERSON view (a row can read 'blocked' or 'not_certified' for
+--- reasons that have nothing to do with whether the server has the feature
+--- on), and it is also the wrong shape for the two screens whose
+--- availability depends on more than one flag. One map, computed where the
+--- flags actually live, keeps the tab and the callback behind it agreeing
+--- by construction.
+---
+--- ONLY ADMIN SCREENS APPEAR HERE. The five universal tabs (Home, My
+--- Record, Progression, Partnerships, Commands, Help) are deliberately
+--- absent and are never gated: each is a read of your own record or of
+--- static reference text, and each already has an honest "your server does
+--- not track this" body for the switched-off case -- a MISSING tab reads
+--- as a broken tablet, an empty one reads as a server setting, and for
+--- those six the second is the truth worth showing. Cert Tiers, K9
+--- Profiles, the two Roster tabs, Guided Flows and Command Console are
+--- absent for a different reason: none of them has an owning
+--- Config.Features flag at all (verified by reading server/certtiers.lua,
+--- server/k9profiles.lua and server/roster.lua directly -- roster.lua's
+--- only flag gate is Config.Features.CommandTablet, which is already true
+--- for anyone holding an open tablet). Adding a key here for a screen with
+--- no flag would be inventing a switch that does not exist.
+---
+--- A SCREEN MISSING FROM THIS MAP IS "AVAILABLE", NOT "HIDDEN" -- see
+--- html/tablet.js's own surfaceEnabled(), which treats an absent key, and
+--- an absent `surfaces` object entirely, as true. That direction is
+--- deliberate: an older client talking to a newer server, or a payload
+--- that failed to carry this field, must keep every tab it has always had
+--- rather than silently losing admin screens. Hiding is only ever the
+--- result of an explicit `false` here.
+--- @return table<string, boolean>
+local function BuildAvailableSurfaces()
+    local features = type(Config.Features) == 'table' and Config.Features or {}
+    local shopOn = features.K9EquipmentShop == true
+    return {
+        theme           = features.TabletTheming == true,
+        shop_locations  = shopOn,
+        shop_items      = shopOn,
+        runtime_control = features.RuntimeFeatureControl == true,
+        audit           = features.AdminAuditCommands == true,
+        permission_keys = features.PermissionGrants == true,
+        -- EITHER ladder is enough: the XP Tier editor edits both
+        -- Config.XPTiers and Config.HandlerXPTiers, and a server running
+        -- exactly one of the two ladders still has real work to do here.
+        -- Only with BOTH off does the screen have nothing to edit.
+        xp_tiers        = features.XPProgression == true or features.HandlerXPProgression == true,
+    }
+end
+
 local function ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)
     local out = {}
 
@@ -1803,6 +1875,13 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
             allowSelfGrant = type(Config.HighCommand) == 'table' and Config.HighCommand.allowSelfGrant == true,
             isK9 = isK9RoleCaller,
             isPartnered = isPartneredCaller,
+            -- ADMIN SURFACES THIS SERVER ACTUALLY HAS (owner directive:
+            -- "ensure anything disabled in the config ... wont show up in
+            -- the tablet"). See BuildAvailableSurfaces' own doc comment for
+            -- the full writeup, including why this is resolved SERVER-SIDE
+            -- from the same Config.Features flags each screen's own
+            -- callbacks enforce, rather than inferred client-side.
+            surfaces = BuildAvailableSurfaces(),
         },
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(citizenid)),
         xp = xp,

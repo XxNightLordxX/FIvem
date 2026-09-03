@@ -1069,6 +1069,7 @@ local TABLET_STRING_KEYS = {
     -- page's own copy for `reason='confirmation_required'` -- NEVER the
     -- server's raw `lockoutWarning` text, which is instead shown VERBATIM
     -- (never paraphrased) in html/tablet.js's own confirmation panel.
+    'runtime_config_only_note',
     'runtime_lockout_legend',
     'runtime_lockout_badge', 'runtime_lockout_row_hint',
     'runtime_session_only_badge', 'runtime_session_only_hint',

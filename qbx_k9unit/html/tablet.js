@@ -1179,7 +1179,7 @@
         // entirely server-side (FEATURE_TIERS/TUNABLE_REGISTRY), never
         // duplicated here.
         runtimeControlEnabled: false, // Config.Features.RuntimeFeatureControl -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
-        runtimeFeatures: null, // [{ name, currentValue, configLuaDefault, tier, note, overridden, overriddenBy, overriddenAt, protected }, ...]
+        runtimeFeatures: null, // [{ name, currentValue, configLuaDefault, tier, note, overridden, overriddenBy, overriddenAt, protected }, ...] -- the COMPLETE server inventory; the table below renders only the `live` ones, see liveRuntimeFeatures()
         runtimeFeaturesLoading: false,
         runtimeFeaturesError: null,
         runtimeFeaturesRequestId: 0, // STALE-RESPONSE GUARD -- same request-id shape as shopLocationsRequestId above (this list has no per-request identity to compare against arrival order)
@@ -1756,6 +1756,30 @@
     }
 
     /**
+     * Gate for the AUDIT tab/screen specifically -- the audit CAPABILITY
+     * plus the audit FEATURE actually being on.
+     *
+     * DELIBERATELY NOT FOLDED INTO canViewAudit() ABOVE, unlike the four
+     * delegated gates further down which do fold their own surface check
+     * in. canAccessConsole() returns canViewAudit() verbatim (see its own
+     * doc comment for why the two deliberately share one body), so folding
+     * `surfaceEnabled('audit')` into canViewAudit would also take the
+     * Command Console away from every viewer the moment
+     * Config.Features.AdminAuditCommands went off -- two unrelated screens,
+     * one flag, which is exactly the conflation this pass exists to undo.
+     *
+     * This tab needed the check MORE than the other four, not less:
+     * server/admin.lua registers its tabletAudit* callbacks INSIDE its own
+     * `Config.Features.AdminAuditCommands` guard, so with that flag off the
+     * callbacks do not exist at all. The tab did not fail with a message --
+     * it hung until the callback timed out.
+     * @returns {boolean}
+     */
+    function canOpenAuditScreen() {
+        return canViewAudit() && surfaceEnabled('audit');
+    }
+
+    /**
      * Gate for the NARROWED path a 'k9.certify'/'k9.givexp' holder gets
      * into the Console tab and the Person screen it leads to -- workflow
      * audit finding #1, 2026-08-26. Mirrors server/tablet.lua's own
@@ -1815,12 +1839,45 @@
             || (Array.isArray(state.viewer.effectivePermissions) && state.viewer.effectivePermissions.indexOf(capability) !== -1)));
     }
 
+    /**
+     * Does this server actually HAVE the admin screen `key`, per its own
+     * Config.Features flags? Reads `viewer.surfaces`, built server-side by
+     * server/tablet.lua's BuildAvailableSurfaces() -- read that function's
+     * doc comment for the full writeup of the bug this closes (owner
+     * directive: "ensure anything disabled in the config ... wont show up
+     * in the tablet").
+     *
+     * A CAPABILITY AND A SURFACE ARE DIFFERENT QUESTIONS, and every admin
+     * tab used to ask only the first. "You hold k9.tablettheme" says you
+     * are ALLOWED to re-theme; it says nothing about whether
+     * Config.Features.TabletTheming is on. With it off you still got the
+     * tab, could open it, could edit every field -- and every save came
+     * back refused by a server-side flag check this client never mirrored.
+     * Both questions now have to answer yes.
+     *
+     * FAILS OPEN, DELIBERATELY: an absent key, and an absent `surfaces`
+     * object entirely, both read as available. An older server, or a
+     * payload that lost this field, must keep every tab it has always had
+     * rather than silently shedding admin screens -- hiding is only ever
+     * the result of an explicit `false` arriving from the server. This is
+     * safe precisely because it is a convenience gate and not a security
+     * one, per THE SECURITY RULE: every screen behind it re-verifies its
+     * real gate server-side regardless of whether the tab was ever shown.
+     * @param {string} key
+     * @returns {boolean}
+     */
+    function surfaceEnabled(key) {
+        var surfaces = state.viewer && state.viewer.surfaces;
+        if (!surfaces || typeof surfaces !== 'object') return true;
+        return surfaces[key] !== false;
+    }
+
     /** Gate for the Theme tab/screen -- mirrors server/runtimecontrol.lua's
      * CanManageTabletTheme. See hasDelegatedCapability()'s own doc comment
      * for the full verified server-side contract this matches.
      * @returns {boolean} */
     function canManageTabletTheme() {
-        return hasDelegatedCapability('k9.tablettheme');
+        return hasDelegatedCapability('k9.tablettheme') && surfaceEnabled('theme');
     }
 
     /** Gate for the Shop Locations tab/screen -- mirrors server/
@@ -1829,7 +1886,7 @@
      * server-side contract this matches.
      * @returns {boolean} */
     function canManageShopLocations() {
-        return hasDelegatedCapability('k9.equipmentshoplocations');
+        return hasDelegatedCapability('k9.equipmentshoplocations') && surfaceEnabled('shop_locations');
     }
 
     /** Gate for the Shop Items tab/screen -- mirrors server/
@@ -1838,7 +1895,7 @@
      * matches.
      * @returns {boolean} */
     function canManageShopItems() {
-        return hasDelegatedCapability('k9.equipmentshopitems');
+        return hasDelegatedCapability('k9.equipmentshopitems') && surfaceEnabled('shop_items');
     }
 
     /** Gate for the Runtime Control tab/screen -- mirrors server/
@@ -1847,7 +1904,7 @@
      * server-side contract this matches.
      * @returns {boolean} */
     function canManageRuntimeControl() {
-        return hasDelegatedCapability('k9.runtimecontrol');
+        return hasDelegatedCapability('k9.runtimecontrol') && surfaceEnabled('runtime_control');
     }
 
     // ------------------------------------------------------------------
@@ -2261,7 +2318,7 @@
             panel.appendChild(buildThemeScreen());
         } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildCertTiersScreen());
-        } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand && surfaceEnabled('permission_keys')) {
             panel.appendChild(buildPermissionKeysScreen());
         } else if (state.screen === 'shop_locations' && canManageShopLocations()) {
             panel.appendChild(buildShopLocationsScreen());
@@ -2269,7 +2326,7 @@
             panel.appendChild(buildShopItemsScreen());
         } else if (state.screen === 'runtime_control' && canManageRuntimeControl()) {
             panel.appendChild(buildRuntimeControlScreen());
-        } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand && surfaceEnabled('xp_tiers')) {
             panel.appendChild(buildXpTiersScreen());
         } else if (state.screen === 'k9_profiles' && state.viewer.isHighCommand) {
             panel.appendChild(buildK9ProfilesScreen());
@@ -2283,7 +2340,7 @@
             panel.appendChild(buildFlowProblemScreen());
         } else if (state.screen === 'flow_tuning' && state.viewer.isHighCommand) {
             panel.appendChild(buildFlowTuningScreen());
-        } else if (state.screen === 'audit' && canViewAudit()) {
+        } else if (state.screen === 'audit' && canOpenAuditScreen()) {
             panel.appendChild(buildAuditScreen());
         } else if (state.screen === 'progression') {
             panel.appendChild(buildProgressionScreen());
@@ -2689,15 +2746,23 @@
             // this pass's own explicit instruction. Fresh entry clears any
             // leftover draft/refusal, same reset discipline as every other
             // tab switch on this page.
-            var permissionKeysTab = mkButton(S('tab_permission_keys'), 'k9tablet-tab' + (state.screen === 'permission_keys' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'permission_keys';
-                state.permissionKeyDraft = null;
-                state.permissionKeyFieldError = null;
-                state.permissionKeyActionError = null;
-                render();
-                loadPermissionKeys();
-            });
-            appendAdminTab(permissionKeysTab);
+            // ALSO gated on the FEATURE, not just the rank
+            // (surfaceEnabled -- see its own doc comment): permission keys
+            // are the catalog behind Config.Features.PermissionGrants, and
+            // with that switched off every grant/revoke this screen mints
+            // is inert (server/permissions.lua's HasPermission returns
+            // false on its very first line without it).
+            if (surfaceEnabled('permission_keys')) {
+                var permissionKeysTab = mkButton(S('tab_permission_keys'), 'k9tablet-tab' + (state.screen === 'permission_keys' ? ' k9tablet-tab--active' : ''), function () {
+                    state.screen = 'permission_keys';
+                    state.permissionKeyDraft = null;
+                    state.permissionKeyFieldError = null;
+                    state.permissionKeyActionError = null;
+                    render();
+                    loadPermissionKeys();
+                });
+                appendAdminTab(permissionKeysTab);
+            }
 
             // K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) --
             // owner's own words, this file's header. HIGH COMMAND ONLY,
@@ -2806,16 +2871,25 @@
             // clears any leftover draft/refusal/warning from a previous
             // visit, same reset discipline as every other tab switch on
             // this page.
-            var xpTiersTab = mkButton(S('tab_xp_tiers'), 'k9tablet-tab' + (state.screen === 'xp_tiers' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'xp_tiers';
-                state.xpTierDraft = null;
-                state.xpTierFieldError = null;
-                state.xpTierActionError = null;
-                state.xpTierWarning = null;
-                render();
-                loadXpTiers();
-            });
-            appendAdminTab(xpTiersTab);
+            // ALSO gated on the FEATURE, not just the rank (surfaceEnabled
+            // -- see its own doc comment). This screen edits the two XP
+            // ladders; with BOTH Config.Features.XPProgression and
+            // .HandlerXPProgression off there is no ladder to edit and
+            // nothing it saves can ever be consulted. EITHER one being on
+            // is enough to keep the tab -- a server running exactly one
+            // ladder still has real work to do here.
+            if (surfaceEnabled('xp_tiers')) {
+                var xpTiersTab = mkButton(S('tab_xp_tiers'), 'k9tablet-tab' + (state.screen === 'xp_tiers' ? ' k9tablet-tab--active' : ''), function () {
+                    state.screen = 'xp_tiers';
+                    state.xpTierDraft = null;
+                    state.xpTierFieldError = null;
+                    state.xpTierActionError = null;
+                    state.xpTierWarning = null;
+                    render();
+                    loadXpTiers();
+                });
+                appendAdminTab(xpTiersTab);
+            }
 
             // K9 Individual Overrides -- SAME high-command gate as every tab
             // in this block (a UX convenience only: CanManageK9Profiles is
@@ -2840,7 +2914,7 @@
         // field), so the last query's mode/inputs/result are left exactly
         // as the viewer left them, the same way the Console tab's own
         // rosterQuery persists across a tab switch.
-        if (canViewAudit()) {
+        if (canOpenAuditScreen()) {
             var auditTab = mkButton(S('tab_audit'), 'k9tablet-tab' + (state.screen === 'audit' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'audit';
                 render();
@@ -8078,6 +8152,62 @@
         return list;
     }
 
+    /**
+     * The runtime features this screen actually renders as toggles, and the
+     * ones it deliberately does not.
+     *
+     * OWNER DIRECTIVE, VERBATIM: "ensure anything disabled in the config or
+     * requires a restart wont show up in the tablet". Of the ~70
+     * Config.Features keys the server sends, only the `live` tier can be
+     * changed from here and mean anything this session. The other five were
+     * all rendered as ordinary, clickable toggles, and not one of them
+     * controls anything from this screen:
+     *   'rawtoplevel' -- gated before this resource finishes loading. A
+     *                    restart is NOT enough; config.lua must be edited.
+     *   'onstart'     -- saved, but nothing changes until a restart.
+     *   'clientonly'  -- nothing server-side to flip; an already-connected
+     *                    client read its own copy of config.lua at ITS own
+     *                    start and never re-reads the server's.
+     *   'protected'   -- runtimeSetFeature refuses these outright
+     *                    (HighCommand/PermissionGrants -- toggling the gate
+     *                    this very tool depends on is a self-lockout).
+     *   'unaudited'   -- no confirmed enforcement point; the server cannot
+     *                    promise the value does anything at all.
+     * Listing them was defensible while the screen's claim was "here is the
+     * whole inventory, honestly labelled" -- the tier band and its
+     * description did say so. But two thirds of the rows being things you
+     * cannot actually change buries the third you can, and a toggle that
+     * silently needs a restart reads as broken, not as documented.
+     *
+     * FILTERED HERE, NOT SERVER-SIDE, DELIBERATELY. runtimeListFeatures'
+     * complete output is the source of truth for three drift guards
+     * (tests/runtimefeaturetiers_spec.lua, customizationregistry_spec.lua,
+     * runtimecontrol_spec.lua) that exist to catch a Config.Features key
+     * with no tier classification or no per-person block path. Narrowing
+     * the payload would have blinded exactly the tests whose job is to
+     * notice a misclassified feature. This is a DISPLAY decision, so it
+     * belongs on the display side; the server keeps telling the whole
+     * truth.
+     *
+     * NOT THE SAME AS HIDING AN OFF FEATURE. This filters on TIER, never on
+     * `currentValue` -- a `live` feature that is currently OFF still
+     * appears, so this screen remains the place to switch it back on and
+     * the lockout withoutGloballyDisabled()'s own comment warns about
+     * ("you could switch a feature off and then have no way to ever switch
+     * it back on") is impossible here.
+     * @returns {{ live: Array<object>, configOnly: Array<object> }}
+     */
+    function splitRuntimeFeaturesByReachability() {
+        var live = [];
+        var configOnly = [];
+        var list = sortedRuntimeFeatures();
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] && list[i].tier === 'live') live.push(list[i]);
+            else if (list[i]) configOnly.push(list[i]);
+        }
+        return { live: live, configOnly: configOnly };
+    }
+
     /** @returns {Array<object>} same reasoning as sortedRuntimeFeatures() above, sorted by `key`. */
     function sortedRuntimeTunables() {
         var list = (state.runtimeTunables || []).slice();
@@ -8105,10 +8235,37 @@
         // icon on a lockout-risk row (buildRuntimeFeatureRow() below)
         // means something the very first time it is seen, not only after
         // clicking into a row and reading its own hint text.
-        if (state.runtimeFeatures.length > 0) {
+        if (splitRuntimeFeaturesByReachability().live.length > 0) {
             wrap.appendChild(mk('p', { class: 'k9tablet-runtime-legend', text: S('runtime_lockout_legend') }));
         }
         wrap.appendChild(buildRuntimeFeaturesTable());
+
+        // WHERE THE REST WENT. server/runtimecontrol.lua now sends only the
+        // features that can genuinely be changed from here and take effect
+        // this session; everything that needs a config.lua edit, a restart,
+        // or has no server-side switch at all is excluded (read that
+        // function's own comment for the full tier-by-tier reasoning). One
+        // honest line naming them beats either a silent gap -- an operator
+        // hunting a switch they know exists and concluding the tablet is
+        // broken -- or the old behaviour, where two thirds of the rows were
+        // controls that quietly did nothing.
+        //
+        // textContent only, via mk()'s own `text` (never innerHTML), same
+        // as every other string on this page: `configOnlyNames` are
+        // Config.Features KEYS, not player input, but this page's rule has
+        // no exceptions.
+        var configOnly = splitRuntimeFeaturesByReachability().configOnly;
+        if (configOnly.length > 0) {
+            var names = [];
+            for (var c = 0; c < configOnly.length; c++) names.push(configOnly[c].name);
+            wrap.appendChild(mk('p', {
+                class: 'k9tablet-muted',
+                text: formatTemplate(S('runtime_config_only_note'), {
+                    count: String(configOnly.length),
+                    names: names.join(', '),
+                }),
+            }));
+        }
         return wrap;
     }
 
@@ -8159,7 +8316,7 @@
      * @returns {HTMLElement}
      */
     function buildRuntimeFeaturesTable() {
-        var list = sortedRuntimeFeatures();
+        var list = splitRuntimeFeaturesByReachability().live;
         if (list.length === 0) {
             return mk('p', { class: 'k9tablet-muted', text: S('runtime_features_empty') });
         }
