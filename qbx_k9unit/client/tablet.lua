@@ -957,14 +957,14 @@ local TABLET_STRING_KEYS = {
     'person_handler_xp_heading', 'person_handler_xp_untracked',
     'use_label', 'not_available_short', 'opening_person',
     'person_no_record_found',
-    'open_by_id_placeholder', 'open_by_id_label', 'open_my_own_record_label', 'open_my_own_record_hint', 'open_by_id_empty',
+    'open_by_id_placeholder', 'open_by_id_label', 'open_my_own_record_label', 'open_my_own_record_hint',
     -- Workflow audit finding #1/#2, 2026-08-26 (html/tablet.js's
     -- canOpenPersonRecord()/buildConsoleScreen() narrowed rendering, and
     -- the "open by exact citizen ID" box's own new explanatory hint --
     -- see each string's own doc comment in DEFAULT_STRINGS for the full
     -- writeup).
     'open_by_id_hint', 'console_person_only_notice',
-    'role_heading', 'role_model_label', 'role_assign_label',
+    'role_heading', 'role_assign_label',
     'role_assign_hint', 'role_revert_label', 'role_revert_hint',
     'role_no_peds_configured',
     -- Rank/department + partnership (person screen, read-only -- owner-

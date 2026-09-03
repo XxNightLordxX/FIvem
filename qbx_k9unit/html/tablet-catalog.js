@@ -204,7 +204,6 @@
         open_by_id_label: 'Open',
         open_my_own_record_label: 'Open my own record',
         open_my_own_record_hint: 'Opens your own record, without needing to know your citizen ID. This is how you certify yourself, set your own tier, or grant yourself an ability -- if the server config permits it, which it re-checks every time.',
-        open_by_id_empty: 'Enter a citizen ID first.',
         // Workflow audit finding #2, 2026-08-26 -- this box previously had
         // no text of its own explaining what makes it different from the
         // search bar above it. Shared verbatim by buildConsoleScreen() and
@@ -223,7 +222,6 @@
         // owner's own words: "assign de assign give certs remove certs
         // remove k9 ped and reverts them to a human".
         role_heading: 'K9 Role',
-        role_model_label: 'Ped model',
         role_assign_label: 'Assign K9 Role',
         role_assign_hint: 'Turns this person into the selected model. Their current appearance is preserved for a later revert.',
         role_revert_label: 'Revert to Human',
