@@ -252,7 +252,10 @@ t.test('Every Tab, Explained only lists tabs this viewer can actually see -- Hig
     });
     await openHelpScreen(handlerHarness);
     t.equals(findByText(handlerHarness.getRoot(), 'Runtime Control').length, 0, 'a plain handler is not taught about the high-command-only Runtime Control tab');
-    t.equals(findByText(handlerHarness.getRoot(), 'Home').length >= 1 ? 1 : 0, 1, 'a plain handler IS taught about Home');
+    // 'Home' is no longer a tab -- Home, My Record and Progression merged
+    // into the one 'My Record' landing screen (plan item A), so that is the
+    // entry a plain handler is taught about.
+    t.equals(findByText(handlerHarness.getRoot(), 'My Record').length >= 1 ? 1 : 0, 1, 'a plain handler IS taught about My Record');
 
     const hcHarness = createHarness({
         fetchImpl: routeFetch({ 'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, {}) }),

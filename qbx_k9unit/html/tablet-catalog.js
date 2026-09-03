@@ -54,7 +54,6 @@
         // -- deliberately named placeholders rather than %s ordering, since
         // a translator reordering a sentence must not silently swap which
         // number means what.
-        tab_progression: "Progression",
         progression_intro: "Your rank on each ladder. The K9 ladder is earned by working as the dog; the handler ladder is earned by working with one. They advance separately, and your server can run either without the other.",
         progression_k9_heading: "K9 Rank",
         progression_handler_heading: "Handler Rank",
@@ -763,7 +762,6 @@
         // seconds"). See buildHomeScreen() below for the full writeup --
         // this is now the DEFAULT screen on open, ahead of every existing
         // tab; nothing below removes or renames an existing screen.
-        tab_home: 'Home',
         home_welcome_template: 'Welcome, {name}.',
         home_role_high_command: 'High Command',
         home_role_k9: 'K9',
@@ -773,8 +771,6 @@
         home_not_partnered_badge: 'No Partner',
         home_certified_count_template: 'Certified in {count} of {total} departments',
         home_quick_actions_heading: 'What do you want to do?',
-        home_view_my_record_label: 'View My Record',
-        home_view_my_record_hint: 'Your certifications, XP, and the abilities you can use right now.',
         home_open_console_label: 'Open Command Console',
         home_open_console_hint: 'Look up and manage handlers and K9s.',
         home_high_command_heading: 'High Command Tools',
@@ -796,9 +792,6 @@
         home_no_certification_title: "You're not certified yet",
         home_no_certification_body: 'Ask a certifier or a High Command officer to certify you in a department. Once certified, your abilities and record will appear here.',
         home_no_certification_next_steps: 'Not sure how to get started? The Help tab walks you through it, and the Commands tab shows everything there is to earn.',
-        home_ready_abilities_heading: 'Ready to use right now',
-        home_no_ready_abilities: 'Nothing is ready to use right now.',
-        home_view_all_abilities_label: 'View all abilities',
         home_blocked_count_template: '{count} of your abilities are currently blocked',
 
         // ---- COMMAND REFERENCE (this pass -- "dozens of commands, no way
@@ -1205,9 +1198,7 @@
         help_start_high_command_4: "4. Every other admin screen (theme, certification tiers, permission keys, the supply shop, feature switches, XP ranks, per-K9 overrides) has its own tab -- see \"Every Tab, Explained\" below for what each one actually does.",
         help_tabs_heading: "Every Tab, Explained",
         help_tabs_intro: "Only the tabs you can actually use are listed below -- if a tab is not shown here, you cannot see it on your own tablet either.",
-        help_tab_home_desc: "Your starting point every time you open the tablet. Shows who you are, whether you are certified and partnered, and the abilities you can use right now. Open it whenever you are not sure what to do next.",
-        help_tab_my_record_desc: "The full, detailed version of your own record: every certification (active or expired), your XP, and every single ability with its exact status, not just the ready-to-use ones Home shows. Open it to check something specific about yourself.",
-        help_tab_progression_desc: "Where you stand on both XP ladders: the K9 one, earned by working as the dog, and the handler one, earned by working with one. Each shows your total, your current rank, the next rank and exactly how far away it is, plus the whole ladder so you can see what is ahead. The two advance separately, and your server can run either without the other -- if one says it is not tracked, that is a server setting, not a fault.",
+        help_tab_my_record_desc: "Everything about you, in one place, and the first screen you land on: who you are and what to do next, then your certifications, then where you stand on both XP ladders, then every ability with its exact status -- the ones you can use now and the ones you still have to earn.",
         help_tab_commands_desc: "A searchable list of every command this tablet's resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why. Open it when you know roughly what you want to do and need the exact command.",
         help_tab_help_desc: "This page. Open it any time something else on the tablet does not make sense.",
         help_tab_console_desc: "Open a specific handler or K9's record by their exact citizen ID -- this always works, even for someone who has never been certified. If you also hold the Audit capability or are High Command, this tab additionally lets you browse and search the full roster by name, citizen ID, or department (that search only ever shows people who already hold a certification, so it will never find someone brand new -- open them by citizen ID instead).",

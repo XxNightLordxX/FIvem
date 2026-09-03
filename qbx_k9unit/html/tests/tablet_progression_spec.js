@@ -58,20 +58,26 @@ function record(over) {
     }, over || {});
 }
 
+/**
+ * NO NAVIGATION -- the ladders are on the LANDING screen now.
+ *
+ * Progression was its own tab, and it shared two builders with My Record
+ * outright while Home showed a filtered copy of the same abilities list.
+ * Plan item A merged the three into one 'My Record' screen, which is what
+ * the tablet opens on. Every assertion in this file is unchanged; only the
+ * two clicks that used to be needed to reach the ladders are gone.
+ */
 async function openProgression(over) {
     const h = createHarness({
         fetchImpl: routeFetch({ 'tablet:requestMyRecord': () => record(over) }),
     });
     h.postMessage('tablet:open', { capabilities: {}, strings: {}, maxXpPerGrant: 500 });
     await new Promise((r) => setImmediate(r));
-    const tab = findByText(h.getRoot(), 'Progression')[0];
-    t.isTrue(!!tab, 'the Progression tab must exist');
-    tab.click();
-    await new Promise((r) => setImmediate(r));
+    t.equals(findByText(h.getRoot(), 'Progression').length, 0, 'there is no separate Progression tab any more');
     return h;
 }
 
-t.test('the Progression tab exists and is reachable without any permission at all -- it is a read of your own record, not an admin surface', async () => {
+t.test('both ladders are on the landing screen, reachable without any permission at all -- a read of your own record, not an admin surface', async () => {
     const h = await openProgression();
     t.isTrue(findByText(h.getRoot(), 'K9 Rank').length >= 1);
     t.isTrue(findByText(h.getRoot(), 'Handler Rank').length >= 1);

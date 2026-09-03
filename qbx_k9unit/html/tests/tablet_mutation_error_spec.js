@@ -226,7 +226,7 @@ t.test('clicking the Home tab re-fetches tablet:requestMyRecord, consistent with
 
     findByText(h.getRoot(), 'Command Console')[0].click();
     await settle();
-    findByText(h.getRoot(), 'Home')[0].click();
+    findByText(h.getRoot(), 'My Record')[0].click();
     await settle();
 
     t.isTrue(myRecordCalls >= 2, 'returning to Home re-fetched the viewer\'s own record instead of showing whatever was cached at tablet:open');

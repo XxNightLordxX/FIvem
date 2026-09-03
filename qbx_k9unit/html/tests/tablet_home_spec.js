@@ -107,7 +107,7 @@ async function openTablet(myRecordResult, extraHandlers) {
  * @param {object} h
  */
 async function goHome(h) {
-    findByText(h.getRoot(), 'Home')[0].click();
+    findByText(h.getRoot(), 'My Record')[0].click();
     await settle();
 }
 
@@ -135,7 +135,10 @@ t.test('HIGH COMMAND: Home shows role badge "High Command" and the High Command 
 
     t.isTrue(findByText(h.getRoot(), 'Welcome, Chief Hopps.').length >= 1, 'welcome heading shown once navigated to Home');
     t.equals(findByText(h.getRoot(), 'High Command').length, 1, 'role badge reads High Command');
-    t.equals(findByText(h.getRoot(), 'View My Record').length, 1);
+    // No "View My Record" card any more: it pointed at the screen the
+    // viewer is already on once Home, My Record and Progression merged
+    // (plan item A). The record itself is right below this card grid.
+    t.equals(findByText(h.getRoot(), 'View My Record').length, 0);
     t.equals(findByText(h.getRoot(), 'Open Command Console').length, 1, 'high command also gets the console quick action');
     t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'the signpost heading is present');
 
@@ -369,9 +372,9 @@ t.test('a viewer with ZERO active certifications and no console access sees real
     // (see tests/... buildMyRecordScreen coverage elsewhere) rather than
     // erroring.
     t.equals(findByText(h.getRoot(), 'My Record').length, 1, 'the My Record tab is still present for every viewer, even this one');
-    clickActionCard(h.getRoot(), 'View My Record');
-    await settle();
-    t.isTrue(findByText(h.getRoot(), 'Not certified').length >= 1, 'My Record itself also renders this department as honestly not-yet-certified, never an error or a blank screen');
+    // Already on it -- one screen now (plan item A), so the department
+    // renders honestly not-yet-certified without navigating anywhere.
+    t.isTrue(findByText(h.getRoot(), 'Not certified').length >= 1, 'the record renders this department as honestly not-yet-certified, never an error or a blank screen');
 });
 
 t.test('a viewer with zero certifications who IS high command still sees the High Command Tools section (the notice is additive, never a replacement screen) -- navigated to Home explicitly, this pass auto-lands high command on Console by default', async () => {
@@ -446,7 +449,22 @@ t.test('the blocked-ability count badge shows the real count and the correct col
     t.equals(findAll(notBlocked.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('currently blocked') !== -1).length, 0, 'no blocked-count badge at all when the count is zero -- never a "0 blocked" badge nobody needs');
 });
 
-t.test('the "ready to use right now" list shows ONLY actionable+available abilities, never a not-yet-usable one, and always offers a way to see the full list', async () => {
+t.test('the abilities list on the landing screen shows EVERY ability with its own state -- not only the ready ones', async () => {
+    // WAS: "the ready to use right now list shows ONLY actionable+available
+    // abilities... and always offers a way to see the full list".
+    //
+    // That list was a filtered preview of the full one, with a link to the
+    // screen carrying the full one. Plan item A merged those screens, so
+    // keeping both would have shown every ready ability twice on a single
+    // screen, and the link would have pointed at the screen the viewer is
+    // already on. The preview is gone; the full list answers the same
+    // question plus "what do I still have to earn", which is the more
+    // useful half for a landing view.
+    //
+    // What must NOT be lost, and is asserted here: a not-yet-usable ability
+    // is still visible AND still says why. Hiding it would answer "why
+    // can't I do this" with silence -- the rule this plan's own
+    // "deliberately left alone" section keeps.
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'C5', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
@@ -457,19 +475,34 @@ t.test('the "ready to use right now" list shows ONLY actionable+available abilit
             { key: 'Blocked1', label: 'Blocked Ability', category: null, actionable: true, state: 'blocked' },
         ],
     });
-    t.equals(findByText(h.getRoot(), 'Ready Ability').length, 1);
-    t.equals(findByText(h.getRoot(), 'Status Only Ability').length, 0, 'a non-actionable feature never appears in the "ready to use" list');
-    t.equals(findByText(h.getRoot(), 'Blocked Ability').length, 0, 'a blocked feature never appears in the "ready to use" list either');
-    t.equals(findByText(h.getRoot(), 'View all abilities').length, 1, 'a link to the full My Record list is always present, even when something is already ready here');
+    t.equals(findByText(h.getRoot(), 'Ready Ability').length, 1, 'a ready ability appears exactly once -- never twice, which a preview plus the full list would have caused');
+    t.equals(findByText(h.getRoot(), 'Status Only Ability').length, 1, 'a status-only ability is listed too, with its own state');
+    t.equals(findByText(h.getRoot(), 'Blocked Ability').length, 1, 'and so is a blocked one -- hiding it would answer "why can I not do this" with silence');
+    t.equals(findByText(h.getRoot(), 'View all abilities').length, 0, 'no link to a separate full list: this IS the full list');
 });
 
-t.test('"ready to use right now" shows its own honest empty state (never a blank gap) when nothing is currently usable', async () => {
+t.test('the landing screen carries the whole record -- certifications, both XP ladders, and abilities -- with no second tab to visit', async () => {
+    // The merge itself (plan item A). Three tabs became one, so all four
+    // sections must be on this one screen.
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'C6', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
-        certifications: [], xp: null, tierLabel: null, myFeatures: [],
+        certifications: [], xp: 120, tierLabel: 'Veteran K9', handlerXp: null, handlerTierLabel: null,
+        xpLadder: [{ label: 'Recruit K9', xp: 0 }, { label: 'Veteran K9', xp: 100 }],
+        handlerXpLadder: [],
+        myFeatures: [],
     });
-    t.equals(findByText(h.getRoot(), 'Nothing is ready to use right now.').length, 1);
+
+    t.isTrue(findByText(h.getRoot(), 'Certifications').length >= 1, 'certifications section');
+    t.isTrue(findByText(h.getRoot(), 'K9 Rank').length >= 1, 'the K9 ladder block');
+    t.isTrue(findByText(h.getRoot(), 'Handler Rank').length >= 1, 'and the handler ladder block, both on this one screen');
+    t.isTrue(findByText(h.getRoot(), 'This server does not track handler XP, so there is no rank to show here.').length >= 1,
+        'the handler ladder says plainly that it is switched off -- null is not zero');
+    t.isTrue(findByText(h.getRoot(), 'Abilities').length >= 1, 'abilities section');
+
+    // And the two tabs that used to carry them are gone.
+    t.equals(findByText(h.getRoot(), 'Home').length, 0, 'no separate Home tab');
+    t.equals(findByText(h.getRoot(), 'Progression').length, 0, 'no separate Progression tab');
 });
 
 t.run();

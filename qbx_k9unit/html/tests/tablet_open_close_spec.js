@@ -70,6 +70,14 @@ t.test('a successful tablet:requestMyRecord renders certifications, XP/tier, and
                 certifications: [{ departmentKey: 'police', departmentLabel: 'Los Santos Police Department', active: true, grantedBy: 'XYZ999' }],
                 xp: 1250,
                 tierLabel: 'Trained K9',
+                // The ladder is part of the real tabletRequestMyRecord
+                // payload and is now needed here: the XP standing is
+                // rendered by the ladder block that came from the old
+                // Progression tab (plan item A), and an EMPTY ladder
+                // legitimately means "this server does not track XP" and
+                // renders that instead of a total.
+                xpLadder: [{ xp: 0, label: 'Green K9' }, { xp: 1000, label: 'Trained K9' }],
+                handlerXpLadder: [],
                 myFeatures: [
                     { key: 'Recall', label: 'Recall your K9', category: 'Combat', actionable: true, state: 'available' },
                     { key: 'BiteAndHold', label: 'Bite and Hold', category: 'Combat', actionable: true, state: 'requires_grant_missing' },
@@ -82,19 +90,19 @@ t.test('a successful tablet:requestMyRecord renders certifications, XP/tier, and
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    // The DEFAULT screen on open is now 'home' (this pass's own landing
-    // view -- see html/tablet.js's buildHomeScreen() header), which shows
-    // ONLY summary counts, never a department label/XP line -- this test
-    // is specifically about the FULL My Record screen, so it navigates
-    // there explicitly, same as every screen-specific spec already does
-    // for the console/theme/cert-tier/etc. tabs.
-    findByText(h.getRoot(), 'My Record')[0].click();
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    // NO NAVIGATION NEEDED ANY MORE. The landing screen used to show only
+    // summary counts, with the department label / XP line / abilities on a
+    // separate My Record tab; plan item A merged Home, My Record and
+    // Progression into this one screen, so everything this test asserts is
+    // already on it.
 
     const root = h.getRoot();
     t.isTrue(findByText(root, 'Los Santos Police Department').length >= 1, 'certification department label rendered');
-    t.isTrue(findByText(root, '1250 — Trained K9').length >= 1, 'XP + tier line rendered');
+    // The plain "1250 — Trained K9" line is gone: the ladder block that
+    // came from the Progression tab says the same thing and then where that
+    // total sits on the ladder, so keeping both would have printed the
+    // viewer's XP twice on one screen.
+    t.isTrue(findByText(root, '1250 XP -- Trained K9').length >= 1, 'XP + rank standing rendered');
     t.isTrue(findByText(root, 'Recall your K9').length >= 1, 'available feature label rendered');
     t.isTrue(findByText(root, 'Bite and Hold').length >= 1, 'grant-required feature label rendered too');
     t.equals(findByText(root, 'Requires a grant (not granted)').length, 1, 'the ungranted feature shows the correct, distinct status text');

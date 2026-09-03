@@ -306,7 +306,7 @@ t.test('a same-screen re-render preserves .k9tablet-screen scrollTop; navigating
 
     // A genuine screen change (a different tab) is a DIFFERENT screen --
     // starting at the top there is correct, not a bug.
-    findFirstButtonByText(h.getRoot(), 'Home').click();
+    findFirstButtonByText(h.getRoot(), 'My Record').click();
     await settle();
     t.equals(screenEl().scrollTop, 0, 'a real navigation starts the new screen at the top, never carrying over an unrelated scroll position');
 });

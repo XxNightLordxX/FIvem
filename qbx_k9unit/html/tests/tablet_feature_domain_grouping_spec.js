@@ -68,8 +68,10 @@ async function openMyRecord(myFeatures) {
     });
     h.postMessage('tablet:open', {});
     await settle();
-    clickActionCard(h.getRoot(), 'View My Record');
-    await settle();
+    // NO NAVIGATION. The abilities list is on the landing screen now (plan
+    // item A merged Home, My Record and Progression into one), so there is
+    // no "View My Record" card to click -- it pointed at the screen the
+    // viewer is already on.
     return h;
 }
 

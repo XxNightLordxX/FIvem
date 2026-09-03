@@ -1251,10 +1251,10 @@ local TABLET_STRING_KEYS = {
     -- as of the pass that added them, flagged to that file's owner -- they
     -- have since been added, so BuildTabletStrings() now resolves every
     -- one of them for real.
-    'tab_home', 'home_welcome_template', 'home_role_high_command', 'home_role_k9',
+    'home_welcome_template', 'home_role_high_command', 'home_role_k9',
     'home_role_handler', 'home_role_uncertified', 'home_partnered_badge',
     'home_not_partnered_badge', 'home_certified_count_template',
-    'home_quick_actions_heading', 'home_view_my_record_label', 'home_view_my_record_hint',
+    'home_quick_actions_heading',
     'home_open_console_label', 'home_open_console_hint', 'home_high_command_heading',
     'home_high_command_hint', 'home_high_command_tabs_pointer',
     -- Workflow audit finding #3, 2026-08-26 -- see
@@ -1267,7 +1267,7 @@ local TABLET_STRING_KEYS = {
     'home_high_command_delegate_hint_template', 'home_high_command_delegate_tabs_pointer',
     'list_join_and',
     'home_no_certification_title', 'home_no_certification_body', 'home_no_certification_next_steps',
-    'home_ready_abilities_heading', 'home_no_ready_abilities', 'home_view_all_abilities_label',
+
     'home_blocked_count_template',
     -- COMMAND REFERENCE (this pass -- "the resource registers 36 commands,
     -- a player has no way to discover them in-game"). See
@@ -1318,7 +1318,7 @@ local TABLET_STRING_KEYS = {
     -- k9debug -- server/diagnostics.lua's diagnostic dump command.
     'cmdref_k9debug_usage', 'cmdref_k9debug_does', 'cmdref_k9debug_needs',
     -- Progression screen (owner-directed progression pass).
-    'tab_progression',
+
     'progression_intro',
     'progression_k9_heading',
     'progression_handler_heading',
@@ -1329,7 +1329,7 @@ local TABLET_STRING_KEYS = {
     'progression_next_rank',
     'progression_top_rank',
     'progression_rank_row',
-    'help_tab_progression_desc',
+
     -- k9dog (family #2, dog record) and k9train (family #4, training) --
     -- the remaining two merged entry points from the same spec. Grouped
     -- here with k9kennel rather than beside their own old per-command
@@ -1471,7 +1471,7 @@ local TABLET_STRING_KEYS = {
     'help_start_k9_5', 'help_start_handler_1', 'help_start_handler_2', 'help_start_handler_3',
     'help_start_handler_4', 'help_start_handler_5', 'help_start_handler_6', 'help_start_high_command_heading',
     'help_start_high_command_intro', 'help_start_high_command_1', 'help_start_high_command_2', 'help_start_high_command_3',
-    'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro', 'help_tab_home_desc',
+    'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro',
     'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
     'help_tab_flows_desc', 'help_tab_theme_desc',
     'help_tab_runtime_control_desc',
