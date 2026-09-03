@@ -18,7 +18,7 @@
     Roster Role/Callsign section, never a second person-detail screen.
 
     Specifically proves:
-      1. A non-high-command viewer never sees the K9/Handler Roster tabs,
+      1. A non-high-command viewer never sees the Personnel Roster tab,
          nor the Roster Role/Callsign section on a person they CAN still
          open (via their own k9.certify/k9.audit capability) -- "no roster
          mutation controls" is a client-side convenience only; the SAME
@@ -108,7 +108,7 @@ async function settle(h, times) {
 //    person screen this viewer CAN still open through their own capability.
 // ============================================================================
 
-t.test('a non-high-command viewer never sees the K9 Roster / Handler Roster tabs, even holding k9.certify + k9.audit', async () => {
+t.test('a non-high-command viewer never sees the Personnel Roster tab, even holding k9.certify + k9.audit', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({
             'tablet:requestMyRecord': () => ({ ok: true, viewer: CERTIFIER_ONLY_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
@@ -116,7 +116,11 @@ t.test('a non-high-command viewer never sees the K9 Roster / Handler Roster tabs
     });
     h.postMessage('tablet:open', {});
     await settle(h);
-    t.equals(findByText(h.getRoot(), 'K9 Roster').length, 0, 'tab is not merely hidden by CSS -- it is never constructed at all');
+    // ONE tab now ('Personnel Roster'), not two -- the K9/Handlers split is
+    // a filter inside the screen. The old labels must not appear either:
+    // they were deleted outright rather than repurposed as tab names.
+    t.equals(findByText(h.getRoot(), 'Personnel Roster').length, 0, 'tab is not merely hidden by CSS -- it is never constructed at all');
+    t.equals(findByText(h.getRoot(), 'K9 Roster').length, 0, 'and the old two-tab labels are gone entirely');
     t.equals(findByText(h.getRoot(), 'Handler Roster').length, 0);
 });
 
@@ -293,7 +297,7 @@ t.test('the Unassigned section renders, with its explainer, when BOTH the K9 and
     });
     h.postMessage('tablet:open', {});
     await settle(h);
-    findByText(h.getRoot(), 'K9 Roster')[0].click();
+    findByText(h.getRoot(), 'Personnel Roster')[0].click();
     await settle(h, 4);
 
     t.isTrue(findByText(h.getRoot(), 'Nobody is currently on this roster.').length >= 1, 'the empty K9 bucket says so plainly');
@@ -301,11 +305,15 @@ t.test('the Unassigned section renders, with its explainer, when BOTH the K9 and
     t.isTrue(findByTextContaining(h.getRoot(), 'this is normal, not an error').length >= 1, 'the explainer frames this as expected, not a bug');
     t.isTrue(findByText(h.getRoot(), 'Waiting Wendy').length >= 1, 'the one truly-unassigned person is actually listed');
 
-    // Same guarantee on the Handler Roster tab -- Unassigned is SHARED,
-    // never a K9-only section.
-    findByText(h.getRoot(), 'Handler Roster')[0].click();
+    // Same guarantee with the Handlers bucket selected. Unassigned is
+    // SHARED, never a K9-only section -- and with one screen it now renders
+    // ONCE rather than being duplicated across two tabs, which is the whole
+    // reason the two tabs became one.
+    t.equals(findByText(h.getRoot(), 'Unassigned').length, 1, 'the shared section appears exactly once, not once per bucket');
+    findByText(h.getRoot(), 'Handlers')[0].click();
     await settle(h, 4);
-    t.isTrue(findByText(h.getRoot(), 'Waiting Wendy').length >= 1, 'Unassigned renders on the Handler tab too');
+    t.isTrue(findByText(h.getRoot(), 'Waiting Wendy').length >= 1, 'Unassigned renders with the Handlers bucket too');
+    t.equals(findByText(h.getRoot(), 'Unassigned').length, 1, 'and still exactly once');
 });
 
 // ============================================================================
@@ -332,7 +340,7 @@ t.test('sorting by Department Grade or XP re-orders the already-fetched rows wit
     });
     h.postMessage('tablet:open', {});
     await settle(h);
-    findByText(h.getRoot(), 'K9 Roster')[0].click();
+    findByText(h.getRoot(), 'Personnel Roster')[0].click();
     await settle(h, 4);
 
     const callsAfterOpen = rosterCalls.filter((c) => c.name === 'tablet:rosterList').length;
@@ -383,7 +391,7 @@ t.test('a roster row rendered from an OLDER fetch still opens/acts on its OWN ci
     });
     h.postMessage('tablet:open', {});
     await settle(h);
-    findByText(h.getRoot(), 'K9 Roster')[0].click();
+    findByText(h.getRoot(), 'Personnel Roster')[0].click();
     await settle(h, 4);
 
     // Capture the row's OWN "Manage" button object -- its onClick closure
@@ -400,7 +408,7 @@ t.test('a roster row rendered from an OLDER fetch still opens/acts on its OWN ci
     // actually clicks. Re-render the WHOLE roster screen fresh with that
     // new data (a real Refresh/tab re-entry would do exactly this).
     currentRoster = { ok: true, k9: [rosterRow({ citizenid: 'NEW2', name: 'New Bob' })], handlers: [], unassigned: [] };
-    findByText(h.getRoot(), 'K9 Roster')[0].click();
+    findByText(h.getRoot(), 'Personnel Roster')[0].click();
     await settle(h, 4);
     t.isTrue(findByText(h.getRoot(), 'New Bob').length >= 1, 'sanity: the screen now genuinely shows the NEW person');
     t.equals(findByText(h.getRoot(), 'Old Alice').length, 0, 'and the old one is gone from the CURRENT render');
@@ -453,7 +461,7 @@ t.test('a malicious name/callsign/department label reaches the roster table AND 
     });
     h.postMessage('tablet:open', {});
     await settle(h);
-    findByText(h.getRoot(), 'K9 Roster')[0].click();
+    findByText(h.getRoot(), 'Personnel Roster')[0].click();
     await settle(h, 4);
 
     t.isTrue(findByTextContaining(h.getRoot(), malicious).length >= 1, 'the malicious string appears verbatim in the roster table (name/callsign/department/partner cells)');

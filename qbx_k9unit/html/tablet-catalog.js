@@ -1220,6 +1220,7 @@
         help_tab_theme_desc: "Change the tablet's own colors and title for every player on the server. Open it to re-brand the tablet, not to fix anything broken.",
         help_tab_cert_tiers_desc: "Add, rename, or remove certification tiers (like Trainee, Certified, Senior) and decide which extra abilities each tier unlocks. Open it before you certify anyone if the default tiers do not match how your server is organized.",
         help_tab_permission_keys_desc: "Add or remove the permission keys this tablet can grant to a specific person (like the ability to certify others). Open it if a permission you need does not exist yet -- to grant an existing one to someone, use the Console tab's Person screen instead.",
+        help_tab_roster_desc: "Everyone currently hired, across every configured department, with their callsign, certification tier, XP, and active partner if any. Switch between K9s and Handlers at the top; both share one \"Unassigned\" section -- certified people who have not been assigned to either roster yet, which is not an error, just people still waiting to be sorted. Open a row to hire, fire, promote, demote, change someone's roster role, or set a callsign -- all from their profile, the same one the Console tab and Online Players list also open.",
         help_tab_shop_locations_desc: "Decide where the K9 supply shop ped stands in the world, for each department. Open it to move or add a shop, not to change what it sells.",
         help_tab_shop_items_desc: "Decide what the K9 supply shop sells, at what price, and which certification tier is required to buy each item. Open it to change the shop's catalog.",
         help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
@@ -1389,8 +1390,10 @@
         // below) -- every key here is also in client/tablet.lua's
         // TABLET_STRING_KEYS and locales/en.json's `tablet` group, per this
         // file's own three-way locale contract (tests/tabletlocalization_spec.lua).
-        tab_roster_k9: 'K9 Roster',
-        tab_roster_handlers: 'Handler Roster',
+        tab_roster: "Personnel Roster",
+        roster_bucket_label: "Show:",
+        roster_bucket_k9: 'K9s',
+        roster_bucket_handlers: 'Handlers',
         roster_unassigned_heading: 'Unassigned',
         roster_unassigned_explainer: "Certified, but not yet assigned to a roster -- this is normal, not an error. On the day this feature ships, everyone certified starts here. Nothing about anyone's in-game abilities changes while they sit in this list; open their profile and assign them as a K9 or a Handler when you're ready.",
         roster_callsign_column: 'Callsign',
@@ -1430,8 +1433,6 @@
         roster_certified_since_column: 'Certified Since',
         // HELP_TAB_CATALOG entries for the two new tabs above (tests/helptabcoverage_spec.lua's
         // own drift guard: every real tab_* key needs a matching catalog entry).
-        help_tab_roster_k9_desc: 'Every currently-hired K9, across every configured department, with their callsign, certification tier, XP, and active partner if any. Open a row to hire, fire, promote, demote, change their roster role, or set their callsign -- all from their profile, the same one the Console tab and Online Players list also open.',
-        help_tab_roster_handlers_desc: "The same list as K9 Roster, for Handlers instead. Both tabs share one \"Unassigned\" section: certified people who haven't been assigned to either roster yet -- not an error, just people still waiting to be sorted.",
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical

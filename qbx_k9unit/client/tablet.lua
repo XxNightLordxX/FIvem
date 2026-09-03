@@ -1517,7 +1517,8 @@ local TABLET_STRING_KEYS = {
     -- `tablet` group, and to html/tablet.js's DEFAULT_STRINGS in the SAME
     -- change, per this file's own BuildTabletStrings/
     -- tabletlocalization_spec.lua three-way contract.
-    'tab_roster_k9', 'tab_roster_handlers', 'roster_unassigned_heading', 'roster_unassigned_explainer',
+    'tab_roster', 'roster_bucket_label', 'roster_bucket_k9', 'roster_bucket_handlers',
+    'roster_unassigned_heading', 'roster_unassigned_explainer',
     'roster_callsign_column', 'roster_callsign_none', 'roster_callsign_label', 'roster_callsign_save',
     'roster_callsign_taken_error', 'roster_callsign_invalid_chars_error', 'roster_hire_label', 'roster_hire_role_prompt',
     'roster_hire_role_k9', 'roster_hire_role_handler', 'roster_fire_label', 'roster_fire_confirm_prompt',
@@ -1525,7 +1526,7 @@ local TABLET_STRING_KEYS = {
     'roster_sort_by_tier', 'roster_sort_by_grade', 'roster_sort_by_xp', 'roster_dogcharacter_pin_note',
     'roster_error_invalid_personnel_role', 'roster_error_not_certified', 'roster_error_already_assigned', 'roster_error_no_active_personnel',
     'roster_bucket_empty', 'roster_unassigned_none', 'roster_certified_since_column',
-    'help_tab_roster_k9_desc', 'help_tab_roster_handlers_desc',
+    'help_tab_roster_desc',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one

@@ -1074,7 +1074,9 @@
         // citizen ID" box, or the Online Players picker; ALL of these pass
         // no third argument to openPerson(), so this defaults to 'console'
         // for every one of them, preserving their existing Back behaviour
-        // byte-for-byte) | 'roster_k9' | 'roster_handlers' (this pass,
+        // byte-for-byte) | 'roster' (one screen with a K9/Handlers bucket
+        // toggle -- it was two screens, 'roster_k9' and 'roster_handlers',
+        // that differed only by which array they rendered;
         // docs/history/ROSTER_SPEC.md §0 -- the roster rows are a THIRD entry point into
         // this SAME buildPersonScreen(), never a second person-detail
         // screen; this one field is the entire "mode flag" that entry
@@ -1105,6 +1107,14 @@
         // (§9's own explicit scope cut) -- reset to 'tier' in handleOpen(),
         // same as every other per-session-only value on this page.
         personnelRosterSort: 'tier',
+        // WHICH ROSTER BUCKET THE ONE Roster TAB IS SHOWING -- 'k9' | 'handler'.
+        // This used to be encoded in the SCREEN itself: two tabs, 'roster_k9'
+        // and 'roster_handlers', both calling buildPersonnelRosterScreen()
+        // with a different argument. It was never two screens, so it is one
+        // tab with a toggle now (see buildRosterBucketControls()). Reset to
+        // 'k9' on every open, same per-session-only discipline as
+        // personnelRosterSort above.
+        personnelRosterBucket: 'k9',
 
         // THE SHARED RATE LIMIT -- see PERMISSION_ACTION_MIN_INTERVAL_MS's
         // own doc comment above. Timestamp (Date.now()) of the last
@@ -2310,10 +2320,8 @@
             panel.appendChild(buildConsoleScreen());
         } else if (state.screen === 'person' && canOpenPersonRecord()) {
             panel.appendChild(buildPersonScreen());
-        } else if (state.screen === 'roster_k9' && state.viewer.isHighCommand) {
-            panel.appendChild(buildPersonnelRosterScreen('k9'));
-        } else if (state.screen === 'roster_handlers' && state.viewer.isHighCommand) {
-            panel.appendChild(buildPersonnelRosterScreen('handler'));
+        } else if (state.screen === 'roster' && state.viewer.isHighCommand) {
+            panel.appendChild(buildPersonnelRosterScreen());
         } else if (state.screen === 'theme' && canManageTabletTheme()) {
             panel.appendChild(buildThemeScreen());
         } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
@@ -2772,15 +2780,16 @@
             // of whether this tab is ever shown). Fresh entry re-fetches on
             // every click, same "never show a stale copy" discipline as
             // every other tab in this block.
-            var rosterK9Tab = mkButton(S('tab_roster_k9'), 'k9tablet-tab' + (state.screen === 'roster_k9' ? ' k9tablet-tab--active' : ''), function () {
-                goToPersonnelRosterScreen('k9');
+            // ONE tab, not two. Both of the tabs that used to sit here
+            // called goToPersonnelRosterScreen() with a different argument,
+            // and that argument is now a control on the screen itself (see
+            // buildRosterBucketControls()). Clicking the tab keeps whichever
+            // bucket the operator last had open rather than forcing them
+            // back to K9 every time.
+            var rosterTab = mkButton(S('tab_roster'), 'k9tablet-tab' + (state.screen === 'roster' ? ' k9tablet-tab--active' : ''), function () {
+                goToPersonnelRosterScreen();
             });
-            appendAdminTab(rosterK9Tab);
-
-            var rosterHandlersTab = mkButton(S('tab_roster_handlers'), 'k9tablet-tab' + (state.screen === 'roster_handlers' ? ' k9tablet-tab--active' : ''), function () {
-                goToPersonnelRosterScreen('handler');
-            });
-            appendAdminTab(rosterHandlersTab);
+            appendAdminTab(rosterTab);
         }
 
         // K9 Supply Shop location management -- NOT high-command-only:
@@ -3792,12 +3801,12 @@
         { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: canManageTabletTheme },
         { tabLabelKey: 'tab_cert_tiers', descKey: 'help_tab_cert_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_permission_keys', descKey: 'help_tab_permission_keys_desc', visible: helpHighCommandOnly },
-        // K9/Handler Personnel Rosters (docs/history/ROSTER_SPEC.md, Phase B) -- SAME
-        // high-command-only gate buildTabs() itself uses for these two
-        // tabs (they sit in the same admin tab group as Cert Tiers/
-        // Permission Keys immediately above).
-        { tabLabelKey: 'tab_roster_k9', descKey: 'help_tab_roster_k9_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_roster_handlers', descKey: 'help_tab_roster_handlers_desc', visible: helpHighCommandOnly },
+        // Personnel Roster (docs/history/ROSTER_SPEC.md, Phase B) -- SAME
+        // high-command-only gate buildTabs() itself uses for this tab (it
+        // sits in the same admin tab group as Cert Tiers/Permission Keys
+        // immediately above). ONE entry, because there is now one tab: the
+        // K9/Handlers split is a control on the screen, not two tabs.
+        { tabLabelKey: 'tab_roster', descKey: 'help_tab_roster_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_shop_locations', descKey: 'help_tab_shop_locations_desc', visible: canManageShopLocations },
         { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: canManageShopItems },
         { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: canManageRuntimeControl },
@@ -5252,7 +5261,14 @@
     }
 
     function goToPersonnelRosterScreen(bucketKey) {
-        state.screen = bucketKey === 'k9' ? 'roster_k9' : 'roster_handlers';
+        // ONE SCREEN, A BUCKET ARGUMENT -- not two screens. `bucketKey` is
+        // optional now: omitted (the tab click) keeps whichever bucket the
+        // operator last looked at; supplied (returning from a person opened
+        // out of a specific bucket) restores that one.
+        if (bucketKey === 'k9' || bucketKey === 'handler') {
+            state.personnelRosterBucket = bucketKey;
+        }
+        state.screen = 'roster';
         render();
         loadPersonnelRoster();
     }
@@ -5404,11 +5420,52 @@
     }
 
     /**
-     * @param {'k9'|'handler'} bucketKey
+     * K9 / Handlers, as a control rather than as two tabs.
+     *
+     * There were two tabs here, and they called the SAME function with a
+     * different argument -- the only thing that differed between the two
+     * screens was which of the three arrays in the one already-fetched
+     * `state.personnelRoster` payload got rendered above the Unassigned
+     * section. That is a filter, not a screen, so it is a filter now.
+     * Deliberately the same shape as buildRosterSortControls() directly
+     * above, which already establishes "a row of buttons that re-render the
+     * rows already in hand, with no second round trip".
+     *
+     * The Unassigned section is the reason this is a strict improvement
+     * rather than a lateral move: it was rendered on BOTH old screens (its
+     * own comment says so -- "ALWAYS rendered, on BOTH roster screens"), so
+     * an operator comparing the two tabs saw the identical list twice.
+     * @returns {HTMLElement}
      */
-    function buildPersonnelRosterScreen(bucketKey) {
+    function buildRosterBucketControls() {
+        var wrap = mk('div', { class: 'k9tablet-toolbar k9tablet-roster-bucket' });
+        wrap.appendChild(mk('span', { class: 'k9tablet-roster-sort-label', text: S('roster_bucket_label') }));
+        var options = [
+            // NOT S('tab_roster_k9')/S('tab_roster_handlers') -- those keys
+            // are deleted. A `tab_*` key means "this is a tab", and
+            // tests/helptabcoverage_spec.lua enforces that every one of them
+            // has a Help entry describing the tab it names. These two label a
+            // filter inside one tab now, so they get filter names.
+            { key: 'k9', label: S('roster_bucket_k9') },
+            { key: 'handler', label: S('roster_bucket_handlers') },
+        ];
+        for (var i = 0; i < options.length; i++) {
+            (function (opt) {
+                var active = state.personnelRosterBucket === opt.key;
+                wrap.appendChild(mkButton(opt.label, 'k9tablet-btn' + (active ? ' k9tablet-btn--active' : ''), function () {
+                    if (state.personnelRosterBucket === opt.key) return;
+                    state.personnelRosterBucket = opt.key;
+                    render();
+                }));
+            })(options[i]);
+        }
+        return wrap;
+    }
+
+    function buildPersonnelRosterScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
-        var fromScreen = bucketKey === 'k9' ? 'roster_k9' : 'roster_handlers';
+        var bucketKey = state.personnelRosterBucket === 'handler' ? 'handler' : 'k9';
+        var fromScreen = 'roster';
 
         if (state.personnelRosterLoading && !state.personnelRoster) {
             wrap.appendChild(mk('p', { text: S('loading') }));
@@ -5424,6 +5481,7 @@
             return wrap;
         }
 
+        wrap.appendChild(buildRosterBucketControls());
         wrap.appendChild(buildRosterSortControls());
 
         var rows = bucketKey === 'k9' ? state.personnelRoster.k9 : state.personnelRoster.handlers;
@@ -5434,9 +5492,13 @@
             wrap.appendChild(buildPersonnelRosterTable(sortedRosterRows(rows), fromScreen, bucketKey));
         }
 
-        // UNASSIGNED (docs/history/ROSTER_SPEC.md §3/§5/§8) -- ALWAYS rendered, on BOTH
-        // roster screens, even when it (or the bucket above) is empty --
-        // acceptance criterion #3: "never silently omitted from both."
+        // UNASSIGNED (docs/history/ROSTER_SPEC.md §3/§5/§8) -- ALWAYS rendered,
+        // whichever bucket is selected, even when it (or the bucket above) is
+        // empty -- acceptance criterion #3: "never silently omitted from
+        // both." It used to render on BOTH roster screens, which meant an
+        // operator switching tabs saw the same list a second time; with one
+        // screen it appears exactly once, which is what that criterion
+        // actually wanted.
         // NOT an error state -- on the day this ships, EVERY certified
         // person is unassigned, and the explainer below says so in plain
         // language rather than let an owner conclude people went missing.
@@ -5483,7 +5545,7 @@
      * minutes ago can never act on "whoever now holds" anything, because
      * nothing here is ever keyed by anything but this citizenid string.
      * @param {object} row
-     * @param {'roster_k9'|'roster_handlers'} fromScreen
+     * @param {'roster'} fromScreen
      * @param {'k9'|'handler'} bucketKey
      */
     function buildPersonnelRosterRow(row, fromScreen, bucketKey) {
@@ -5682,8 +5744,8 @@
             // screen when that's how it was reached, otherwise falls
             // through to the EXACT SAME goToConsoleScreen() every other
             // entry point already used before this pass, unchanged.
-            if (state.personOpenedFrom === 'roster_k9' || state.personOpenedFrom === 'roster_handlers') {
-                goToPersonnelRosterScreen(state.personOpenedFrom === 'roster_k9' ? 'k9' : 'handler');
+            if (state.personOpenedFrom === 'roster') {
+                goToPersonnelRosterScreen();
                 return;
             }
             goToConsoleScreen();
@@ -11852,7 +11914,7 @@
         // EXISTING call site (Console tab, "open by exact citizen ID",
         // Online Players picker) passes no third argument at all, so this
         // defaults to 'console' for every one of them, unchanged.
-        state.personOpenedFrom = (fromScreen === 'roster_k9' || fromScreen === 'roster_handlers') ? fromScreen : 'console';
+        state.personOpenedFrom = fromScreen === 'roster' ? 'roster' : 'console';
         state.person = { citizenid: citizenid, name: name };
         state.personSummary = null;
         state.personFeatures = null;
@@ -13685,6 +13747,7 @@
         state.personnelRosterError = null;
         state.personnelRoster = null;
         state.personnelRosterSort = 'tier';
+        state.personnelRosterBucket = 'k9';
         state.lastPermissionMutationAt = 0;
         state.actionNotice = null;
         state.auditMode = 'cert';
