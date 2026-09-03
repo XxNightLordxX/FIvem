@@ -57,6 +57,11 @@ function countCommandReferenceEntriesByAdminOnly(wantAdminOnly) {
 const REAL_NON_ADMIN_COMMAND_COUNT = countCommandReferenceEntriesByAdminOnly(false);
 const REAL_ADMIN_COMMAND_COUNT = countCommandReferenceEntriesByAdminOnly(true);
 
+/** Set by the High Command test below and compared against by the plain
+ * handler test: with one shared table (plan item H), both must see the
+ * same rows. */
+let HIGH_COMMAND_ROW_COUNT = 0;
+
 function routeFetch(handlers) {
     return function (url) {
         const name = url.split('/').pop();
@@ -91,7 +96,7 @@ const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: tr
 async function openHelpScreen(h) {
     h.postMessage('tablet:open', {});
     await settle();
-    findByText(h.getRoot(), 'Help')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 }
 
@@ -117,7 +122,13 @@ t.test('the Help tab renders for a brand-new, uncertified viewer -- the exact re
     t.equals(findByText(h.getRoot(), 'How to Use This Tablet').length, 1, 'the screen heading renders');
     t.equals(findByText(h.getRoot(), 'Start Here').length, 1);
     t.equals(findByText(h.getRoot(), 'Every Tab, Explained').length, 1);
-    t.equals(findByText(h.getRoot(), 'Commands You Can Use').length, 1);
+    // 'Commands You Can Use' is gone: the Guide renders the REAL command
+    // reference underneath these sections now (plan item H), rather than a
+    // second, category-grouped copy of the same catalog without the filter
+    // or the live status badges. Its heading is what proves the table is
+    // there.
+    t.equals(findByText(h.getRoot(), 'Commands You Can Use').length, 0, 'no second, duplicate command table');
+    t.isTrue(findByText(h.getRoot(), 'Command Reference').length >= 1, 'the real command reference is on this screen');
     t.equals(findByText(h.getRoot(), 'How to Do the Common Things').length, 1);
     t.equals(findByText(h.getRoot(), "When Something Doesn't Work").length, 1);
     // Getting Started role note -- uncertified, not K9, not handler.
@@ -187,8 +198,20 @@ t.test('ADDITIVE, NOT REPLACEMENT: High Command sees every non-admin command PLU
     });
     await openHelpScreen(h);
 
-    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 1, 'the admin heading renders for High Command');
-    t.equals(statusBadges(h).length, REAL_NON_ADMIN_COMMAND_COUNT + REAL_ADMIN_COMMAND_COUNT, 'every non-admin AND every admin-only command row renders');
+    // ONE TABLE, EVERY COMMAND, FOR EVERY VIEWER (plan item H). The
+    // separate 'Admin Commands (High Command Only)' heading belonged to the
+    // deleted duplicate table; the real command reference has always listed
+    // every command and let the per-row status badge say who can use it --
+    // deliberately, per its own header: "never hidden for a viewer who
+    // cannot use it, because it tells them what to go earn".
+    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 0, 'no separate admin table heading any more');
+    // Counted against the plain-handler run below rather than a hardcoded
+    // total: the real command reference also hides a command whose gated
+    // FEATURE is switched off server-wide, so the row count depends on the
+    // fixture's myFeatures, not on who is looking. That is the property
+    // worth pinning -- the table does not vary by rank.
+    t.isTrue(statusBadges(h).length > 0, 'command rows render');
+    HIGH_COMMAND_ROW_COUNT = statusBadges(h).length;
 
     // High-command-only task walkthroughs are additive too.
     t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1);
@@ -209,9 +232,13 @@ t.test('a plain handler (not High Command) sees the non-admin commands only -- n
     });
     await openHelpScreen(h);
 
-    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 0, 'no admin heading for a plain handler');
-    t.equals(statusBadges(h).length, REAL_NON_ADMIN_COMMAND_COUNT, 'only the non-admin commands render');
-    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 0);
+    // A plain handler sees the SAME single table -- admin commands
+    // included, each with a badge saying they cannot use it. That is the
+    // command reference's own long-standing posture, not a change of this
+    // merge. What stays gated is the admin TASK WALKTHROUGHS below.
+    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 0, 'no admin table heading exists for anyone now');
+    t.equals(statusBadges(h).length, HIGH_COMMAND_ROW_COUNT, 'the SAME rows a high-command viewer sees -- one table, badges doing the gating, never a shorter list by rank');
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 0, 'the admin task walkthroughs are still withheld');
     t.equals(findByText(h.getRoot(), 'Turn Someone Into a K9').length, 0);
 });
 
@@ -224,8 +251,7 @@ t.test('DELEGATED, NOT HIGH COMMAND: a rank-based certifier holding only the k9.
     });
     await openHelpScreen(h);
 
-    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 1, 'a delegated k9.certify holder IS taught the admin command table exists');
-    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1, 'and gets the Certify Someone walkthrough');
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1, 'a delegated k9.certify holder gets the Certify Someone walkthrough');
     t.equals(findByText(h.getRoot(), 'Turn Someone Into a K9').length, 0, 'but NOT the true-high-command-only Assign K9 Role walkthrough');
     t.equals(findByText(h.getRoot(), 'Turn a Feature On or Off').length, 0, 'and NOT the Runtime Control walkthrough, which this viewer has no capability for');
     t.equals(findByText(h.getRoot(), 'Runtime Control').length, 0, 'nor is the Runtime Control tab itself explained to them');
@@ -242,8 +268,7 @@ t.test('DELEGATED, NOT HIGH COMMAND: a runtime-control-only delegate sees the Ru
 
     t.isTrue(findByTextContaining(h.getRoot(), 'Turn individual features on or off for the whole server').length >= 1, 'the Runtime Control tab is explained to this delegate');
     t.equals(findByText(h.getRoot(), 'Turn a Feature On or Off').length, 1, 'and they get the matching task walkthrough');
-    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 0, 'but the certification/audit/xp admin command table is NOT shown -- this capability gates no real command');
-    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 0);
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 0, 'but NOT the certification walkthrough -- this capability gates no real certification command');
 });
 
 t.test('Every Tab, Explained only lists tabs this viewer can actually see -- High Command gets more entries than a plain handler', async () => {
@@ -331,7 +356,7 @@ t.test('a hostile string arriving via data.strings for a Help-screen key reaches
     });
     h.postMessage('tablet:open', { strings: { help_heading: malicious, help_trouble_no_k9_access_body: malicious } });
     await settle();
-    findByText(h.getRoot(), 'Help')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 
     const matches = findAll(h.getRoot(), (n) => n._textContent === malicious);

@@ -183,7 +183,7 @@ t.test('COMMAND REFERENCE: a command whose gated feature is off is not listed', 
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findByText(h.getRoot(), 'Commands')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 
     t.equals(findByText(h.getRoot(), '/k9bite').length, 0, 'the command for a switched-off feature is gone from the reference');
@@ -204,7 +204,7 @@ t.test('COMMAND REFERENCE: the filter readout counts only what this server actua
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findByText(h.getRoot(), 'Commands')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 
     const visibleRows = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-state')).length;
@@ -276,7 +276,7 @@ t.test('A RECORD THAT HAS NOT RESOLVED HIDES NOTHING -- "not loaded" must never 
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findByText(h.getRoot(), 'Commands')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 
     const badges = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-state'));

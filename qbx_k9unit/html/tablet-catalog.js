@@ -47,6 +47,8 @@
     var DEFAULT_STRINGS = {
         title: 'K9 Command Tablet',
         close_label: 'Close',
+        tab_guide: "Guide",
+        help_tab_guide_desc: "How to do things, and then every command. The top half walks you through getting started, what each tab is for, the jobs you will do most often, and what to try when something is not working. The bottom half is a searchable list of every command this resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why.",
         tab_console: 'Command Console',
         tab_my_record: 'My Record',
         // PROGRESSION SCREEN (owner-directed: "do progression put in the
@@ -804,7 +806,6 @@
         // is simply omitted from `strings` until added there, and this
         // DEFAULT_STRINGS table covers that exact gap in the meantime,
         // same resilience-net role it already plays for every other key.
-        tab_commands: 'Commands',
         cmdref_heading: 'Command Reference',
         cmdref_intro: 'Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.',
         cmdref_search_placeholder: 'Search commands...',
@@ -1171,7 +1172,6 @@
         // ---- Help tab (owner-directed: "a separate tab that teaches you how
         // to use the entire tablet... super detailed but dumbed down") --
         // see buildHelpScreen()'s own header for the full design. ----
-        tab_help: "Help",
         help_heading: "How to Use This Tablet",
         help_intro_line1: "This page walks you through using the tablet from scratch, in plain language. If you already know what you are doing and just need a quick lookup, use the Commands tab instead -- it lists every command with a live yes/no on whether you can use it right now.",
         help_role_note_k9: "You are seeing the K9 version of this guide because you are currently playing as a dog.",
@@ -1199,18 +1199,12 @@
         help_tabs_heading: "Every Tab, Explained",
         help_tabs_intro: "Only the tabs you can actually use are listed below -- if a tab is not shown here, you cannot see it on your own tablet either.",
         help_tab_my_record_desc: "Everything about you, in one place, and the first screen you land on: who you are and what to do next, then your certifications, then where you stand on both XP ladders, then every ability with its exact status -- the ones you can use now and the ones you still have to earn.",
-        help_tab_commands_desc: "A searchable list of every command this tablet's resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why. Open it when you know roughly what you want to do and need the exact command.",
-        help_tab_help_desc: "This page. Open it any time something else on the tablet does not make sense.",
         help_tab_console_desc: "Open a specific handler or K9's record by their exact citizen ID -- this always works, even for someone who has never been certified. If you also hold the Audit capability or are High Command, this tab additionally lets you browse and search the full roster by name, citizen ID, or department (that search only ever shows people who already hold a certification, so it will never find someone brand new -- open them by citizen ID instead).",
         help_tab_flows_desc: "A guided, step-by-step version of the four admin jobs you will do most often: setting up a new handler, offboarding one, handling a problem player, and tuning server-wide settings. Open it instead of the individual screens below when you want to be walked through the whole job in order.",
         help_tab_theme_desc: "Change the tablet's own colors and title for every player on the server. Open it to re-brand the tablet, not to fix anything broken.",
         help_tab_roster_desc: "Everyone currently hired, across every configured department, with their callsign, certification tier, XP, and active partner if any. Switch between K9s and Handlers at the top; both share one \"Unassigned\" section -- certified people who have not been assigned to either roster yet, which is not an error, just people still waiting to be sorted. Open a row to hire, fire, promote, demote, change someone's roster role, or set a callsign -- all from their profile, the same one the Console tab and Online Players list also open.",
         help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
         help_tab_audit_desc: "A read-only history of who certified whom, who partnered with whom, who searched whom, XP grants, and department-wide activity. This is privacy-sensitive -- it shows real names and real actions. Open it to investigate something that already happened.",
-        help_commands_heading: "Commands You Can Use",
-        help_commands_intro: "Every command below is real -- typing it does exactly what it says. Most of them only work while you are currently playing as the K9 (wearing a dog model); a few work from either side. If a default key is shown, that key runs the same command without you typing anything, unless you have already changed that key yourself in Settings > Key Bindings > FiveM.",
-        help_commands_admin_heading: "Admin Commands (High Command Only)",
-        help_commands_admin_intro: "These only work for High Command, or for someone specifically granted the matching permission. They are listed here because you are High Command -- an ordinary handler or K9 does not see this section.",
         help_tasks_heading: "How to Do the Common Things",
         help_task_get_certified_heading: "Get Certified",
         help_task_get_certified_1: "1. Find someone who can certify you: a supervisor at the right rank in your department, or anyone in High Command.",

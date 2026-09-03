@@ -190,7 +190,7 @@ const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: tr
 async function openCommandsScreen(h) {
     h.postMessage('tablet:open', {});
     await settle();
-    findByText(h.getRoot(), 'Commands')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 }
 
@@ -517,7 +517,7 @@ t.test('a hostile string arriving via data.strings for a Command Reference key r
     });
     h.postMessage('tablet:open', { strings: { cmdref_k9audit_does: malicious, cmdref_heading: malicious } });
     await settle();
-    findByText(h.getRoot(), 'Commands')[0].click();
+    findByText(h.getRoot(), 'Guide')[0].click();
     await settle();
 
     const matches = findAll(h.getRoot(), (n) => n._textContent === malicious);

@@ -200,7 +200,7 @@ t.test('a live-filter search box keeps its OWN focus and cursor position across 
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findFirstButtonByText(h.getRoot(), 'Commands').click();
+    findFirstButtonByText(h.getRoot(), 'Guide').click();
     await settle();
 
     const search = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-search'))[0];
@@ -287,7 +287,7 @@ t.test('a same-screen re-render preserves .k9tablet-screen scrollTop; navigating
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findFirstButtonByText(h.getRoot(), 'Commands').click();
+    findFirstButtonByText(h.getRoot(), 'Guide').click();
     await settle();
 
     function screenEl() {

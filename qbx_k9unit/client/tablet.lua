@@ -1046,6 +1046,7 @@ local TABLET_STRING_KEYS = {
     -- see this file's own NUI CONTRACT note on why the server's raw `note`
     -- prose is never forwarded/rendered verbatim.
     'tab_shop', 'help_tab_shop_desc',
+    'tab_guide', 'help_tab_guide_desc',
     'tab_catalogs', 'help_tab_catalogs_desc',
     'tab_runtime_control', 'runtime_control_heading', 'runtime_control_intro',
     'runtime_control_disabled_note', 'runtime_features_heading',
@@ -1284,7 +1285,7 @@ local TABLET_STRING_KEYS = {
     -- mid-pass -- server/permissions.lua registered both concurrently
     -- while this list was being written; tests/commandreferenceregistry_spec.lua
     -- is what actually caught the gap.)
-    'tab_commands', 'cmdref_heading', 'cmdref_intro', 'cmdref_search_placeholder', 'cmdref_status_unknown',
+    'cmdref_heading', 'cmdref_intro', 'cmdref_search_placeholder', 'cmdref_status_unknown',
     'cmdref_filter_label', 'cmdref_filter_no_matches',
     'cmdref_status_unavailable_loading', 'cmdref_status_unavailable_error',
     'roster_search_label', 'online_players_search_label',
@@ -1465,18 +1466,18 @@ local TABLET_STRING_KEYS = {
     -- html/tablet.js's buildHelpScreen()/HELP_TAB_CATALOG for the full
     -- design; kept in the SAME order as that file's own DEFAULT_STRINGS
     -- addition so the two stay easy to diff against each other.
-    'tab_help', 'help_heading', 'help_intro_line1', 'help_role_note_k9',
+    'help_heading', 'help_intro_line1', 'help_role_note_k9',
     'help_role_note_handler', 'help_role_note_uncertified', 'help_role_note_high_command_suffix', 'help_start_heading',
     'help_start_k9_1', 'help_start_k9_2', 'help_start_k9_3', 'help_start_k9_4',
     'help_start_k9_5', 'help_start_handler_1', 'help_start_handler_2', 'help_start_handler_3',
     'help_start_handler_4', 'help_start_handler_5', 'help_start_handler_6', 'help_start_high_command_heading',
     'help_start_high_command_intro', 'help_start_high_command_1', 'help_start_high_command_2', 'help_start_high_command_3',
     'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro',
-    'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
+    'help_tab_my_record_desc', 'help_tab_console_desc',
     'help_tab_flows_desc', 'help_tab_theme_desc',
     'help_tab_runtime_control_desc',
-    'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
-    'help_commands_admin_heading', 'help_commands_admin_intro', 'help_tasks_heading', 'help_task_get_certified_heading',
+    'help_tab_audit_desc',
+    'help_tasks_heading', 'help_task_get_certified_heading',
     'help_task_get_certified_1', 'help_task_get_certified_2', 'help_task_get_certified_3_template', 'help_task_partner_up_heading',
     'help_task_partner_up_1', 'help_task_partner_up_2', 'help_task_partner_up_3', 'help_task_partner_up_4',
     'help_task_vehicle_heading', 'help_task_vehicle_1', 'help_task_vehicle_2', 'help_task_vehicle_3',

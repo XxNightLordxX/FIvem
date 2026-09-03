@@ -964,7 +964,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' (the landing view AND the whole of your own record) | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'catalogs' | 'shop' | 'runtime_control' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' (the landing view AND the whole of your own record) | 'guide' | 'console' | 'person' | 'theme' | 'catalogs' | 'shop' | 'runtime_control' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -2310,12 +2310,10 @@
 
         if (state.screen === 'home') {
             panel.appendChild(buildHomeScreen());
-        } else if (state.screen === 'commands') {
-            panel.appendChild(buildCommandReferenceScreen());
+        } else if (state.screen === 'guide') {
+            panel.appendChild(buildGuideScreen());
         } else if (state.screen === 'partnerships') {
             panel.appendChild(buildPartnershipsScreen());
-        } else if (state.screen === 'help') {
-            panel.appendChild(buildHelpScreen());
         } else if (state.screen === 'console' && canOpenPersonRecord()) {
             panel.appendChild(buildConsoleScreen());
         } else if (state.screen === 'person' && canOpenPersonRecord()) {
@@ -2597,35 +2595,30 @@
         });
         tabs.appendChild(partnershipsTab);
 
-        // COMMANDS -- the command reference (this pass, "dozens of commands,
-        // no way for a player to discover them in-game"). ALWAYS shown, same
-        // as Home/My Record immediately above and for the identical
-        // reason: it is presentation over data every resolved viewer
-        // already has (state.viewer/state.myRecord.myFeatures -- see
-        // commandReferenceStatus()'s own doc comment), never a
-        // console-only capability, so a brand-new uncertified arrival can
-        // browse it to see what there is to earn just as usefully as a
-        // high-command officer can browse it to see the full admin set
-        // (marked as such -- see COMMAND_REFERENCE's own header).
-        var commandsTab = mkButton(S('tab_commands'), 'k9tablet-tab' + (state.screen === 'commands' ? ' k9tablet-tab--active' : ''), function () {
-            state.screen = 'commands';
-            render();
-        });
-        tabs.appendChild(commandsTab);
-
-        // HELP -- owner-directed teaching guide (this pass, see
-        // buildHelpScreen()'s own header for the full design). ALWAYS
-        // shown, same reasoning and same "presentation over data every
-        // resolved viewer already has" posture as Home/Commands
-        // immediately above -- a brand-new uncertified arrival needs this
-        // tab MORE than anyone, never less, so it is never hidden behind
-        // any capability check.
-        var helpTab = mkButton(S('tab_help'), 'k9tablet-tab' + (state.screen === 'help' ? ' k9tablet-tab--active' : ''), function () {
-            state.screen = 'help';
+        // GUIDE -- ONE tab, the teaching guide and the command reference
+        // together (plan item H). They were two tabs holding 265 strings
+        // between them, over a quarter of everything this tablet can say,
+        // and they answered the same question at two zoom levels: Help
+        // explained tasks in prose, Commands listed every command with what
+        // it does, what it needs, and whether you can use it right now.
+        //
+        // Help even rendered its OWN second copy of the command catalog
+        // (deleted with this change) -- the same
+        // COMMAND_REFERENCE entries in a different table, without the
+        // filter or the live status badge. One tab, one table.
+        //
+        // ALWAYS SHOWN, unchanged: this is presentation over data every
+        // resolved viewer already has, never a console-only capability. A
+        // brand-new uncertified arrival needs it MORE than anyone -- they
+        // can read what there is to earn -- so it is never behind a
+        // capability check. loadMyRecord() on entry because the status
+        // badges read state.myRecord.myFeatures.
+        var guideTab = mkButton(S('tab_guide'), 'k9tablet-tab' + (state.screen === 'guide' ? ' k9tablet-tab--active' : ''), function () {
+            state.screen = 'guide';
             render();
             loadMyRecord();
         });
-        tabs.appendChild(helpTab);
+        tabs.appendChild(guideTab);
 
         // Command Console -- ONLY meaningful for a viewer who actually has
         // SOME access here. Previously appended unconditionally (safe only
@@ -3498,7 +3491,7 @@
     // ------------------------------------------------------------------
 
     function buildCommandReferenceScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
 
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('cmdref_heading') }));
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_intro') }));
@@ -3801,12 +3794,12 @@
     // hand-typed are instead built directly from data this file already
     // verifies elsewhere, so they can never fall out of sync with the
     // real tablet:
-    //   - "Commands You Can Use" (buildHelpCommandsSection()) reuses
-    //     COMMAND_REFERENCE and buildCommandReferenceRow() VERBATIM --
-    //     the exact same array and row renderer the Commands Reference
-    //     screen above uses -- filtered by `adminOnly`, never
-    //     re-described. A command added to COMMAND_REFERENCE
-    //     automatically appears here too, and
+    //   - The command list is not re-described here AT ALL any more: the
+    //     Guide screen renders buildCommandReferenceScreen() directly
+    //     underneath these sections (plan item H), so there is one table,
+    //     one filter and one set of live status badges. The second,
+    //     category-grouped copy this section used to build was deleted
+    //     with that merge. A command added to COMMAND_REFERENCE
     //     tests/commandreferenceregistry_spec.lua's own drift guard
     //     against the real RegisterCommand(...) names protects this
     //     section for free.
@@ -3861,8 +3854,8 @@
         return Array.isArray(perms) && perms.indexOf(capability) !== -1;
     }
 
-    /** @returns {boolean} gates buildHelpCommandsSection()'s own admin
-     * table -- true for isHighCommand OR any ONE of the three delegatable
+    /** @returns {boolean} gates the Guide's own admin task sections --
+     * true for isHighCommand OR any ONE of the three delegatable
      * admin capabilities real COMMAND_REFERENCE entries actually use
      * (k9.certify/k9.audit/k9.givexp -- see COMMAND_REFERENCE's own
      * certification/xp/audit categories). Deliberately does NOT also check
@@ -3893,13 +3886,12 @@
         // of that same screen body", the identical additive-not-replacement
         // posture this Help screen already uses throughout.
         { tabLabelKey: 'tab_partnerships', descKey: 'help_tab_partnerships_desc', visible: helpAlwaysVisible },
-        { tabLabelKey: 'tab_commands', descKey: 'help_tab_commands_desc', visible: helpAlwaysVisible },
-        { tabLabelKey: 'tab_help', descKey: 'help_tab_help_desc', visible: helpAlwaysVisible },
         // Widened from canAccessConsole to canOpenPersonRecord (workflow
         // audit finding #1, 2026-08-26) -- the SAME real predicate
         // buildTabs() itself now gates this tab on, so a 'k9.certify'/
         // 'k9.givexp' holder who sees the tab also sees it explained here,
         // never a described-but-invisible or visible-but-unexplained tab.
+        { tabLabelKey: 'tab_guide', descKey: 'help_tab_guide_desc', visible: function () { return true; } },
         { tabLabelKey: 'tab_console', descKey: 'help_tab_console_desc', visible: canOpenPersonRecord },
         { tabLabelKey: 'tab_flows', descKey: 'help_tab_flows_desc', visible: helpHighCommandOnly },
         // Theme/Shop Locations/Shop Items/Runtime Control each moved off a
@@ -3968,78 +3960,6 @@
     }
 
     /** @param {Array<{command:string,adminOnly:boolean,usageKey:string,doesKey:string,needsKey:string,gate:object,defaultKeybind?:string,defaultKeybindConfigurable?:boolean}>} entries */
-    function buildHelpCommandTable(entries) {
-        var table = mk('table', { class: 'k9tablet-table' });
-        var thead = mk('thead');
-        var headRow = mk('tr');
-        [S('cmdref_column_command'), S('cmdref_column_does'), S('cmdref_column_needs'), S('status_column')].forEach(function (h) {
-            headRow.appendChild(mk('th', { text: h }));
-        });
-        thead.appendChild(headRow);
-        table.appendChild(thead);
-
-        var tbody = mk('tbody');
-        for (var i = 0; i < entries.length; i++) {
-            tbody.appendChild(buildCommandReferenceRow(entries[i]));
-        }
-        table.appendChild(tbody);
-        return table;
-    }
-
-    function buildHelpCommandsSection() {
-        var wrap = mk('div', { class: 'k9tablet-home-section' });
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_commands_heading') }));
-        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_commands_intro') }));
-
-        for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
-            var category = COMMAND_REFERENCE_CATEGORIES[c];
-            var rows = [];
-            for (var i = 0; i < COMMAND_REFERENCE.length; i++) {
-                var entry = COMMAND_REFERENCE[i];
-                if (entry.category === category.key && !entry.adminOnly) rows.push(entry);
-            }
-            if (rows.length === 0) continue;
-            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(category.labelKey) }));
-            wrap.appendChild(buildHelpCommandTable(rows));
-        }
-
-        // ADDITIVE ONLY -- someone who administers sees the base list above
-        // PLUS this, never a replacement for it (this screen's own header,
-        // "high command is a handler or K9 who also administers"). NOT
-        // narrowed to state.viewer.isHighCommand alone: every admin-tier
-        // COMMAND_REFERENCE entry's own gate is either `highCommandOnly`
-        // (bonetool, permission grants -- isHighCommand truly is the only
-        // way in, per commandReferenceStatus()'s own resolution) or
-        // `capability` for k9.certify/k9.audit/k9.givexp specifically
-        // (which a NON-high-command delegate can also hold -- see
-        // hasDelegatedCapability()'s own doc comment for the identical
-        // "isHighCommand OR the matching effectivePermissions entry"
-        // pattern this reuses) -- helpSeesAdminCommands() below checks for
-        // ANY of those three delegated capabilities too, so a
-        // rank-based/delegated certifier who is not high command still
-        // gets taught that this section exists, with each individual
-        // row's own live status badge (unchanged, computed the SAME way
-        // the Commands Reference screen computes it) honestly showing
-        // which specific rows they can and cannot use.
-        if (helpSeesAdminCommands()) {
-            wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_commands_admin_heading') }));
-            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_commands_admin_intro') }));
-            for (var c2 = 0; c2 < COMMAND_REFERENCE_CATEGORIES.length; c2++) {
-                var category2 = COMMAND_REFERENCE_CATEGORIES[c2];
-                var rows2 = [];
-                for (var j = 0; j < COMMAND_REFERENCE.length; j++) {
-                    var entry2 = COMMAND_REFERENCE[j];
-                    if (entry2.category === category2.key && entry2.adminOnly) rows2.push(entry2);
-                }
-                if (rows2.length === 0) continue;
-                wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(category2.labelKey) }));
-                wrap.appendChild(buildHelpCommandTable(rows2));
-            }
-        }
-
-        return wrap;
-    }
-
     /** @param {string} heading @param {string[]} paragraphs -- already
      * resolved (S()/formatTemplate()) text, not keys, since several
      * callers below need to interpolate a live label into one line. */
@@ -4109,7 +4029,8 @@
             S('help_task_scent_vision_3'),
         ]));
 
-        // ADDITIVE ONLY, same posture as buildHelpCommandsSection() above --
+        // ADDITIVE ONLY, the same posture the deleted admin command table
+        // used to take --
         // but each of these four gets its OWN real gate rather than one
         // blanket flag, because each is genuinely different:
         //   - Certify Someone: isHighCommand OR the k9.certify capability
@@ -4215,8 +4136,24 @@
      * commandReferenceStatus() both already tolerate that -- see their own
      * doc comments), the same posture buildCommandReferenceScreen() above
      * already takes for the identical reason. */
-    function buildHelpScreen() {
+    /**
+     * THE GUIDE -- how to do things, then every command (plan item H).
+     *
+     * The teaching sections first (they are what someone who does not know
+     * what to do next needs), then the searchable command table underneath
+     * for someone who knows roughly what they want and needs the exact
+     * command. One tab, one table, one filter.
+     * @returns {Element}
+     */
+    function buildGuideScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen k9tablet-help' });
+        wrap.appendChild(buildHelpScreen());
+        wrap.appendChild(buildCommandReferenceScreen());
+        return wrap;
+    }
+
+    function buildHelpScreen() {
+        var wrap = mk('div', { class: 'k9tablet-help' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_heading') }));
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_intro_line1') }));
 
@@ -4230,7 +4167,6 @@
 
         wrap.appendChild(buildHelpStartHereSection());
         wrap.appendChild(buildHelpTabsSection());
-        wrap.appendChild(buildHelpCommandsSection());
         wrap.appendChild(buildHelpTasksSection());
         wrap.appendChild(buildHelpTroubleshootingSection());
 
