@@ -44,12 +44,14 @@ tablet's own Guide tab, not here.
   day-to-day handler/K9 interactions.
 - **Tracking** (scent/blood/gunpowder trails), **search zones and
   contraband alerts**, **thermal/night vision**, **door interaction**.
-- **Combat**: Bite & Hold, Non-Lethal Takedown, Prop Dragging,
-  Handler-Down Defense — see "Before you trust the combat features in
-  production" below before relying on these.
-- **Wellbeing**: mood, fatigue, fear/stress, distraction, injury/limping
-  — each independently switched, each with a small movement-speed
-  effect when it's low.
+- **Combat**: Bite & Hold, Non-Lethal Takedown, Prop Dragging — see
+  "Before you trust the combat features in production" below before
+  relying on these.
+- **Wellbeing**: fatigue — a sustained sprint decays a value that
+  reduces top speed until the K9 rests. It is the only wellbeing system
+  this resource ships. Mood, fear/stress, distraction and injury/limping
+  were removed at the owner's request on 2026-09-02 and are not switched
+  off but gone: there are no `Config.Features` keys for them.
 - **XP/progression, K9 inventory, a K9 medkit, a vitality HUD, prop
   attachments (a cosmetic vest), fetch, a deployable kennel, a K9 supply
   shop, and a leaderboard.**
@@ -58,42 +60,31 @@ tablet's own Guide tab, not here.
   limitations" below for the one real gap in its anti-farming guard) and
   a partner camera-feed toggle (full-screen view-switch to your
   partner's viewpoint, not a literal picture-in-picture — see below).
-- **Four reaction/"hunting" features, easy to miss because they're new
-  enough that even this resource's own internal history file hadn't
-  caught up on them — all shipped, on by default, and worth knowing
-  about specifically:**
+- **Two reaction/"hunting" features, easy to miss, both shipped and on
+  by default, and worth knowing about specifically:**
   - **Find Alerts** — a search or completed track makes the K9
     automatically sit and bark, reacting differently depending on the
     outcome. No manual trigger, and it doesn't depend on the XP system
     being on.
-  - **Scent Trail Hunt was removed** (owner-approved — judged genuinely
-    redundant with the scent-tracking "follow a fading signal"
-    mechanic above, which already covers the same interaction shape
-    against a real destination instead of a made-up one). It is
-    **not** one of the four below, and it is not merely toggled off:
-    `Config.Features.ScentTrailHunt` no longer exists in `config.lua`
-    at all, so `/k9nosehunt` cannot be turned on by editing config —
-    see that key's own former spot in `config.lua`'s `Config.Features`
-    comment for the full reasoning and exactly how to bring it back.
   - **Pursuit Sprint** — a short, cooldown-gated burst of genuinely
     extra speed for a certified K9 chasing a *wanted* target only.
     Every speed source this resource has (breed, XP tier, fatigue,
     this burst) is clamped to a combined maximum, so it can't be
     stacked into something an escaping target has no real chance
     against.
-  - **Scent Lineup** — several players line up and must all explicitly
-    accept; the server secretly picks one and reveals nothing until the
-    K9 commits a single final guess. No XP, since the outcome is random.
-  - **SAR Calls** — a hidden search-and-rescue target (a missing person
-    or lost property); the K9 reacts more strongly on approach. Always
-    resolves as a rescue, never an arrest, and the "target" is always
-    scenery, never a real player without their consent.
-  - All four need an individual grant from high command on top of their
-    global switch by default (see `Config.FeatureControl.RequireGrant`
-    in "The command tablet" section below) — nobody has any of them
-    until high command hands them out one person at a time.
-- **A training mode** — a practice sandbox against a scripted dummy;
-  touches no real player, no real inventory, and awards zero XP.
+  - Neither needs an individual grant out of the box:
+    `Config.FeatureControl.RequireGrant` ships **empty**, so every feature
+    whose global switch is on is available to every certified handler.
+    Add a feature name to that table if you want high command to hand it
+    out one person at a time instead.
+
+**Removed, and not merely switched off.** Scent Trail Hunt, Scent Lineup,
+SAR Calls, training mode, Handler-Down Defense, the danger-warn and
+apprehension-announcement alerts, the "call your K9 off" recall, and the
+mood/fear-stress/distraction/injury wellbeing systems were all taken out at
+the owner's request. There are no `Config.Features` keys for any of them, so
+none can be brought back by editing config — restoring one means restoring
+its code.
 
 ---
 

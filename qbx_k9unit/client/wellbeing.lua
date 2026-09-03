@@ -58,19 +58,21 @@
     unconditionally — it no longer depends on a flag having already been
     true at boot on the server.
 
-    NOTHING BELOW IS A SECURITY BOUNDARY. Every mutating action
-    (pet/feed/calm-down/distraction-item-use) is re-validated server-side in
-    server/wellbeing.lua regardless of what this file's own UI/gating
-    thinks — the standard "client hides the option, server is the real
-    gate" split this codebase applies everywhere (DEVELOPER_REFERENCE.md §4.1).
+    NOTHING BELOW IS A SECURITY BOUNDARY. Every mutating action is
+    re-validated server-side in server/wellbeing.lua regardless of what
+    this file's own UI/gating thinks — the standard "client hides the
+    option, server is the real gate" split this codebase applies everywhere
+    (DEVELOPER_REFERENCE.md §4.1).
 
-    NOT CURRENTLY WIRED INTO client/radial.lua: DEVELOPER_REFERENCE.md
-    §13.4.3.3 frames "Calm Down" as a radial command. Instead, this file
-    exposes a plain resource-global, `RequestK9CalmDown()`, and registers a
-    working `/k9calmdown` command as a real, usable-today entry point. A
-    future client/radial.lua menu entry should call `RequestK9CalmDown()`
-    (or trigger 'qbx_k9unit:server:calmDownK9' directly) rather than
-    duplicating this file's validation.
+    WHAT IS LEFT HERE. Fatigue and the move-rate/stamina effects it drives,
+    plus the periodic snapshot the server pushes. The pet, feed, calm-down
+    and distraction actions this header used to describe — along with the
+    `RequestK9CalmDown()` resource-global and the `/k9calmdown` command it
+    named — went with the mood, fear/stress, distraction and injury
+    subsystems when those were removed at the owner's request on
+    2026-09-02. Nothing defines or registers them any more; see the
+    "Commands (RegisterCommand): none" note further down, which is the same
+    fact stated from the other direction.
 
     ======================================================================
     OX_TARGET API — same `addGlobalPlayer` shape already confirmed HIGH

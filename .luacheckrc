@@ -157,18 +157,17 @@ read_globals = {
     --   while looking correct, which is this project's most expensive
     --   recurring bug class and precisely why this list exists.
     "SetPedDefaultComponentVariation",
-    --   CreatePed -- client/sarcalls.lua, for the cosmetic "you found them"
-    --   reveal, drawn on the finder's own screen after the call has already
-    --   resolved server-side. Verified the same way SetPlayerModel above
+    --   CreatePed -- client/equipmentshop.lua's supply-point ped (a dog
+    --   standing at each shop location), created LOCAL and never networked.
+    --   Verified the same way SetPlayerModel above
     --   was: its decl page 404s (a legacy R* native with no CFX page, which
     --   is never grounds to reject a native on its own), so checked against
     --   the natives.json hash database instead (fetched 2026-08-25):
     --   namespace PED, hash 0xD49F9B0955C367DE, name CREATE_PED, and NO
     --   `apiset` key -- which in that database means the default,
-    --   client-only. client/sarcalls.lua is the only call site and is a
-    --   client file, so the realm is right. The server half deliberately
-    --   never creates a ped at all: the hidden target is a coordinate, not
-    --   an entity, which is why nothing here can leak one.
+    --   client-only. client/equipmentshop.lua is the only call site and
+    --   is a client file, so the realm is right. No server file creates a
+    --   ped at all, which is why nothing here can leak one.
     "CreatePed",
     --   SetEntityInvincible / SetEntityAsMissionEntity --
     --   client/equipmentshop.lua's shop ped (a dog standing at each supply
@@ -307,13 +306,13 @@ read_globals = {
     -- silent no-op -- it is a hard Lua runtime error, "attempt to call a
     -- nil value (global 'GetPlayers')", on the very first line that tries.
     -- SIDEDNESS CONFIRMED BY DIRECT SEARCH, this pass: every real call site
-    -- of `GetPlayers()` anywhere in this resource (server/announce.lua,
-    -- server/certifications.lua, server/combat.lua, server/defense.lua,
-    -- server/entities.lua, server/integrations.lua, server/main.lua,
-    -- server/partnership.lua, server/permissions.lua, server/progression.lua,
-    -- server/runtimecontrol.lua, server/sarcalls.lua, server/search.lua,
-    -- server/tablet.lua, server/tenure.lua, server/tracking.lua,
-    -- server/wellbeing.lua, server/xptiers.lua) is a server file -- the one
+    -- of `GetPlayers()` anywhere in this resource
+    -- (server/certifications/commands.lua, server/combat.lua,
+    -- server/entities.lua, server/integrations.lua, server/k9profiles.lua,
+    -- server/main.lua, server/partnership.lua, server/permissions.lua,
+    -- server/progression.lua, server/search.lua, server/tablet.lua,
+    -- server/tenure.lua, server/tracking.lua, server/wellbeing.lua,
+    -- server/xptiers.lua) is a server file -- the one
     -- apparent client-side hit (client/progression.lua) is, on inspection,
     -- a comment describing a design suggestion FOR server/progression.lua,
     -- not a real call (exactly the "a comment containing a call shape
@@ -336,7 +335,7 @@ read_globals = {
     -- every real call site of either name in this resource is a client
     -- file (client/leashvisual.lua, client/main.lua, client/medkit.lua,
     -- client/movement.lua, client/partnership.lua, client/radial.lua,
-    -- client/sarcalls.lua, client/scentlineup.lua, client/vision.lua) --
+    -- client/vision.lua) --
     -- the several server/*.lua occurrences of "GetPlayerServerId(...)" as
     -- literal text are all inside comments explicitly explaining why that
     -- combination is NOT used server-side (server/entities.lua,
@@ -883,9 +882,11 @@ globals = {
     -- but not the reverse (ceiling lowered). This entry exists so that
     -- duplicate can be replaced by a live read.
     "GetK9AudioMaxDistance",
-    -- server/combat.lua -- termination primitive with no gate of its own,
-    -- exposed for server/recall.lua. Authorization is the CALLER's job;
-    -- gating a termination path is how an unbounded trap gets built.
+    -- server/combat.lua -- termination primitive with no gate of its own.
+    -- Authorization is the CALLER's job; gating a termination path is how
+    -- an unbounded trap gets built. (It was first exposed for a recall
+    -- feature that has since been removed; the primitive itself is still
+    -- used by combat's own release paths.)
     "EndActiveEffectForHolder",
     -- server/entities.lua -- the shared cross-feature netId claim registry.
     -- ResolveNetworkEntity deliberately performs NO ownership or proximity
@@ -1268,8 +1269,7 @@ globals = {
     -- Track Scent/Blood/Gunpowder trio above). ToggleScentVision is the
     -- keybind entry point client/keybinds.lua's own new k9scentvision
     -- command calls; IsScentVisionActive is a read-only accessor exposed
-    -- for the same reason IsSarCallActive/IsTrainingModeActive are (a
-    -- future presentation surface, not a gate).
+    -- as a presentation surface, never a gate.
     "ToggleScentVision", "IsScentVisionActive",
     -- client/vehicle.lua
     "EnterNearestK9Vehicle", "ExitK9Vehicle", "IsInK9Vehicle",
@@ -1313,8 +1313,8 @@ globals = {
     -- XPProgression) -- real, implemented this pass. AwardXP/GetXPTier are
     -- read from server/tracking.lua (the only current call sites) behind a
     -- `type(AwardXP) == 'function'` / `type(GetXPTier) == 'function'`
-    -- existence guard each (same soft-dependency convention as
-    -- RestoreInjury above), even though server/progression.lua itself
+    -- existence guard each (this resource's standard soft-dependency
+    -- convention), even though server/progression.lua itself
     -- already exists as of this pass -- the guard is kept regardless, per
     -- this resource's own "runtime existence guard, not a load-order
     -- assumption" convention (see fxmanifest.lua's own comment on
@@ -1432,9 +1432,10 @@ globals = {
     -- server/certifications.lua's RefreshCertificationCache reuse hook
     -- (called from this file's own onResourceStart backfill loop, exposed
     -- globally for the same "documented reuse hook" reason). GetActivePartnerCitizenId/
-    -- IsActivePartnerOf are read-only accessors intended for BiteAndHold's
-    -- Recall actor and HandlerDownDefense's trigger, neither built yet --
-    -- see that file's own "FUTURE CONSUMERS" header section. ForceBreakPartnershipForCitizenId
+    -- IsActivePartnerOf are read-only accessors with no consumer in this
+    -- resource today -- the two they were written for (a recall actor and
+    -- an automatic handler-down trigger) were removed at the owner's
+    -- request and are not coming back. ForceBreakPartnershipForCitizenId
     -- is citizenid-keyed (not source-keyed, unlike leash's
     -- ForceDetachLeashForSource/ForceDetachOfficerLeashForSource above) --
     -- intended for server/certifications.lua's cert-revoke/department-change

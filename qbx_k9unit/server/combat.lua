@@ -1276,14 +1276,6 @@ local COMBAT_REJECT_MESSAGES = {
     -- for longer than intended.
     implausible_movement = locale('combat.implausible_movement'),
     target_in_vehicle    = locale('combat.target_in_vehicle'),
-    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See
-    -- ValidateCombatRequest's own call site (immediately before its final
-    -- `return true`) and this file's header FILE-TO-FILE CONTRACT entry for
-    -- IsApprehensionWarned for the full writeup. Landed in locales/en.json
-    -- FIRST (this file's own established "land the key, then swap the
-    -- mapping in" discipline -- tier_capability_denied's own history above
-    -- names why), so this table never risks referencing a key that does not
-    -- exist yet.
     -- EXCLUSIVE BODY-CLAIM REGISTRY denial (server/bodyclaims.lua, this
     -- pass — see ValidateCombatRequest's own call site for the full
     -- writeup). Kept as an explicit mapping here, same "a reader of this
