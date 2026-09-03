@@ -1505,7 +1505,7 @@ local TABLET_STRING_KEYS = {
     'partnerships_count_summary_template', 'partnerships_truncated_notice_template', 'partnerships_state_active', 'partnerships_state_ended',
     'partnerships_established_label', 'partnerships_ended_label', 'partnerships_ended_by_label', 'partnerships_ended_system_template',
     'partnerships_tier_label', 'partnerships_tier_none', 'partnerships_tier_value_template', 'partnerships_next_tier_countdown_template',
-    'partnerships_admin_heading', 'partnerships_admin_hint', 'partnerships_admin_none', 'partnerships_force_end_label',
+    'partnerships_admin_heading', 'partnerships_admin_none', 'partnerships_force_end_label',
 
     -- K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- owner's own
     -- words, this file's own NUI CONTRACT note on tablet:rosterList/

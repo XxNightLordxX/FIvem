@@ -1372,7 +1372,6 @@
         // section on this SAME tab (owner: "high command... should have
         // control over it also... not a separate screen").
         partnerships_admin_heading: "Look Up Someone's Partnerships",
-        partnerships_admin_hint: 'See who any citizen has been partnered with, and end an active partnership if needed.',
         partnerships_admin_none: 'This citizen has never been partnered.',
         partnerships_force_end_label: 'End Partnership',
         help_tab_partnerships_desc: "Shows who you are currently partnered with, or that you have no partner right now. If you are High Command, this same tab also lets you look up anyone else's partnership. Open it to check a pairing -- partnering up and breaking up both happen out in the world (interact menu or K9 Unit radial menu), not on this screen.",

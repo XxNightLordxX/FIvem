@@ -5828,6 +5828,15 @@
             wrap.appendChild(buildPartnershipSection(state.personSummary.partnership));
 
             if (state.viewer.isHighCommand) {
+                // The full history plus Force End, moved here off the
+                // Partnerships tab (plan item E) so this person's whole
+                // record sits on one screen instead of behind a second
+                // lookup box. Directly under the CURRENT partnership it
+                // expands on.
+                wrap.appendChild(buildPersonPartnershipHistorySection());
+            }
+
+            if (state.viewer.isHighCommand) {
                 wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_capabilities_heading') }));
                 wrap.appendChild(buildCapabilityList(state.personSummary.permissions));
 
@@ -6034,33 +6043,37 @@
     }
 
     /**
-     * HIGH COMMAND ONLY -- owner: "high command... should have control
-     * over it also." Rendered ON TOP of the personal section by
-     * buildPartnershipsScreen() below, never a separate screen. Reuses the
-     * SAME "open by exact citizen ID" input pattern buildConsoleScreen()
-     * already established (idInput + open_by_id_label), so this needs no
-     * new input-box copy. THE SECURITY RULE applies here exactly as
-     * everywhere else on this page: the Force End button below is shown
-     * because state.viewer.isHighCommand made it worth building for this
-     * viewer, never because that is what makes tablet:forceEndPartnership
-     * permitted -- server/tablet.lua's CALLBACK 9 re-verifies IsHighCommand
-     * fresh from `source` on every call.
+     * HIGH COMMAND ONLY -- owner: "high command... should have control over
+     * it also." This person's full partnership history, with Force End on
+     * the active one.
+     *
+     * MOVED ONTO THE PERSON SCREEN (plan item E). It used to sit at the top
+     * of the Partnerships TAB behind its own "open by exact citizen ID" box
+     * -- one of eleven person-finding inputs across this page, all of which
+     * end at the same place. The box is gone; this section now renders for
+     * whichever person is already open, alongside their certifications,
+     * capabilities, abilities and roster role, which is where every other
+     * per-person admin control on this page already lives.
+     *
+     * WHAT THE PLAN GOT WRONG, AND WHY THIS IS A MOVE RATHER THAN A DELETE:
+     * docs/TABLET_SIMPLIFICATION_PLAN.md item E said this section was purely
+     * a second door to something the Person screen already rendered. It was
+     * not. The Person screen shows the CURRENT partnership
+     * (buildPartnershipSection) but has never had the history list or the
+     * Force End button -- those existed only here. Deleting the section as
+     * written would have removed a real capability, so the section moved
+     * instead and only the duplicate lookup was removed.
+     *
+     * THE SECURITY RULE applies here exactly as everywhere else: Force End
+     * is shown because state.viewer.isHighCommand made it worth building
+     * for this viewer, never because that is what makes
+     * tablet:forceEndPartnership permitted -- server/tablet.lua's CALLBACK 9
+     * re-verifies IsHighCommand fresh from `source` on every call.
      * @returns {Element}
      */
-    function buildPartnershipsAdminSection() {
-        var wrap = mk('div', { class: 'k9tablet-home-section k9tablet-partnerships-admin' });
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('partnerships_admin_heading') }));
-        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_admin_hint') }));
-
-        var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
-        var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
-        idBar.appendChild(idInput);
-        idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
-            var id = (idInput.value || '').trim();
-            if (id.length === 0) return;
-            loadPartnershipsForTarget(id);
-        }));
-        wrap.appendChild(idBar);
+    function buildPersonPartnershipHistorySection() {
+        var wrap = mk('div', { class: 'k9tablet-partnerships-admin' });
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('partnerships_admin_heading') }));
 
         if (state.partnershipsAdminLoading && !state.partnershipsAdminResult) {
             wrap.appendChild(mk('p', { text: S('loading') }));
@@ -6068,14 +6081,24 @@
         }
         if (state.partnershipsAdminError) {
             wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.partnershipsAdminError) }));
+            return wrap;
         }
         if (!state.partnershipsAdminResult) {
             return wrap;
         }
 
         var result = state.partnershipsAdminResult;
-        var targetName = (result.target && typeof result.target.name === 'string') ? result.target.name : '';
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: targetName }));
+
+        // GUARD AGAINST A STALE RESULT. This state is filled by an
+        // asynchronous load started when the person was opened; if the
+        // operator has since opened a DIFFERENT person, a late response for
+        // the previous one must never be rendered against this person's
+        // name. Compared by citizenid, the durable identity, never by name.
+        var openCitizenid = state.person && state.person.citizenid;
+        var resultCitizenid = result.target && result.target.citizenid;
+        if (typeof openCitizenid === 'string' && typeof resultCitizenid === 'string' && openCitizenid !== resultCitizenid) {
+            return wrap;
+        }
 
         if (result.featureEnabled === false) {
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_feature_disabled') }));
@@ -6093,7 +6116,7 @@
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_truncated_notice_template'), { shown: list.length }) }));
         }
 
-        var targetCitizenid = result.target && result.target.citizenid;
+        var targetCitizenid = resultCitizenid;
         var historyWrap = mk('div', { class: 'k9tablet-partnership-history-list' });
         for (var i = 0; i < list.length; i++) {
             var entry = list[i];
@@ -6116,10 +6139,10 @@
     function buildPartnershipsScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
 
-        if (state.viewer && state.viewer.isHighCommand) {
-            wrap.appendChild(buildPartnershipsAdminSection());
-        }
-
+        // NO ADMIN SECTION HERE ANY MORE (plan item E). This tab is what the
+        // owner asked for and nothing else: your own partnerships. Looking
+        // up somebody else's is per-person admin, so it happens on the
+        // person -- see buildPersonPartnershipHistorySection().
         if (state.myPartnershipsLoading && !state.myPartnerships) {
             wrap.appendChild(mk('p', { text: S('loading') }));
             return wrap;
@@ -11757,7 +11780,7 @@
     }
 
     /** Partnerships tab admin lookup -- high command only (server-side
-     * re-verified; see buildPartnershipsAdminSection()'s own doc comment).
+     * re-verified; see buildPersonPartnershipHistorySection()'s own doc comment).
      * @param {string} citizenid */
     function loadPartnershipsForTarget(citizenid) {
         state.partnershipsAdminLoading = true;
@@ -11919,10 +11942,24 @@
         state.personSummary = null;
         state.personFeatures = null;
         state.personFeatureQuery = '';
+        // Cleared, never left stale: buildPersonPartnershipHistorySection()
+        // renders off this state, and a result loaded for a PREVIOUS person
+        // must not be shown against this one, even for the single frame
+        // before the new load resolves. That function ALSO compares the
+        // result's citizenid against the open person -- belt and braces,
+        // because a late response for the previous person can still land
+        // after this point.
+        state.partnershipsAdminResult = null;
+        state.partnershipsAdminError = null;
         render();
         loadPersonSummary(citizenid);
         if (state.viewer && state.viewer.isHighCommand) {
             loadPersonFeatures(citizenid);
+            // Partnership history + Force End, moved onto this screen with
+            // plan item E. Same opportunistic, best-effort posture as
+            // loadPersonFeatures directly above: a refusal leaves the
+            // section empty rather than breaking the screen.
+            loadPartnershipsForTarget(citizenid);
             // Opportunistic, best-effort: populates state.permissionKeys
             // for buildCapabilityList()'s own merged rendering (the
             // Permission Keys tab shares this exact same state -- see

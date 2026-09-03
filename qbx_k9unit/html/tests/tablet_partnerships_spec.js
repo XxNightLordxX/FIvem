@@ -64,6 +64,59 @@ function myRecordFor(viewer) {
     };
 }
 
+/**
+ * Opens a PERSON as high command, through the Command Console's
+ * "open by exact citizen ID" box -- the one person-finder the tablet keeps.
+ *
+ * The partnership history + Force End controls used to live behind their own
+ * lookup box on the Partnerships tab. Plan item E moved them onto the person,
+ * where the rest of that person's admin already was, and deleted the second
+ * box. These tests follow them: the capability is unchanged, only the route
+ * to it is, so each one still proves the same thing it always did.
+ */
+async function openPersonAsHighCommand(citizenid, extraHandlers) {
+    const handlers = Object.assign({
+        'tablet:requestMyRecord': () => myRecordFor({ isHighCommand: true }),
+        'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
+        'tablet:requestOnlinePlayers': () => ({ ok: true, rows: [] }),
+        'tablet:requestPersonSummary': (body) => ({
+            ok: true,
+            target: { citizenid: body.targetCitizenId, name: 'Some K9' },
+            certifications: [], xp: 0, tierLabel: null, permissions: [],
+            partnership: null,
+        }),
+        'tablet:requestPersonFeatures': () => ({ ok: true, target: { citizenid: citizenid, name: 'Some K9' }, features: [] }),
+        'tablet:permKeysList': () => ({ ok: true, keys: [] }),
+        'tablet:certTiersList': () => ({ ok: true, tiers: [] }),
+        'tablet:rosterList': () => ({ ok: true, k9: [], handlers: [], unassigned: [] }),
+    }, extraHandlers || {});
+
+    const h = createHarness({
+        fetchImpl: function (url, init) {
+            const name = url.split('/').pop();
+            const body = init && init.body ? JSON.parse(init.body) : undefined;
+            // Unknown callbacks resolve to a plain refusal rather than
+            // rejecting: opening a person fires several opportunistic,
+            // best-effort loads, and this spec is about partnerships, not
+            // about enumerating every one of them.
+            const fn = handlers[name] || (() => ({ ok: false, error: 'not_stubbed' }));
+            return Promise.resolve(jsonResponse(fn(body)));
+        },
+    });
+    h.postMessage('tablet:open', {});
+    await settle();
+
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle();
+
+    const inputs = findAll(h.getRoot(), (n) => n.tagName === 'input');
+    t.isTrue(inputs.length >= 1, 'the Console open-by-id box exists');
+    inputs[inputs.length - 1].value = citizenid;
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(6);
+    return h;
+}
+
 async function openPartnershipsTab(viewer, extraHandlers) {
     const h = createHarness({
         fetchImpl: routeFetch(Object.assign({
@@ -109,21 +162,28 @@ t.test('ORDINARY HANDLER viewer (not high command, not K9): Partnerships tab is 
     t.isTrue(findByText(h.getRoot(), 'Partnership History').length >= 1, 'the personal section renders for an ordinary handler with zero console access');
 });
 
-t.test('HIGH COMMAND viewer: sees the SAME Partnerships tab (their own history) plus the admin lookup section on top', async () => {
+t.test('HIGH COMMAND viewer: the Partnerships tab is now ONLY their own history -- the admin lookup box is gone from it entirely', async () => {
+    // PLAN ITEM E. This tab is what the owner asked for and nothing else:
+    // who is partnered with whom, for you. Looking somebody else up is
+    // per-person admin and happens on the person now, so the second
+    // person-finding box that used to sit on top of this screen is gone --
+    // one of eleven such boxes, all of which ended at the same place.
     const h = await openPartnershipsTab({ isHighCommand: true }, {
         'tablet:requestMyPartnerships': () => ({ ok: true, featureEnabled: true, truncated: false, partnerships: [] }),
     });
 
-    t.isTrue(findByText(h.getRoot(), "Look Up Someone's Partnerships").length >= 1, 'high command gets the admin lookup section');
-    t.isTrue(findByText(h.getRoot(), 'Partnership History').length >= 1, 'AND their own personal section, on the same screen -- never a separate one');
+    t.equals(findByText(h.getRoot(), "Look Up Someone's Partnerships").length, 0, 'the admin lookup section is no longer on this tab');
+    t.equals(findAll(h.getRoot(), (n) => n.tagName === 'input').length, 0, 'and this screen has no input box at all any more');
+    t.isTrue(findByText(h.getRoot(), 'Partnership History').length >= 1, 'their own personal section is untouched');
 });
 
-t.test('an ordinary (non-high-command) viewer never sees the admin lookup section at all', async () => {
+t.test('an ordinary (non-high-command) viewer sees exactly the same Partnerships tab -- there is no longer an admin half to withhold', async () => {
     const h = await openPartnershipsTab({ isHighCommand: false }, {
         'tablet:requestMyPartnerships': () => ({ ok: true, featureEnabled: true, truncated: false, partnerships: [] }),
     });
 
-    t.equals(findByText(h.getRoot(), "Look Up Someone's Partnerships").length, 0, 'the admin section is absent entirely, not merely disabled');
+    t.equals(findByText(h.getRoot(), "Look Up Someone's Partnerships").length, 0, 'nothing admin-shaped on this screen for anyone');
+    t.isTrue(findByText(h.getRoot(), 'Partnership History').length >= 1, 'and their own history renders exactly as before');
 });
 
 // ======================================================================
@@ -174,10 +234,9 @@ t.test('never partnered at all: explicit empty-state notices, not a blank screen
 // 3. HIGH COMMAND ADMIN CONTROL -- lookup + Force End Partnership.
 // ======================================================================
 
-t.test('HIGH COMMAND: looking up a citizen shows their history (by NAME) and Force End Partnership fires the real callback for the active row only', async () => {
+t.test('HIGH COMMAND: opening a person shows their partnership history and Force End Partnership fires the real callback for the active row only', async () => {
     let forceEndBody = null;
-    const h = await openPartnershipsTab({ isHighCommand: true }, {
-        'tablet:requestMyPartnerships': () => ({ ok: true, featureEnabled: true, truncated: false, partnerships: [] }),
+    const h = await openPersonAsHighCommand('TARGETK9', {
         'tablet:requestPartnershipsForTarget': (body) => ({
             ok: true,
             featureEnabled: true,
@@ -190,14 +249,7 @@ t.test('HIGH COMMAND: looking up a citizen shows their history (by NAME) and For
         'tablet:forceEndPartnership': (body) => { forceEndBody = body; return { ok: true }; },
     });
 
-    const inputs = findAll(h.getRoot(), (n) => n.tagName === 'input');
-    t.isTrue(inputs.length >= 1, 'the admin lookup input box exists');
-    inputs[0].value = 'TARGETK9';
-    findByText(h.getRoot(), 'Open')[0].click();
-    await settle();
-
-    t.isTrue(findByText(h.getRoot(), 'Some K9').length >= 1, 'the looked-up citizen\'s own resolved NAME is shown as the section title');
-    t.isTrue(findByText(h.getRoot(), 'Their Handler').length >= 1, 'their partner is shown by name too');
+    t.isTrue(findByText(h.getRoot(), 'Their Handler').length >= 1, 'their partner is shown by name');
 
     const endBtn = findByText(h.getRoot(), 'End Partnership')[0];
     t.isDefined(endBtn, 'a Force End control exists for the active row');
@@ -209,16 +261,10 @@ t.test('HIGH COMMAND: looking up a citizen shows their history (by NAME) and For
     t.equals(forceEndBody.targetCitizenId, 'TARGETK9', 'the exact looked-up citizenid was sent -- never a client-guessed one');
 });
 
-t.test('HIGH COMMAND: a citizen who has never been partnered gets an explicit notice, never a blank result', async () => {
-    const h = await openPartnershipsTab({ isHighCommand: true }, {
-        'tablet:requestMyPartnerships': () => ({ ok: true, featureEnabled: true, truncated: false, partnerships: [] }),
+t.test('HIGH COMMAND: a person who has never been partnered gets an explicit notice, never a blank result', async () => {
+    const h = await openPersonAsHighCommand('NEVERPARTNERED', {
         'tablet:requestPartnershipsForTarget': (body) => ({ ok: true, featureEnabled: true, truncated: false, target: { citizenid: body.targetCitizenId, name: body.targetCitizenId }, partnerships: [] }),
     });
-
-    const inputs = findAll(h.getRoot(), (n) => n.tagName === 'input');
-    inputs[0].value = 'NEVERPARTNERED';
-    findByText(h.getRoot(), 'Open')[0].click();
-    await settle();
 
     t.isTrue(findByText(h.getRoot(), 'This citizen has never been partnered.').length >= 1);
 });
@@ -249,10 +295,9 @@ t.test('a hostile partnerName/endedByName reaches the DOM only via textContent, 
     t.equals(innerHTMLWrites, 0, 'innerHTML must never be written anywhere on this page for a malicious partnership field');
 });
 
-t.test('HIGH COMMAND admin lookup: a hostile target name reaches the DOM only via textContent, never innerHTML', async () => {
+t.test('HIGH COMMAND person history: a hostile target name reaches the DOM only via textContent, never innerHTML', async () => {
     const malicious = '"><svg onload=alert(1)>';
-    const h = await openPartnershipsTab({ isHighCommand: true }, {
-        'tablet:requestMyPartnerships': () => ({ ok: true, featureEnabled: true, truncated: false, partnerships: [] }),
+    const h = await openPersonAsHighCommand('ANY', {
         'tablet:requestPartnershipsForTarget': (body) => ({
             ok: true,
             featureEnabled: true,
@@ -263,11 +308,6 @@ t.test('HIGH COMMAND admin lookup: a hostile target name reaches the DOM only vi
             ],
         }),
     });
-
-    const inputs = findAll(h.getRoot(), (n) => n.tagName === 'input');
-    inputs[0].value = 'ANY';
-    findByText(h.getRoot(), 'Open')[0].click();
-    await settle();
 
     const matches = findAll(h.getRoot(), (n) => n._textContent === malicious);
     t.isTrue(matches.length >= 1, 'the malicious target/partner name reaches the DOM verbatim as textContent');

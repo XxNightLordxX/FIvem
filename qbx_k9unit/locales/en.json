@@ -1221,7 +1221,6 @@
     "home_view_partners_label": "View Partnerships",
     "mutation_error_not_partnered": "That citizen is not currently partnered.",
     "partnerships_admin_heading": "Look Up Someone's Partnerships",
-    "partnerships_admin_hint": "See who any citizen has been partnered with, and end an active partnership if needed.",
     "partnerships_admin_none": "This citizen has never been partnered.",
     "partnerships_count_summary_template": "You have had {count} partner(s) in total.",
     "partnerships_ended_by_label": "Ended by",
