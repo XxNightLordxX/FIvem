@@ -351,7 +351,7 @@ t.test('Enter in a draft form field fires the form\'s own Save, when Save is the
     });
     h.postMessage('tablet:open', {});
     await settle();
-    findFirstButtonByText(h.getRoot(), 'Certification Tiers').click();
+    findFirstButtonByText(h.getRoot(), 'Catalogs').click();
     await settle();
     findFirstButtonByText(h.getRoot(), 'Add New Tier').click();
     await settle();

@@ -269,7 +269,6 @@
         // tiers trainee certified senior etc add more roles edit
         // permissions for those roles etc." The catalogue itself is
         // NEVER hardcoded here -- see loadCertTiers()'s own comment.
-        tab_cert_tiers: 'Certification Tiers',
         cert_tiers_heading: 'Certification Tiers',
         cert_tiers_add_label: 'Add New Tier',
         cert_tier_key_label: 'Key',
@@ -369,6 +368,8 @@
         // player-facing prose").
         tab_shop: "K9 Supply Shop",
         help_tab_shop_desc: "Everything about the K9 supply shop, in two sections: where its ped stands in the world for each department, and what it sells -- at what price, and which certification tier is required to buy each item. You may see only one of the two sections: they are separate permissions, so someone can be trusted with the catalog without being trusted to move the shop, or the other way round.",
+        tab_catalogs: "Catalogs",
+        help_tab_catalogs_desc: "The three lists this resource lets you edit yourself, in one place: certification tiers (like Trainee, Certified, Senior, and which extra abilities each unlocks), permission keys (the named capabilities you can grant one specific person), and XP ranks (how much XP each rank needs, on both the K9 and handler ladders). Open it before certifying anyone if the default tiers do not match how your server is organised, or when a permission you want to grant does not exist yet. You may see fewer than three sections: permission keys and XP ranks each disappear when their own feature is switched off.",
         tab_runtime_control: 'Runtime Control',
         runtime_control_heading: 'Runtime Feature Control',
         runtime_control_intro: 'These settings apply server-wide, for every player. Check the Effect column before changing anything — not every switch takes effect immediately.',
@@ -567,7 +568,6 @@
         // client/tablet.lua's own TABLET_STRING_KEYS comment: NOT YET in
         // locales/en.json (report filed with this pass), same disclosed-gap
         // posture as the tier_label..expired_badge block above.
-        tab_permission_keys: 'Permission Keys',
         permission_keys_heading: 'Permission Key Catalog',
         permission_keys_add_label: 'Add Permission Key',
         permission_key_key_label: 'Key',
@@ -603,7 +603,6 @@
         // these from `strings` until added there, and this block covers
         // that exact gap in the meantime, same resilience-net role every
         // other DEFAULT_STRINGS key already documents.
-        tab_xp_tiers: 'XP Ranks',
         xp_tiers_heading: 'XP Rank Editor',
         xp_tiers_empty: 'No XP ranks are configured.',
         column_rank: 'Rank',
@@ -1214,11 +1213,8 @@
         help_tab_console_desc: "Open a specific handler or K9's record by their exact citizen ID -- this always works, even for someone who has never been certified. If you also hold the Audit capability or are High Command, this tab additionally lets you browse and search the full roster by name, citizen ID, or department (that search only ever shows people who already hold a certification, so it will never find someone brand new -- open them by citizen ID instead).",
         help_tab_flows_desc: "A guided, step-by-step version of the four admin jobs you will do most often: setting up a new handler, offboarding one, handling a problem player, and tuning server-wide settings. Open it instead of the individual screens below when you want to be walked through the whole job in order.",
         help_tab_theme_desc: "Change the tablet's own colors and title for every player on the server. Open it to re-brand the tablet, not to fix anything broken.",
-        help_tab_cert_tiers_desc: "Add, rename, or remove certification tiers (like Trainee, Certified, Senior) and decide which extra abilities each tier unlocks. Open it before you certify anyone if the default tiers do not match how your server is organized.",
-        help_tab_permission_keys_desc: "Add or remove the permission keys this tablet can grant to a specific person (like the ability to certify others). Open it if a permission you need does not exist yet -- to grant an existing one to someone, use the Console tab's Person screen instead.",
         help_tab_roster_desc: "Everyone currently hired, across every configured department, with their callsign, certification tier, XP, and active partner if any. Switch between K9s and Handlers at the top; both share one \"Unassigned\" section -- certified people who have not been assigned to either roster yet, which is not an error, just people still waiting to be sorted. Open a row to hire, fire, promote, demote, change someone's roster role, or set a callsign -- all from their profile, the same one the Console tab and Online Players list also open.",
         help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
-        help_tab_xp_tiers_desc: "Decide how much XP is needed to reach each rank. Open it to change the pace of progression.",
         help_tab_audit_desc: "A read-only history of who certified whom, who partnered with whom, who searched whom, XP grants, and department-wide activity. This is privacy-sensitive -- it shows real names and real actions. Open it to investigate something that already happened.",
         help_commands_heading: "Commands You Can Use",
         help_commands_intro: "Every command below is real -- typing it does exactly what it says. Most of them only work while you are currently playing as the K9 (wearing a dog model); a few work from either side. If a default key is shown, that key runs the same command without you typing anything, unless you have already changed that key yourself in Settings > Key Bindings > FiveM.",

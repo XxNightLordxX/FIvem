@@ -964,7 +964,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' | 'my_record' | 'progression' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' | 'my_record' | 'progression' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'catalogs' | 'shop' | 'runtime_control' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -2324,16 +2324,12 @@
             panel.appendChild(buildPersonnelRosterScreen());
         } else if (state.screen === 'theme' && canManageTabletTheme()) {
             panel.appendChild(buildThemeScreen());
-        } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
-            panel.appendChild(buildCertTiersScreen());
-        } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand && surfaceEnabled('permission_keys')) {
-            panel.appendChild(buildPermissionKeysScreen());
+        } else if (state.screen === 'catalogs' && state.viewer.isHighCommand) {
+            panel.appendChild(buildCatalogsScreen());
         } else if (state.screen === 'shop' && (canManageShopLocations() || canManageShopItems())) {
             panel.appendChild(buildShopScreen());
         } else if (state.screen === 'runtime_control' && canManageRuntimeControl()) {
             panel.appendChild(buildRuntimeControlScreen());
-        } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand && surfaceEnabled('xp_tiers')) {
-            panel.appendChild(buildXpTiersScreen());
         } else if (state.screen === 'flows' && state.viewer.isHighCommand) {
             panel.appendChild(buildFlowsHubScreen());
         } else if (state.screen === 'flow_onboard' && state.viewer.isHighCommand) {
@@ -2727,44 +2723,47 @@
             // screen clears any leftover draft/refusal/warning from a
             // previous visit, exactly like every other tab switch on this
             // page resets its own screen's transient state.
-            var certTiersTab = mkButton(S('tab_cert_tiers'), 'k9tablet-tab' + (state.screen === 'cert_tiers' ? ' k9tablet-tab--active' : ''), function () {
-                state.screen = 'cert_tiers';
+            // CATALOGS -- ONE tab, three sections (plan item G). It was
+            // three tabs: Certification Tiers, Permission Keys and XP
+            // Ranks. All three are the same shape -- a list of catalog
+            // entries with add, rename and remove -- all three are High
+            // Command only, and an operator visits one at a time.
+            //
+            // TWO OF THE THREE ALSO ANSWER TO A FEATURE FLAG, and those
+            // checks stay exactly where they were, moved from per-tab to
+            // per-section inside buildCatalogsScreen(): Permission Keys is
+            // the catalog behind Config.Features.PermissionGrants (with
+            // that off, every grant it mints is inert -- HasPermission
+            // refuses on its first line), and XP Ranks edits the two XP
+            // ladders (with BOTH off there is nothing to edit).
+            // Certification Tiers has no flag of its own and is always
+            // present, which is also why the tab itself needs no
+            // surfaceEnabled() check: there is always at least one section
+            // behind it. Merging the tabs must not merge the gates.
+            //
+            // Fresh entry clears all three drafts and loads only the
+            // catalogs this viewer will actually be shown -- same reset
+            // discipline as every other tab on this page, and no fetch
+            // fired for a section that will not render.
+            var catalogsTab = mkButton(S('tab_catalogs'), 'k9tablet-tab' + (state.screen === 'catalogs' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'catalogs';
                 state.certTierDraft = null;
                 state.certTierFieldError = null;
                 state.certTierActionError = null;
                 state.certTierWarning = null;
+                state.permissionKeyDraft = null;
+                state.permissionKeyFieldError = null;
+                state.permissionKeyActionError = null;
+                state.xpTierDraft = null;
+                state.xpTierFieldError = null;
+                state.xpTierActionError = null;
+                state.xpTierWarning = null;
                 render();
                 loadCertTiers();
+                if (surfaceEnabled('permission_keys')) loadPermissionKeys();
+                if (surfaceEnabled('xp_tiers')) loadXpTiers();
             });
-            appendAdminTab(certTiersTab);
-
-            // Permission-key catalog editing -- owner-directed "...even add
-            // or remove permissions" pass, server/permissionkeycatalog.lua.
-            // SAME high-command gate as every tab in this block (a UX
-            // convenience only: CanManagePermissionKeys is re-verified
-            // server-side on every one of the three callbacks regardless of
-            // whether this tab was ever shown). Sits immediately alongside
-            // the cert-tier tab above, not in a new unrelated place, per
-            // this pass's own explicit instruction. Fresh entry clears any
-            // leftover draft/refusal, same reset discipline as every other
-            // tab switch on this page.
-            // ALSO gated on the FEATURE, not just the rank
-            // (surfaceEnabled -- see its own doc comment): permission keys
-            // are the catalog behind Config.Features.PermissionGrants, and
-            // with that switched off every grant/revoke this screen mints
-            // is inert (server/permissions.lua's HasPermission returns
-            // false on its very first line without it).
-            if (surfaceEnabled('permission_keys')) {
-                var permissionKeysTab = mkButton(S('tab_permission_keys'), 'k9tablet-tab' + (state.screen === 'permission_keys' ? ' k9tablet-tab--active' : ''), function () {
-                    state.screen = 'permission_keys';
-                    state.permissionKeyDraft = null;
-                    state.permissionKeyFieldError = null;
-                    state.permissionKeyActionError = null;
-                    render();
-                    loadPermissionKeys();
-                });
-                appendAdminTab(permissionKeysTab);
-            }
+            appendAdminTab(catalogsTab);
 
             // K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) --
             // owner's own words, this file's header. HIGH COMMAND ONLY,
@@ -2869,26 +2868,6 @@
             // clears any leftover draft/refusal/warning from a previous
             // visit, same reset discipline as every other tab switch on
             // this page.
-            // ALSO gated on the FEATURE, not just the rank (surfaceEnabled
-            // -- see its own doc comment). This screen edits the two XP
-            // ladders; with BOTH Config.Features.XPProgression and
-            // .HandlerXPProgression off there is no ladder to edit and
-            // nothing it saves can ever be consulted. EITHER one being on
-            // is enough to keep the tab -- a server running exactly one
-            // ladder still has real work to do here.
-            if (surfaceEnabled('xp_tiers')) {
-                var xpTiersTab = mkButton(S('tab_xp_tiers'), 'k9tablet-tab' + (state.screen === 'xp_tiers' ? ' k9tablet-tab--active' : ''), function () {
-                    state.screen = 'xp_tiers';
-                    state.xpTierDraft = null;
-                    state.xpTierFieldError = null;
-                    state.xpTierActionError = null;
-                    state.xpTierWarning = null;
-                    render();
-                    loadXpTiers();
-                });
-                appendAdminTab(xpTiersTab);
-            }
-
             // NO "K9 Overrides" TAB (plan item D). Its editor was always
             // the Person screen's (buildPersonK9ProfileSection), its lookup
             // box was a duplicate of the Console's, and its one unique part
@@ -3789,8 +3768,9 @@
         // itself gates the tab on, never a second, stale copy of "high
         // command only" for a tab that no longer means that.
         { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: canManageTabletTheme },
-        { tabLabelKey: 'tab_cert_tiers', descKey: 'help_tab_cert_tiers_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_permission_keys', descKey: 'help_tab_permission_keys_desc', visible: helpHighCommandOnly },
+        // ONE entry, because the three catalog editors are one tab now
+        // (plan item G).
+        { tabLabelKey: 'tab_catalogs', descKey: 'help_tab_catalogs_desc', visible: helpHighCommandOnly },
         // Personnel Roster (docs/history/ROSTER_SPEC.md, Phase B) -- SAME
         // high-command-only gate buildTabs() itself uses for this tab (it
         // sits in the same admin tab group as Cert Tiers/Permission Keys
@@ -3803,7 +3783,6 @@
         // separately.
         { tabLabelKey: 'tab_shop', descKey: 'help_tab_shop_desc', visible: function () { return canManageShopLocations() || canManageShopItems(); } },
         { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: canManageRuntimeControl },
-        { tabLabelKey: 'tab_xp_tiers', descKey: 'help_tab_xp_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_audit', descKey: 'help_tab_audit_desc', visible: canViewAudit },
     ];
 
@@ -6985,8 +6964,27 @@
      * authorization gate, re-checked on every one of the four callbacks
      * this screen calls -- see THE SECURITY RULE.
      */
-    function buildCertTiersScreen() {
+    /**
+     * The three catalogs -- certification tiers, permission keys, XP ranks
+     * -- as three sections of one screen (plan item G). Each still asks its
+     * own feature-flag question, because two of the three have one and
+     * merging the tabs must not merge the gates.
+     * @returns {Element}
+     */
+    function buildCatalogsScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(buildCertTiersScreen());
+        if (surfaceEnabled('permission_keys')) {
+            wrap.appendChild(buildPermissionKeysScreen());
+        }
+        if (surfaceEnabled('xp_tiers')) {
+            wrap.appendChild(buildXpTiersScreen());
+        }
+        return wrap;
+    }
+
+    function buildCertTiersScreen() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('cert_tiers_heading') }));
 
         // HAZARD 3, surfaced per the server side's own explicit ask: a
@@ -7189,7 +7187,7 @@
      * callbacks this screen calls -- see THE SECURITY RULE.
      */
     function buildPermissionKeysScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('permission_keys_heading') }));
 
         if (state.permissionKeysLoading && !state.permissionKeys) {
@@ -9499,7 +9497,7 @@
     var XP_TIER_MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0;
 
     function buildXpTiersScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('xp_tiers_heading') }));
 
         // THE ALREADY-PROMOTED PLAYER -- surfaced per the server side's own

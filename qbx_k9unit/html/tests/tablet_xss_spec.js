@@ -209,7 +209,7 @@ for (const malicious of MALICIOUS_STRINGS) {
         t.equals(everyElementInnerHTMLWriteCount(h), 0);
 
         const { findByText } = require('./tablet-dom-stub');
-        findByText(h.getRoot(), 'Certification Tiers')[0].click();
+        findByText(h.getRoot(), 'Catalogs')[0].click();
         await settle();
 
         t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'malicious cert-tier label AND capability label both rendered verbatim');

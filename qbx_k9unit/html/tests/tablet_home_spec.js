@@ -147,7 +147,9 @@ t.test('HIGH COMMAND: Home shows role badge "High Command" and the High Command 
     // one occurrence", never a second, arrow-suffixed copy on Home.
     // 'K9 Supply Shop' is ONE tab covering both shop sections (plan item
     // F), and 'K9 Overrides' is no longer a tab at all (plan item D).
-    for (const label of ['Tablet Theme', 'Certification Tiers', 'Permission Keys', 'K9 Supply Shop', 'Runtime Control', 'XP Ranks', 'Audit Trail']) {
+    // 'Catalogs' is ONE tab covering certification tiers, permission keys and
+    // XP ranks (plan item G).
+    for (const label of ['Tablet Theme', 'Catalogs', 'K9 Supply Shop', 'Runtime Control', 'Audit Trail']) {
         t.equals(findByText(h.getRoot(), label).length, 1, `"${label}" tab appears exactly once -- no competing Home shortcut`);
     }
 
@@ -198,7 +200,7 @@ t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command 
     // and every OTHER delegable one this viewer does NOT hold stays
     // absent -- never a wider admin band than this viewer's own real
     // access, exactly as buildTabs() itself already gates.
-    for (const label of ['Guided Flows', 'Tablet Theme', 'Certification Tiers', 'Permission Keys', 'K9 Supply Shop', 'XP Ranks', 'K9 Overrides', 'Audit Trail']) {
+    for (const label of ['Guided Flows', 'Tablet Theme', 'Catalogs', 'K9 Supply Shop', 'K9 Overrides', 'Audit Trail']) {
         t.equals(findByText(h.getRoot(), label).length, 0, `"${label}" tab must NOT appear for this viewer`);
     }
 

@@ -67,6 +67,13 @@ function baseHandlers(overrides) {
     return Object.assign({
         'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
         'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
+        // XP Ranks is a SECTION of the Catalogs tab now (plan item G), so
+        // opening it also loads the other two catalogs. Both answer
+        // successfully and empty: this file is about the XP ladder, and a
+        // failure in a neighbouring section would put a second Retry button
+        // on screen and make the error assertions below ambiguous.
+        'tablet:certTiersList': () => ({ ok: true, tiers: [] }),
+        'tablet:permKeysList': () => ({ ok: true, keys: [] }),
     }, overrides || {});
 }
 
@@ -76,7 +83,7 @@ async function openTablet(h) {
 }
 
 function openXpTiersTab(h) {
-    return findByText(h.getRoot(), 'XP Ranks')[0].click();
+    return findByText(h.getRoot(), 'Catalogs')[0].click();
 }
 
 /** The real four-rank shape server/xptiers.lua's own ListXPTiersSnapshot
@@ -95,24 +102,24 @@ const FOUR_RANK_LADDER = [
 // GATING
 // ======================================================================
 
-t.test('a non-high-command console user never sees the XP Ranks tab', async () => {
+t.test('a non-high-command console user never sees the Catalogs tab (which is where XP Ranks now lives)', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({
             'tablet:requestMyRecord': () => ({ ok: true, viewer: CONSOLE_ONLY_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
         })),
     });
     await openTablet(h);
-    t.equals(findByText(h.getRoot(), 'XP Ranks').length, 0);
+    t.equals(findByText(h.getRoot(), 'Catalogs').length, 0);
 });
 
-t.test('high command sees the XP Ranks tab', async () => {
+t.test('high command sees the Catalogs tab, and XP Ranks is a section inside it (plan item G)', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({
             'tablet:xpTiersList': () => ({ ok: true, tiers: FOUR_RANK_LADDER }),
         })),
     });
     await openTablet(h);
-    t.equals(findByText(h.getRoot(), 'XP Ranks').length, 1);
+    t.equals(findByText(h.getRoot(), 'Catalogs').length, 1, 'one tab, not three');
 });
 
 // ======================================================================

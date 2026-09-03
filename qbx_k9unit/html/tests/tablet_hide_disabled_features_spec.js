@@ -322,8 +322,6 @@ const ADMIN_SURFACE_TABS = [
     { surface: 'theme', tab: 'Tablet Theme' },
     { surface: 'runtime_control', tab: 'Runtime Control' },
     { surface: 'audit', tab: 'Audit Trail' },
-    { surface: 'permission_keys', tab: 'Permission Keys' },
-    { surface: 'xp_tiers', tab: 'XP Ranks' },
 ];
 
 /** A high-command viewer holding every delegated capability, with `surfaces` overridden. */
@@ -393,6 +391,16 @@ t.test('ADMIN SURFACES: turning AdminAuditCommands off does NOT also take away t
     t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'the Command Console is not');
 });
 
+t.test('ADMIN SURFACES: the Catalogs tab survives with its optional sections off -- certification tiers has no feature flag, so there is always something behind it', async () => {
+    // Three catalog editors became one tab (plan item G). Two of the three
+    // answer to a feature flag; certification tiers does not. So unlike the
+    // shop tab, this one is never hidden by a surface -- the sections
+    // inside it disappear individually, which is where those checks moved.
+    const h = surfacesHarness({ permission_keys: false, xp_tiers: false });
+    await openTabletOnly(h);
+    t.isTrue(findByText(h.getRoot(), 'Catalogs').length >= 1, 'the tab stays -- certification tiers is always editable');
+});
+
 t.test('ADMIN SURFACES: the ONE K9 Supply Shop tab needs only ONE of its two surfaces -- it is two sections behind two independent permissions', async () => {
     // The two shop screens became one tab (plan item F), but the two
     // server-side keys did NOT merge: 'k9.equipmentshoplocations' and
@@ -423,6 +431,7 @@ t.test('ADMIN SURFACES: FAILS OPEN -- a payload with no `surfaces` object at all
         t.isTrue(findByText(h.getRoot(), entry.tab).length >= 1, entry.tab + ' survives a payload that never mentions surfaces');
     }
     t.isTrue(findByText(h.getRoot(), 'K9 Supply Shop').length >= 1, 'and so does the shop tab, whose two surfaces are checked separately');
+    t.isTrue(findByText(h.getRoot(), 'Catalogs').length >= 1, 'and the catalogs tab, whose sections are checked separately');
 });
 
 t.test('ADMIN SURFACES: FAILS OPEN -- a `surfaces` object that simply omits a key keeps that tab', async () => {

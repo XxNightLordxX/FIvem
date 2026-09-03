@@ -483,7 +483,7 @@ t.test('DYNAMIC CATALOGUE: tiers rendered come ENTIRELY from tablet:certTiersLis
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     t.isTrue(findByText(h.getRoot(), 'Zzyzx Novel Rank').length >= 1, 'a tier this test invented on the fly renders correctly -- proves no hardcoded tier list');
@@ -504,7 +504,7 @@ t.test('Add New Tier: opens a blank form, and Save submits {key,label,capabiliti
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     findByText(h.getRoot(), 'Add New Tier')[0].click();
@@ -542,7 +542,7 @@ t.test('Edit an existing tier: the key input is DISABLED (no rename concept), la
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     findByText(h.getRoot(), 'Edit')[0].click();
@@ -581,7 +581,7 @@ t.test('Move Up/Down submits the FULL reordered key list (not just the two swapp
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     // Move the SECOND row ("certified", index 1) up, ahead of "trainee".
@@ -616,7 +616,7 @@ t.test('Delete: "certified" is disabled client-side as a UX hint, but a normal t
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     const deleteButtons = findByText(h.getRoot(), 'Delete');
@@ -644,7 +644,7 @@ t.test('Delete refusal "tier_in_use" renders "cannot, and here is why" WITH the 
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     const deleteBtn = findByText(h.getRoot(), 'Delete')[0];
@@ -674,7 +674,7 @@ t.test('Delete refusal "tier_in_use_by_shop_items" renders its own "cannot, and 
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     const deleteBtn = findByText(h.getRoot(), 'Delete')[0];
@@ -714,7 +714,7 @@ t.test('a PARTIAL tier-reorder write names the tiers that did not save, instead 
         })),
     });
     await openTablet(h);
-    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    findByText(h.getRoot(), 'Catalogs')[0].click();
     await settle();
 
     const moveDown = findAll(h.getRoot(), (n) => n.tagName === 'button' && n._textContent === '\u2193');

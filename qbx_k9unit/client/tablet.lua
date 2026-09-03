@@ -981,7 +981,7 @@ local TABLET_STRING_KEYS = {
     'theme_text_label', 'theme_density_label', 'theme_density_comfortable',
     'theme_density_compact', 'theme_header_title_label', 'theme_save_label',
     'theme_reset_label', 'theme_disabled_note', 'theme_field_invalid',
-    'tab_cert_tiers', 'cert_tiers_heading', 'cert_tiers_add_label',
+    'cert_tiers_heading', 'cert_tiers_add_label',
     'cert_tier_key_label', 'cert_tier_key_placeholder', 'cert_tier_label_label',
     'cert_tier_capabilities_label', 'cert_tier_no_capabilities',
     'cert_tier_save_label', 'cert_tier_cancel_label', 'cert_tier_edit_label',
@@ -1007,7 +1007,7 @@ local TABLET_STRING_KEYS = {
     -- Permission-key catalog editing (high command only, sits alongside the
     -- cert-tier screen above) -- see this file's own header NUI CONTRACT
     -- section on the three tablet:permKeys* callbacks.
-    'tab_permission_keys', 'permission_keys_heading', 'permission_keys_add_label',
+    'permission_keys_heading', 'permission_keys_add_label',
     'permission_key_key_label', 'permission_key_key_placeholder',
     'permission_key_label_label', 'permission_key_description_label',
     'permission_key_description_placeholder', 'permission_key_save_label',
@@ -1046,6 +1046,7 @@ local TABLET_STRING_KEYS = {
     -- see this file's own NUI CONTRACT note on why the server's raw `note`
     -- prose is never forwarded/rendered verbatim.
     'tab_shop', 'help_tab_shop_desc',
+    'tab_catalogs', 'help_tab_catalogs_desc',
     'tab_runtime_control', 'runtime_control_heading', 'runtime_control_intro',
     'runtime_control_disabled_note', 'runtime_features_heading',
     'runtime_features_empty', 'runtime_tunables_heading', 'runtime_tunables_empty',
@@ -1164,7 +1165,7 @@ local TABLET_STRING_KEYS = {
     -- pass that added them, flagged to that file's owner -- they have
     -- since been added, so BuildTabletStrings() now resolves every one of
     -- them for real.
-    'tab_xp_tiers', 'xp_tiers_heading', 'xp_tiers_empty', 'column_rank',
+    'xp_tiers_heading', 'xp_tiers_empty', 'column_rank',
     'column_xp_threshold', 'column_speed_multiplier', 'column_scent_range_multiplier',
     'column_medkit_cooldown_multiplier', 'column_badge', 'xp_tier_edit_label',
     'xp_tier_save_label', 'xp_tier_cancel_label', 'xp_tier_xp_label',
@@ -1472,8 +1473,8 @@ local TABLET_STRING_KEYS = {
     'help_start_high_command_intro', 'help_start_high_command_1', 'help_start_high_command_2', 'help_start_high_command_3',
     'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro', 'help_tab_home_desc',
     'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
-    'help_tab_flows_desc', 'help_tab_theme_desc', 'help_tab_cert_tiers_desc', 'help_tab_permission_keys_desc',
-    'help_tab_runtime_control_desc', 'help_tab_xp_tiers_desc',
+    'help_tab_flows_desc', 'help_tab_theme_desc',
+    'help_tab_runtime_control_desc',
     'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
     'help_commands_admin_heading', 'help_commands_admin_intro', 'help_tasks_heading', 'help_task_get_certified_heading',
     'help_task_get_certified_1', 'help_task_get_certified_2', 'help_task_get_certified_3_template', 'help_task_partner_up_heading',
