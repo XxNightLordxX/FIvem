@@ -218,10 +218,15 @@ t.test('ADDITIVE, NOT REPLACEMENT: High Command sees every non-admin command PLU
     t.equals(findByText(h.getRoot(), 'Turn Someone Into a K9').length, 1);
     t.equals(findByText(h.getRoot(), 'Turn a Feature On or Off').length, 1);
     t.equals(findByText(h.getRoot(), 'Check What Someone Did').length, 1);
-    // The derived Guided Flows step line -- proves this is rendered from
-    // the SAME live flowOnboardStepLabels()/flowTuningStepLabels() this
-    // pass's own header promises, not a separate hand-typed copy.
-    t.isTrue(findByTextContaining(h.getRoot(), 'Select Person → Certify → K9 Role → Tier & Specializations → Feature Access → Summary').length >= 1, 'the onboarding flow\'s real step sequence is quoted live');
+    // The derived Guided Flow step line -- proves this is rendered from
+    // the SAME live flowTuningStepLabels() this file's own header
+    // promises, not a separate hand-typed copy.
+    //
+    // This used to assert the ONBOARDING flow's sequence as well. That
+    // flow was retired once the Person screen became the single place all
+    // of its steps happen, so the only live sequence left to quote is the
+    // tuning one.
+    t.isTrue(findByTextContaining(h.getRoot(), 'Overview → Feature Toggles → Tunables → Certification Tiers → XP Thresholds → Shop Items').length >= 1, 'the tuning flow\'s real step sequence is quoted live');
 });
 
 t.test('a plain handler (not High Command) sees the non-admin commands only -- no admin row, no admin heading, no admin tasks', async () => {
@@ -336,15 +341,42 @@ t.test('WORKFLOW AUDIT #1: the "Certify Someone" walkthrough never points a non-
     t.isTrue(findByTextContaining(h.getRoot(), 'if this is a brand-new person, use "Open by exact citizen ID" instead').length >= 1, 'step 1 now also warns that the roster search alone will never find someone who has never been certified');
 });
 
-t.test('WORKFLOW AUDIT #1 control: a TRUE high-command viewer still gets the full Certify Someone walkthrough, including the Guided Flows pointer and the live step sequence', async () => {
-    const h = createHarness({
+t.test('WORKFLOW AUDIT #1, settled for good: high command and a k9.certify delegate now get the SAME Certify Someone walkthrough', async () => {
+    // This used to be the control proving the opposite -- that high
+    // command DID get two extra lines (a "Open the Guided Flows tab"
+    // pointer and that flow's live step sequence) which a delegated
+    // certifier correctly did not, because the delegate could not see the
+    // Guided Flows tab at all.
+    //
+    // Retiring the onboarding flow removes the asymmetry at its source
+    // rather than gating around it: there is no flow to point either
+    // viewer at, and every step it sequenced is on the Person screen that
+    // steps 1 and 2 already name. So the stronger property to pin now is
+    // that the two viewers see the SAME walkthrough for a task they can
+    // both do the same way -- which is also what stops the pointer
+    // creeping back in for one of them.
+    const DELEGATED_CERTIFIER = { citizenid: 'D4', name: 'Sergeant Certifier', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify'] };
+
+    const hc = createHarness({
         fetchImpl: routeFetch({ 'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, {}) }),
     });
-    await openHelpScreen(h);
+    await openHelpScreen(hc);
+    t.equals(findByText(hc.getRoot(), 'Certify Someone').length, 1);
+    t.equals(findByTextContaining(hc.getRoot(), 'Open the Guided Flows tab').length, 0, 'no flow left to point at, for high command either');
+    t.equals(findByTextContaining(hc.getRoot(), 'Select Person → Certify').length, 0, 'the retired onboarding sequence is quoted to nobody');
 
-    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1);
-    t.isTrue(findByTextContaining(h.getRoot(), 'Open the Guided Flows tab').length >= 1, 'high command CAN see and use Guided Flows, so the pointer stays');
-    t.isTrue(findByTextContaining(h.getRoot(), 'Select Person → Certify → K9 Role → Tier & Specializations → Feature Access → Summary').length >= 1, 'the real onboarding step sequence is still quoted live for high command');
+    const dl = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(DELEGATED_CERTIFIER, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(dl);
+    t.equals(findByText(dl.getRoot(), 'Certify Someone').length, 1, 'the delegate still gets the walkthrough');
+
+    // The real point: same task, same instructions, whoever is reading.
+    const step1 = 'if this is a brand-new person, use "Open by exact citizen ID" instead';
+    t.isTrue(findByTextContaining(hc.getRoot(), step1).length >= 1, 'high command gets the roster-search caveat');
+    t.isTrue(findByTextContaining(dl.getRoot(), step1).length >= 1, 'and so does the delegate -- identical copy now');
 });
 
 t.test('a hostile string arriving via data.strings for a Help-screen key reaches the DOM only via textContent, never innerHTML', async () => {

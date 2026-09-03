@@ -964,7 +964,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' (the landing view AND the whole of your own record) | 'guide' | 'console' | 'person' | 'theme' | 'catalogs' | 'shop' | 'runtime_control' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' (the landing view AND the whole of your own record) | 'guide' | 'console' | 'person' | 'theme' | 'catalogs' | 'shop' | 'runtime_control' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -1303,21 +1303,21 @@
         auditResult: null, // { rows, label, truncated, requestedLimit, actualLimit } -- the LAST successful response; NOT reset on tab re-entry (same posture as roster/theme -- switching away and back keeps showing the last result), only on mode switch or tablet:open
         auditRequestId: 0, // STALE-RESPONSE GUARD, same request-id shape as shopLocationsRequestId/runtimeFeaturesRequestId above -- a user can switch mode or press Run Query again while an earlier query is still in flight
 
-        // GUIDED FLOWS (this pass) -- high command only, screens 'flows' |
-        // 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning'
-        // (see state.screen's own comment above and buildFlowsHubScreen()'s
-        // header for the full write-up). PRESENTATION ONLY: every one of
-        // these fields only decides what this page shows/which step it is
-        // on -- every mutation a flow step makes still goes through the
-        // exact same runMutation()/handlePersonCertAction()/fetchNui() call
-        // an existing standalone screen already uses, with the SAME
+        // GUIDED FLOW (high command only, screen 'flow_tuning' -- see
+        // state.screen's own comment above). PRESENTATION ONLY: this field
+        // only decides which step the page is on -- every mutation a step
+        // makes still goes through the exact same runMutation()/fetchNui()
+        // call an existing standalone screen already uses, with the SAME
         // payload, so THE SECURITY RULE at this file's own header is
-        // untouched by any of this.
-        flowStep: 0, // current step index within whichever flow screen is active -- ONE shared counter is enough since only one flow screen is ever shown at a time; reset to 0 by goToFlow*Screen()/flowChangePerson() below whenever a flow (re)starts or a different person is picked
-        flowBaseline: null, // snapshot of the selected person's certifications/permissions/features taken ONCE per selection (see computeFlowBaselineSnapshot()) -- the "before" half of an honest before/after summary; never itself sent anywhere, never used to gate anything
-        flowOnboardDepartment: null, // the department key chosen in the Onboarding flow's own Certify step -- lets the later Tier/Specializations step focus on that ONE department instead of re-listing every configured department
-        flowOnboardK9RoleAttempted: false, // set true the INSTANT the Onboarding flow's own K9 Role step fires its Assign click, before the server has even answered -- "was this optional step used or skipped" (display-only framing) is a DIFFERENT question from "did it actually work" (which the summary re-derives from freshly reloaded state.personSummary.assignedK9Model, never from this flag or the click's own result) -- see buildFlowOnboardK9RoleSummaryLine()'s own doc comment
-        flowOffboardAppearanceReverted: false, // set true ONLY after a real, server-confirmed tablet:revertK9Ped success during the Offboarding flow's own Appearance step -- never assumed from the click alone, see that step's own dedicated (non-runMutation) fetch wrapper
+        // untouched by it.
+        //
+        // FOUR SIBLING FIELDS USED TO LIVE HERE (a baseline snapshot, a
+        // chosen department, and two "was this step used" markers). They
+        // belonged to the three person-shaped flows retired alongside the
+        // hub; the one flow left has no person, and re-reads what it has
+        // changed straight off the server rather than diffing against a
+        // client-side "before" snapshot.
+        flowStep: 0, // current step index within the tuning flow -- reset to 0 by goToFlowTuningScreen() whenever the flow (re)starts
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit. Reset on every handleOpen() too (this pass) -- see that function's own comment on this exact field for why a stale true here must never survive a close/reopen
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -1495,29 +1495,6 @@
             }
         }
         return tierKey;
-    }
-
-    /** Human label for a ped MODEL name -- resolved against state.peds
-     * (Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract
-     * note), the SAME "falls back to the raw key when nothing resolves"
-     * convention as tierDisplayLabel() just above. Used by the Onboarding
-     * flow's own K9 Role summary line to show a friendly name for
-     * state.personSummary.assignedK9Model's raw model string.
-     * @param {string} model
-     * @returns {string}
-     */
-    function pedDisplayLabel(model) {
-        if (typeof model !== 'string' || model.length === 0) return String(model);
-        var peds = state.peds;
-        if (Array.isArray(peds)) {
-            for (var i = 0; i < peds.length; i++) {
-                var ped = peds[i];
-                if (ped && ped.model === model) {
-                    return (typeof ped.label === 'string' && ped.label.length > 0) ? ped.label : model;
-                }
-            }
-        }
-        return model;
     }
 
     /**
@@ -2328,14 +2305,6 @@
             panel.appendChild(buildShopScreen());
         } else if (state.screen === 'runtime_control' && canManageRuntimeControl()) {
             panel.appendChild(buildRuntimeControlScreen());
-        } else if (state.screen === 'flows' && state.viewer.isHighCommand) {
-            panel.appendChild(buildFlowsHubScreen());
-        } else if (state.screen === 'flow_onboard' && state.viewer.isHighCommand) {
-            panel.appendChild(buildFlowOnboardScreen());
-        } else if (state.screen === 'flow_offboard' && state.viewer.isHighCommand) {
-            panel.appendChild(buildFlowOffboardScreen());
-        } else if (state.screen === 'flow_problem' && state.viewer.isHighCommand) {
-            panel.appendChild(buildFlowProblemScreen());
         } else if (state.screen === 'flow_tuning' && state.viewer.isHighCommand) {
             panel.appendChild(buildFlowTuningScreen());
         } else if (state.screen === 'audit' && canOpenAuditScreen()) {
@@ -2665,7 +2634,7 @@
         // Cert Tiers/Permission Keys/XP Tiers/K9 Profiles below, which do
         // not).
         if (state.viewer.isHighCommand) {
-            // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
+            // GUIDED FLOW -- see buildFlowTuningScreen()'s own
             // header. Placed FIRST in this block, before every individual
             // admin screen's own tab below, since a guided flow is the
             // RECOMMENDED path for the four jobs it covers -- every
@@ -2674,8 +2643,19 @@
             // in. Shown "active" for its hub AND for any of its four
             // in-progress flow screens, so the tab bar still reflects
             // where the operator actually is mid-flow.
-            var flowsTab = mkButton(S('tab_flows'), 'k9tablet-tab' + ((state.screen === 'flows' || state.screen === 'flow_onboard' || state.screen === 'flow_offboard' || state.screen === 'flow_problem' || state.screen === 'flow_tuning') ? ' k9tablet-tab--active' : ''), function () {
-                goToFlowsScreen();
+            // ONE FLOW LEFT, SO NO HUB. This tab used to open a picker of
+            // four guided flows. Three of them -- Set Up a New Handler,
+            // Offboard, Problem Player -- were retired once the Person
+            // screen became the single place all of their steps happen:
+            // each had become that screen's own sections, in that order,
+            // reached through a second person-search box. Server Tuning is
+            // the one that still sequences work the Person screen does not
+            // hold (runtime features, tunables, cert tiers, XP ranks, shop
+            // items), so it stays -- and with nothing left to choose
+            // between, the tab opens it directly rather than through a hub
+            // screen holding a single card.
+            var flowsTab = mkButton(S('tab_flows'), 'k9tablet-tab' + (state.screen === 'flow_tuning' ? ' k9tablet-tab--active' : ''), function () {
+                goToFlowTuningScreen();
             });
             appendAdminTab(flowsTab);
         }
@@ -3817,11 +3797,12 @@
     //     tests/commandreferenceregistry_spec.lua's own drift guard
     //     against the real RegisterCommand(...) names protects this
     //     section for free.
-    //   - The two Guided Flows step sequences quoted in
-    //     buildHelpTasksSection() (Certify Someone / Tune the Server)
-    //     are rendered by calling flowOnboardStepLabels()/
-    //     flowTuningStepLabels() live, never a second, hand-copied list
-    //     of their step names -- see that function's own header.
+    //   - The Guided Flow step sequence quoted in
+    //     buildHelpTasksSection() (Tune the Server) is rendered by
+    //     calling flowTuningStepLabels() live, never a second,
+    //     hand-copied list of its step names -- see that function's own
+    //     header. There were two of these; the Certify Someone one went
+    //     with the onboarding flow it quoted.
     //   - Three quoted button labels ({certifyLabel}/{assignLabel}/
     //     {revertLabel} below) are filled from S('certify_label')/
     //     S('role_assign_label')/S('role_revert_label') at render time --
@@ -4052,22 +4033,14 @@
                 S('help_task_hc_certify_someone_1'),
                 formatTemplate(S('help_task_hc_certify_someone_2_template'), { certifyLabel: S('certify_label') }),
             ];
-            // Workflow audit finding #1, 2026-08-26 -- the Guided Flows
-            // pointer (and the derived step-sequence line right after it)
-            // used to render for EVERY viewer who sees this walkthrough,
-            // including a 'k9.certify' delegate who is not high command.
-            // Guided Flows has no capability delegation at all (see
-            // buildTabs()'s own comment on its tab: "no server-side
-            // delegation exists for the guided-flow hub itself"), so that
-            // delegate could not see or use the very tab step 3 told them
-            // to open -- sends-you-to-a-tab-you-cannot-see, the exact bug
-            // class this audit finding is about. Only ever added for a
-            // TRUE high-command viewer now, who is the only one who can
-            // actually reach Guided Flows.
-            if (helpHighCommandOnly()) {
-                certifySomeoneSteps.push(S('help_task_hc_certify_someone_3'));
-                certifySomeoneSteps.push(formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowOnboardStepLabels().join(' → ') }));
-            }
+            // TWO HIGH-COMMAND-ONLY LINES USED TO FOLLOW, pointing at the
+            // Guided Flows "Set Up a New Handler" flow and listing its
+            // steps. That flow has been retired: every step it sequenced is
+            // rendered on the Person screen, in that order, which is where
+            // steps 1 and 2 above already send the reader. Dropping them
+            // also drops a long-standing split in this walkthrough -- a
+            // 'k9.certify' delegate saw a shorter version than high command
+            // did, of a task both can do the same way.
             wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_certify_someone_heading'), certifySomeoneSteps));
         }
 
@@ -10397,159 +10370,22 @@
     // ------------------------------------------------------------------
 
     /**
-     * Snapshot of the CURRENTLY SELECTED person's certifications/
-     * permissions/features, read from whatever state.personSummary/
-     * state.personFeatures ALREADY hold at the moment this is called --
-     * never a separate fetch, never sent anywhere. This is the "before"
-     * half of an honest before/after comparison: a flow's summary step
-     * compares the LATEST (post-action) personSummary/personFeatures
-     * against this snapshot, so the summary is only ever built from two
-     * points of REAL, server-confirmed data, never from tracking whether
-     * an individual click's response claimed success.
-     * @returns {{certByDept: Object<string,{active:boolean,tier:?string,specializations:string[]}>, permissions: Object<string,boolean>, featureGranted: Object<string,boolean>, featureBlocked: Object<string,boolean>}}
-     */
-    function computeFlowBaselineSnapshot() {
-        var certByDept = {};
-        var certs = (state.personSummary && state.personSummary.certifications) || [];
-        for (var i = 0; i < certs.length; i++) {
-            var c = certs[i];
-            if (!c || typeof c.departmentKey !== 'string') continue;
-            certByDept[c.departmentKey] = {
-                active: c.active === true,
-                tier: c.active === true && typeof c.tier === 'string' ? c.tier : null,
-                specializations: (c.active === true && Array.isArray(c.specializations)) ? c.specializations.slice() : [],
-            };
-        }
-
-        var permissions = {};
-        var perms = (state.personSummary && state.personSummary.permissions) || [];
-        for (var j = 0; j < perms.length; j++) {
-            if (typeof perms[j] === 'string') permissions[perms[j]] = true;
-        }
-
-        var featureGranted = {};
-        var featureBlocked = {};
-        var features = (state.personFeatures && state.personFeatures.features) || [];
-        for (var k = 0; k < features.length; k++) {
-            var f = features[k];
-            if (!f || typeof f.key !== 'string') continue;
-            featureGranted[f.key] = f.granted === true;
-            featureBlocked[f.key] = f.blocked === true;
-        }
-
-        return { certByDept: certByDept, permissions: permissions, featureGranted: featureGranted, featureBlocked: featureBlocked };
-    }
-
-    /** Captures state.flowBaseline exactly once per person selection --
-     * see computeFlowBaselineSnapshot()'s own doc comment. Safe to call on
-     * every render of every flow step: a no-op once a baseline already
-     * exists, and a no-op until BOTH state.personSummary AND (for a
-     * high-command viewer, who is the only one who ever reaches a feature/
-     * capability-touching flow step at all) state.personFeatures have
-     * actually loaded -- flowSelectPerson() fires both loads in PARALLEL,
-     * so snapshotting the moment only the faster of the two resolves would
-     * silently capture an EMPTY feature-grant baseline (every "was this
-     * granted before this flow touched it" comparison would then read
-     * false, undercounting a real revoke/grant in the summary) -- never
-     * snapshots a stale/still-loading record as if it were real data. */
-    function ensureFlowBaseline() {
-        if (state.flowBaseline || !state.person || !state.personSummary) return;
-        if (state.viewer && state.viewer.isHighCommand && !state.personFeatures) return;
-        state.flowBaseline = computeFlowBaselineSnapshot();
-    }
-
-    /** Resets every piece of per-run guided-flow state -- called whenever
-     * a flow (re)starts from the hub, so no leftover step/baseline/
-     * department choice from a previous run ever bleeds into a new one. */
+    /** Resets per-run guided-flow state -- called whenever the flow
+     * (re)starts, so no leftover step from a previous run bleeds into a
+     * new one.
+     *
+     * Down to one field. It used to clear a baseline snapshot, a chosen
+     * department and two "did this actually happen" markers, all of which
+     * belonged to the three person-shaped flows retired with the hub. The
+     * one flow left has no person and no before/after summary to compare
+     * against -- it reads `overridden` straight off the server on every
+     * step -- so a step index is the whole of its per-run state. */
     function resetFlowRunState() {
         state.flowStep = 0;
-        state.flowBaseline = null;
-        state.flowOnboardDepartment = null;
-        state.flowOnboardK9RoleAttempted = false;
-        state.flowOffboardAppearanceReverted = false;
     }
 
-    function goToFlowsScreen() {
-        state.screen = 'flows';
-        resetFlowRunState();
-        state.person = null;
-        state.personSummary = null;
-        state.personFeatures = null;
-        render();
-    }
 
-    /**
-     * Selects a person for whichever guided flow is active -- the DATA
-     * half of openPerson() (loadPersonSummary/loadPersonFeatures/
-     * loadPermissionKeys/loadCertTiers, same calls, same conditions),
-     * deliberately WITHOUT openPerson()'s own `state.screen = 'person'`
-     * line, since a guided flow must stay on its OWN screen rather than
-     * navigating to the standalone Person screen. See "carry context
-     * between steps" in this pass's own instructions: everything past
-     * this call reads state.person directly, exactly like the standalone
-     * Person screen's own buildRoleControl()/buildGiveXpControl()/etc.
-     * already do, so the citizenid picked here is never re-entered.
-     * @param {string} citizenid @param {string} name
-     */
-    function flowSelectPerson(citizenid, name) {
-        state.person = { citizenid: citizenid, name: name };
-        state.personSummary = null;
-        state.personFeatures = null;
-        state.personFeatureQuery = '';
-        state.flowBaseline = null;
-        render();
-        loadPersonSummary(citizenid);
-        if (state.viewer && state.viewer.isHighCommand) {
-            loadPersonFeatures(citizenid);
-            loadPermissionKeys();
-        }
-        loadCertTiers();
-    }
 
-    /** "Change person" -- reversible per this pass's own instruction:
-     * returns to step 0 of whichever flow is active without leaving the
-     * flow entirely. */
-    function flowChangePerson() {
-        state.person = null;
-        state.personSummary = null;
-        state.personFeatures = null;
-        state.flowStep = 0;
-        state.flowBaseline = null;
-        state.flowOnboardDepartment = null;
-        state.flowOnboardK9RoleAttempted = false;
-        state.flowOffboardAppearanceReverted = false;
-        render();
-    }
-
-    function goToFlowOnboardScreen() {
-        state.screen = 'flow_onboard';
-        resetFlowRunState();
-        state.person = null;
-        state.personSummary = null;
-        state.personFeatures = null;
-        render();
-        loadRoster(state.rosterQuery);
-    }
-
-    function goToFlowOffboardScreen() {
-        state.screen = 'flow_offboard';
-        resetFlowRunState();
-        state.person = null;
-        state.personSummary = null;
-        state.personFeatures = null;
-        render();
-        loadRoster(state.rosterQuery);
-    }
-
-    function goToFlowProblemScreen() {
-        state.screen = 'flow_problem';
-        resetFlowRunState();
-        state.person = null;
-        state.personSummary = null;
-        state.personFeatures = null;
-        render();
-        loadRoster(state.rosterQuery);
-    }
 
     function goToFlowTuningScreen() {
         state.screen = 'flow_tuning';
@@ -10606,829 +10442,6 @@
         return row;
     }
 
-    /** The selected-person context bar shown on every step after Select --
-     * "carry context between steps": the citizenid/name picked in step one
-     * is shown, unchanged, on every later step, with a single link back to
-     * pick someone else instead of leaving the flow for a whole new
-     * screen. */
-    function buildFlowPersonContext() {
-        var wrap = mk('div', { class: 'k9tablet-flow-person-context' });
-        wrap.appendChild(mk('span', { class: 'k9tablet-muted', text: S('flow_working_with_label') + ' ' }));
-        wrap.appendChild(mk('span', { class: 'k9tablet-person-name', text: state.person.name }));
-        wrap.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + state.person.citizenid + ')' }));
-        wrap.appendChild(mkButton(S('flow_change_person_label'), 'k9tablet-link-btn', flowChangePerson));
-        return wrap;
-    }
-
-    /**
-     * Person picker shared by the Onboarding/Offboarding/Problem-Player
-     * flows' own Select step -- reuses the EXACT SAME two entry points the
-     * standalone Command Console already offers (state.roster via
-     * loadRoster()'s existing debounce, and the "open by exact citizen ID"
-     * box for a decertified/never-certified target the roster's own
-     * active-certification-only filter would otherwise never surface --
-     * see buildConsoleScreen()'s own header note on why that second box
-     * exists at all), so a guided flow can reach exactly who the standalone
-     * Console can, no more and no less.
-     * @param {(citizenid:string, name:string) => void} onSelected
-     */
-    function buildFlowPersonPicker(onSelected) {
-        var wrap = mk('div', { class: 'k9tablet-flow-picker' });
-        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_select_person_prompt') }));
-
-        var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
-        // Workflow audit finding #2, 2026-08-26 -- see buildConsoleScreen()'s
-        // identical hint for the full writeup: "Set Up a New Handler" is
-        // the ONE flow whose whole point is a person the search below can
-        // never find (it only ever lists people who already hold a
-        // certification), so this hint matters here MOST of all three
-        // flows that share this picker, even though it is worded generally
-        // enough to stay true for Offboarding/Problem Player too.
-        idBar.appendChild(mk('p', { class: 'k9tablet-hint k9tablet-open-by-id-hint', text: S('open_by_id_hint') }));
-        var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('open_by_id_placeholder') } });
-        idBar.appendChild(idInput);
-        idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
-            var id = (idInput.value || '').trim();
-            if (id.length === 0) return;
-            // See buildConsoleScreen()'s identical "open by exact citizen
-            // ID" box for why `name` starts null rather than echoing the
-            // typed id: it is a citizenid, not a confirmed name, and
-            // flowSelectPerson()/loadPersonSummary() fill in the real
-            // (or honestly id-echoing) resolved name once the response
-            // lands.
-            onSelected(id, null);
-        }));
-        wrap.appendChild(idBar);
-
-        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
-        search.value = state.rosterQuery;
-        search.addEventListener('input', function (e) {
-            var q = e.target.value;
-            state.rosterQuery = q;
-            clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(function () { loadRoster(q); }, SEARCH_DEBOUNCE_MS);
-        });
-        wrap.appendChild(search);
-
-        if (state.rosterLoading && !state.roster) {
-            wrap.appendChild(mk('p', { text: S('loading') }));
-            return wrap;
-        }
-        if (state.rosterError) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.rosterError) }));
-            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadRoster(state.rosterQuery); }));
-            return wrap;
-        }
-        if (!state.roster || state.roster.rows.length === 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('empty_roster') }));
-            return wrap;
-        }
-
-        var table = mk('table', { class: 'k9tablet-table' });
-        var thead = mk('thead');
-        var headRow = mk('tr');
-        [S('column_name'), S('column_citizenid'), S('column_department'), S('column_certified'), S('column_actions')].forEach(function (h) {
-            headRow.appendChild(mk('th', { text: h }));
-        });
-        thead.appendChild(headRow);
-        table.appendChild(thead);
-        var tbody = mk('tbody');
-        for (var i = 0; i < state.roster.rows.length; i++) {
-            var row = state.roster.rows[i];
-            var tr = mk('tr');
-            tr.appendChild(mk('td', { text: row.name }));
-            tr.appendChild(mk('td', { text: row.citizenid }));
-            tr.appendChild(mk('td', { text: row.departmentLabel }));
-            tr.appendChild(mk('td', { class: row.certified ? 'k9tablet-cert-status--yes' : 'k9tablet-cert-status--no', text: row.certified ? S('certified_yes') : S('certified_no') }));
-            var actionsTd = mk('td');
-            actionsTd.appendChild(mkButton(S('flow_select_label'), 'k9tablet-btn', (function (r) {
-                return function () { onSelected(r.citizenid, r.name); };
-            }(row))));
-            tr.appendChild(actionsTd);
-            tbody.appendChild(tr);
-        }
-        table.appendChild(tbody);
-        wrap.appendChild(table);
-        return wrap;
-    }
-
-    /** Standard "still loading / failed to load / not loaded yet" guard,
-     * shared by every flow step below that needs state.personSummary --
-     * SAME three-way shape buildPersonScreen() itself already uses, kept
-     * as a small shared helper here purely because five different steps
-     * across three flows need the identical guard, never a change to
-     * buildPersonScreen() itself. @returns {HTMLElement|null} an element
-     * to show INSTEAD of the step's real content, or null when
-     * state.personSummary is ready to read. */
-    function buildFlowPersonSummaryGuard() {
-        if (state.personSummaryLoading && !state.personSummary) {
-            return mk('p', { text: S('loading') });
-        }
-        if (state.personSummaryError && !state.personSummary) {
-            var wrap = mk('div', {});
-            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personSummaryError) }));
-            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonSummary(state.person.citizenid); }));
-            return wrap;
-        }
-        if (!state.personSummary) {
-            return mk('p', { text: S('loading') });
-        }
-        // See personSummaryLooksLikeNoRecord()'s own doc comment
-        // (buildPersonScreen()'s identical guard) -- same ghost-citizenid
-        // stopgap, applied here so a guided flow can't walk an operator
-        // through Onboarding/Offboarding/Problem-Player steps against a
-        // citizenid that was never real to begin with.
-        if (personSummaryLooksLikeNoRecord(state.personSummary)) {
-            return mk('p', { class: 'k9tablet-error-text', text: S('person_no_record_found') });
-        }
-        return null;
-    }
-
-    /** Capabilities + feature grants/blocks for the currently selected
-     * person -- shared by the Offboarding flow's own Clear Access step and
-     * the Problem-Player flow's own Take Action step (the SAME two admin
-     * controls the standalone Person screen already shows together for a
-     * high-command viewer, see buildPersonScreen()), so "revoke a
-     * permission" and "block a feature" never need two different pieces
-     * of UI depending on which flow got the operator there. */
-    function buildFlowPersonAccessControls() {
-        var wrap = mk('div', {});
-        if (!state.viewer.isHighCommand) return wrap;
-
-        wrap.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_capabilities_heading') }));
-        wrap.appendChild(buildCapabilityList(state.personSummary.permissions));
-
-        wrap.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_features_heading') }));
-        if (state.personFeaturesLoading && !state.personFeatures) {
-            wrap.appendChild(mk('p', { text: S('loading') }));
-        } else if (state.personFeaturesError && !state.personFeatures) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personFeaturesError) }));
-            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonFeatures(state.person.citizenid); }));
-        } else if (state.personFeatures) {
-            wrap.appendChild(buildPersonFeaturesSection());
-        } else {
-            wrap.appendChild(mk('p', { text: S('loading') }));
-        }
-        return wrap;
-    }
-
-    function buildFlowsHubScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen k9tablet-flows-hub' });
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flows_heading') }));
-        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flows_intro') }));
-
-        var grid = mk('div', { class: 'k9tablet-home-actions' });
-        grid.appendChild(buildHomeActionCard(S('flow_onboard_card_label'), S('flow_onboard_card_hint'), goToFlowOnboardScreen));
-        grid.appendChild(buildHomeActionCard(S('flow_offboard_card_label'), S('flow_offboard_card_hint'), goToFlowOffboardScreen));
-        grid.appendChild(buildHomeActionCard(S('flow_problem_card_label'), S('flow_problem_card_hint'), goToFlowProblemScreen));
-        grid.appendChild(buildHomeActionCard(S('flow_tuning_card_label'), S('flow_tuning_card_hint'), goToFlowTuningScreen));
-        wrap.appendChild(grid);
-
-        return wrap;
-    }
-
-    // ---- Onboarding: Select -> Certify -> K9 Role -> Tier & Specializations -> Feature Access -> Summary ----
-    //
-    // K9 ROLE STEP (owner-directed "BUILD THE STEP" pass) -- placed right
-    // after Certify, before Tier & Specializations: this flow's own copy
-    // promises "one guided pass instead of four separate mental steps",
-    // but until this pass it could never actually MAKE someone a K9 --
-    // that meant abandoning the flow for the standalone Person screen for
-    // the one role the owner cares most about. Uses the EXISTING
-    // tablet:assignK9Role path verbatim (buildFlowOnboardK9RoleControl()'s
-    // own doc comment) -- no new authority, only reaching authority that
-    // already existed from where this flow's own sequence says it
-    // belongs: right after deciding WHICH department/role a person holds,
-    // before any tier/specialization/feature-access decision downstream
-    // that assumes handler vs. K9. SKIPPABLE, deliberately -- most people
-    // onboarded are handlers, not K9s (buildFlowNavRow()'s own "Skip this
-    // step" vs "Next" label, gated on whether a ped model is even
-    // configured, exactly like every other optional step in this file).
-    // See buildFlowOnboardK9RoleSummaryLine() for how the Summary step
-    // reports what ACTUALLY happened here -- skipped, applied, or
-    // attempted-and-not-applied -- never what was merely attempted.
-
-    var FLOW_ONBOARD_STEP_KEYS = ['flow_onboard_step_select', 'flow_onboard_step_certify', 'flow_onboard_step_k9role', 'flow_onboard_step_tier', 'flow_onboard_step_features', 'flow_onboard_step_summary'];
-
-    function flowOnboardStepLabels() {
-        var out = [];
-        for (var i = 0; i < FLOW_ONBOARD_STEP_KEYS.length; i++) out.push(S(FLOW_ONBOARD_STEP_KEYS[i]));
-        return out;
-    }
-
-    function goFlowOnboardStep(index) {
-        state.flowStep = index;
-        render();
-    }
-
-    /** Wraps handlePersonCertAction() (UNCHANGED, same call) to additionally
-     * remember WHICH department a fresh 'certify' click targeted, so the
-     * next step can focus on that one department instead of re-listing
-     * every configured one. Every other kind passes straight through. */
-    function flowOnboardCertAction(kind, departmentKey, extra) {
-        if (kind === 'certify') {
-            state.flowOnboardDepartment = departmentKey;
-        }
-        handlePersonCertAction(kind, departmentKey, extra);
-    }
-
-    /** @returns {object|null} the active certification entry the Tier &
-     * Specializations / Summary steps should focus on: the department
-     * explicitly certified earlier THIS flow, or -- when nobody has
-     * clicked Certify yet -- the SOLE currently-active certification, if
-     * this person already held exactly one before the flow started (a
-     * handler who is being revisited only to add a tier/grant they were
-     * missing). Never guesses among more than one. */
-    function findFlowOnboardDepartmentEntry() {
-        var certs = (state.personSummary && state.personSummary.certifications) || [];
-        var key = state.flowOnboardDepartment;
-        if (!key) {
-            var activeOnes = [];
-            for (var j = 0; j < certs.length; j++) {
-                if (certs[j] && certs[j].active) activeOnes.push(certs[j]);
-            }
-            return activeOnes.length === 1 ? activeOnes[0] : null;
-        }
-        for (var i = 0; i < certs.length; i++) {
-            if (certs[i] && certs[i].departmentKey === key && certs[i].active) return certs[i];
-        }
-        return null;
-    }
-
-    /** THE HONESTY REQUIREMENT this whole section exists to satisfy --
-     * see this block's own header. Never claims "done"; reports the REAL,
-     * currently-loaded certification/tier/specialization/feature-grant
-     * state for this person, gap and all. */
-
-    /**
-     * Fires tablet:assignK9Role -- the EXACT SAME callback/payload
-     * buildRoleControl()'s own Assign button already sends on the
-     * standalone Person screen (THE SECURITY RULE at this file's own
-     * header: no new authorization path, no new mutation path -- this
-     * reaches EXISTING, already-tested server authority from a second
-     * place in the UI, nothing more). A DEDICATED wrapper, not the
-     * generic runMutation(), for the SAME reason flowOffboardRevertAppearance()
-     * just above is one: this step's own Summary needs to know a click
-     * actually happened here THIS pass. state.flowOnboardK9RoleAttempted
-     * is set the INSTANT the click fires, before the server has even
-     * answered -- "was this optional step used" (display-only framing,
-     * never a security fact) and "did it actually work" (re-derived from
-     * freshly reloaded server data, see buildFlowOnboardK9RoleSummaryLine())
-     * are deliberately two different questions, answered two different
-     * ways. Uses refreshPersonAndSelf() (not a bare loadPersonSummary())
-     * for the SAME reason buildRoleControl() does -- high command
-     * self-assigning the K9 role is a real, deliberately-supported path
-     * (owner's own instruction; see the test asserting it), and a
-     * self-assign must refresh state.myRecord/state.viewer too, not just
-     * state.personSummary, or Home/My Record would show a stale copy.
-     * @param {string} citizenid @param {string} modelName
-     */
-    function flowOnboardAssignK9Role(citizenid, modelName) {
-        if (state.pendingAction) return;
-        state.flowOnboardK9RoleAttempted = true;
-        state.pendingAction = true;
-        state.actionNotice = { kind: 'ok', text: S('action_working') };
-        render();
-
-        fetchNui('tablet:assignK9Role', { targetCitizenId: citizenid, modelName: modelName }).then(function (result) {
-            state.pendingAction = false;
-            if (result && result.ok === true) {
-                state.actionNotice = { kind: 'ok', text: (typeof result.message === 'string' && result.message.length > 0) ? result.message : S('action_succeeded') };
-            } else {
-                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
-            }
-            refreshPersonAndSelf(citizenid);
-        });
-    }
-
-    /**
-     * The K9 Role step's own action control -- NOT buildRoleControl()
-     * reused verbatim: that control also renders a Revert-to-Human
-     * button, which belongs to the OFFBOARDING flow's own Appearance step
-     * (this section's own header: "Offboarding: ... -> Appearance ->
-     * Summary"), not here -- Onboarding's job is turning someone INTO a
-     * K9, never back out. Same select-a-model UI, same tablet:assignK9Role
-     * callback, same S('role_assign_label')/S('role_assign_hint')/
-     * S('role_no_peds_configured') copy as the standalone Person screen's
-     * own control (buildRoleControl()) -- just without its second button,
-     * and firing through flowOnboardAssignK9Role() above instead of
-     * runMutation() directly, for this step's own honesty tracking.
-     * @returns {HTMLElement}
-     */
-    function buildFlowOnboardK9RoleControl() {
-        var wrap = mk('div', { class: 'k9tablet-role-control' });
-        var citizenid = state.person.citizenid;
-
-        if (!state.peds || state.peds.length === 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('role_no_peds_configured') }));
-            return wrap;
-        }
-
-        var row = mk('div', { class: 'k9tablet-role-row' });
-        var select = mk('select', { class: 'k9tablet-role-select' });
-        var firstModel = null;
-        for (var i = 0; i < state.peds.length; i++) {
-            var ped = state.peds[i];
-            if (!ped || typeof ped.model !== 'string' || ped.model.length === 0) continue;
-            if (firstModel === null) firstModel = ped.model;
-            var option = mk('option', { text: (typeof ped.label === 'string' && ped.label.length > 0) ? ped.label : ped.model });
-            option.setAttribute('value', ped.model);
-            select.appendChild(option);
-        }
-        if (firstModel !== null) select.value = firstModel;
-        row.appendChild(select);
-        row.appendChild(mkButton(S('role_assign_label'), 'k9tablet-btn', function () {
-            var modelName = select.value;
-            if (!modelName) return;
-            flowOnboardAssignK9Role(citizenid, modelName);
-        }, { disabled: state.pendingAction }));
-        wrap.appendChild(row);
-        wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('role_assign_hint') }));
-        return wrap;
-    }
-
-    /**
-     * THE HONESTY REQUIREMENT for the K9 Role step specifically (owner-
-     * directed "BUILD THE STEP" pass) -- reports what ACTUALLY happened,
-     * never what was merely attempted, and never what buildRoleControl()'s
-     * own generic success toast claimed. Exactly three outcomes, and only
-     * these three:
-     *   - the step was never used this pass at all
-     *     (state.flowOnboardK9RoleAttempted stays false from
-     *     resetFlowRunState()/flowChangePerson() until the step's own
-     *     Assign button is actually clicked) -> reported as SKIPPED, the
-     *     ordinary, unremarkable case (most people onboarded are handlers,
-     *     not K9s) -- never phrased as a warning or a failure;
-     *   - it WAS used, and the freshly reloaded
-     *     state.personSummary.assignedK9Model (server-derived -- see
-     *     server/tablet.lua's own doc comment on that field, added this
-     *     pass specifically so this line never has to trust a click) shows
-     *     an active assignment right now -> reports the model actually
-     *     applied;
-     *   - it WAS used but the reloaded record shows nothing active (the
-     *     server refused it, or -- for an online target -- the async
-     *     model-swap confirm from their own client had not yet landed by
-     *     the time this reloaded, or it was reverted again before reaching
-     *     this screen) -> reported as NOT applied, never as a false
-     *     success.
-     * Never reads state.actionNotice (the click's own claimed result) for
-     * this middle/bottom distinction -- only the re-loaded record.
-     * @returns {HTMLElement}
-     */
-    function buildFlowOnboardK9RoleSummaryLine() {
-        if (!state.flowOnboardK9RoleAttempted) {
-            return mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_summary_k9role_skipped') });
-        }
-        var model = (state.personSummary && typeof state.personSummary.assignedK9Model === 'string' && state.personSummary.assignedK9Model.length > 0)
-            ? state.personSummary.assignedK9Model
-            : null;
-        if (model) {
-            return mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_k9role_assigned_template'), { model: pedDisplayLabel(model) }) });
-        }
-        return mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_k9role_not_applied') });
-    }
-
-    function buildFlowOnboardSummary() {
-        var wrap = mk('div', {});
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_onboard_summary_heading') }));
-
-        // K9 ROLE (this pass) -- ALWAYS evaluated, deliberately BEFORE the
-        // department early-return just below: assigning the K9 role acts
-        // on the WHOLE person, not one department, so it must be reported
-        // honestly even when nobody was certified this pass at all (the
-        // owner's own "for the role I care most about, the flow can't do
-        // it" complaint this step exists to fix). See
-        // buildFlowOnboardK9RoleSummaryLine()'s own doc comment.
-        wrap.appendChild(buildFlowOnboardK9RoleSummaryLine());
-
-        var dept = findFlowOnboardDepartmentEntry();
-        if (!dept) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_not_certified') }));
-            return wrap;
-        }
-
-        wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_certified_template'), { department: dept.departmentLabel }) }));
-
-        if (dept.tier) {
-            wrap.appendChild(mk('p', { text: formatTemplate(S('flow_onboard_summary_tier_template'), { tier: tierDisplayLabel(dept.tier) }) }));
-        } else {
-            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_no_tier') }));
-        }
-
-        var specCount = Array.isArray(dept.specializations) ? dept.specializations.length : 0;
-        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_onboard_summary_specializations_template'), { count: specCount }) }));
-
-        var features = (state.personFeatures && state.personFeatures.features) || [];
-        var requireGrantFeatures = features.filter(function (f) { return f && f.requiresGrant === true && f.globallyEnabled !== false; });
-        if (requireGrantFeatures.length === 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_summary_features_none_required') }));
-        } else {
-            var grantedNow = 0;
-            var grantedAtBaseline = 0;
-            var baselineGranted = (state.flowBaseline && state.flowBaseline.featureGranted) || {};
-            for (var i = 0; i < requireGrantFeatures.length; i++) {
-                if (requireGrantFeatures[i].granted) grantedNow++;
-                if (baselineGranted[requireGrantFeatures[i].key]) grantedAtBaseline++;
-            }
-            var grantedThisPass = grantedNow - grantedAtBaseline > 0 ? grantedNow - grantedAtBaseline : 0;
-            var stillMissing = requireGrantFeatures.length - grantedNow;
-            if (grantedThisPass > 0) {
-                wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_features_granted_template'), { count: grantedThisPass }) }));
-            }
-            if (stillMissing > 0) {
-                wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_onboard_summary_features_still_missing_template'), { count: stillMissing }) }));
-            }
-        }
-
-        return wrap;
-    }
-
-    function buildFlowOnboardScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_onboard_heading') }));
-        wrap.appendChild(buildFlowStepNav(flowOnboardStepLabels(), state.flowStep, goFlowOnboardStep));
-
-        var body = mk('div', { class: 'k9tablet-flow-step-body' });
-
-        if (state.flowStep === 0 || !state.person) {
-            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
-                flowSelectPerson(citizenid, name);
-                goFlowOnboardStep(1);
-            }));
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        wrap.appendChild(buildFlowPersonContext());
-
-        var guard = buildFlowPersonSummaryGuard();
-        if (guard) {
-            body.appendChild(guard);
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        ensureFlowBaseline();
-        var canCertify = state.viewer.effectivePermissions.indexOf('k9.certify') !== -1;
-
-        if (state.flowStep === 1) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_certify_intro') }));
-            body.appendChild(buildCertificationList(state.personSummary.certifications, canCertify ? flowOnboardCertAction : null));
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(0); }, onNext: function () { goFlowOnboardStep(2); }, hasAction: true }));
-        } else if (state.flowStep === 2) {
-            // K9 ROLE (this pass) -- see this section's own header
-            // ("Onboarding: Select -> Certify -> K9 Role -> Tier &
-            // Specializations -> Feature Access -> Summary") and
-            // buildFlowOnboardK9RoleControl()'s own doc comment. Placed
-            // right after Certify: an operator has just decided WHICH
-            // department/role this person holds, so deciding whether they
-            // are the dog or the handler is the natural next question,
-            // before any tier/specialization/feature-access decision that
-            // assumes one or the other.
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_k9role_intro') }));
-            body.appendChild(buildFlowOnboardK9RoleControl());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(1); }, onNext: function () { goFlowOnboardStep(3); }, hasAction: !!(state.peds && state.peds.length > 0) }));
-        } else if (state.flowStep === 3) {
-            var dept = findFlowOnboardDepartmentEntry();
-            if (!dept) {
-                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_pick_department_first') }));
-            } else {
-                body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_tier_intro') }));
-                body.appendChild(buildCertificationDetail(dept, canCertify ? flowOnboardCertAction : null));
-            }
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(2); }, onNext: function () { goFlowOnboardStep(4); }, hasAction: !!dept }));
-        } else if (state.flowStep === 4) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_features_intro') }));
-            if (state.personFeaturesLoading && !state.personFeatures) {
-                body.appendChild(mk('p', { text: S('loading') }));
-            } else if (state.personFeaturesError && !state.personFeatures) {
-                body.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personFeaturesError) }));
-                body.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonFeatures(state.person.citizenid); }));
-            } else if (state.personFeatures) {
-                body.appendChild(buildPersonFeaturesSection());
-            } else {
-                body.appendChild(mk('p', { text: S('loading') }));
-            }
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(3); }, onNext: function () { goFlowOnboardStep(5); }, hasAction: true }));
-        } else if (state.flowStep === 5) {
-            body.appendChild(buildFlowOnboardSummary());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(4); }, isLast: true, onFinish: goToFlowsScreen }));
-        }
-
-        wrap.appendChild(body);
-        return wrap;
-    }
-
-    // ---- Offboarding: Select -> Decertify -> Clear Access -> Appearance -> Summary ----
-
-    var FLOW_OFFBOARD_STEP_KEYS = ['flow_offboard_step_select', 'flow_offboard_step_decertify', 'flow_offboard_step_access', 'flow_offboard_step_appearance', 'flow_offboard_step_summary'];
-
-    function flowOffboardStepLabels() {
-        var out = [];
-        for (var i = 0; i < FLOW_OFFBOARD_STEP_KEYS.length; i++) out.push(S(FLOW_OFFBOARD_STEP_KEYS[i]));
-        return out;
-    }
-
-    function goFlowOffboardStep(index) {
-        state.flowStep = index;
-        render();
-    }
-
-    /** Fires tablet:revertK9Ped -- the SAME callback/payload
-     * buildRoleControl()'s own Revert to Human button already sends, not a
-     * new one. A dedicated (rather than runMutation()-based) wrapper ONLY
-     * because this ONE step also needs to know, from the server's own
-     * `ok:true`, whether to set state.flowOffboardAppearanceReverted for
-     * an honest summary -- runMutation()'s shared onSettled callback never
-     * receives that result, and changing its signature would touch every
-     * other call site on this page for one flow's own summary line. */
-    function flowOffboardRevertAppearance() {
-        if (state.pendingAction) return;
-        state.pendingAction = true;
-        state.actionNotice = { kind: 'ok', text: S('action_working') };
-        render();
-
-        fetchNui('tablet:revertK9Ped', { targetCitizenId: state.person.citizenid }).then(function (result) {
-            state.pendingAction = false;
-            if (result && result.ok === true) {
-                state.actionNotice = { kind: 'ok', text: (typeof result.message === 'string' && result.message) || S('action_succeeded') };
-                state.flowOffboardAppearanceReverted = true;
-            } else {
-                // Same per-code mapping runMutation() uses (mutationErrorText,
-                // covers this exact callback's own 'no_active_assignment'/
-                // 'no_fallback_configured'/'denied'/'rate_limited'/'db_error'
-                // outcomes) rather than the generic action_failed line this
-                // used before -- see that function's own doc comment.
-                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
-            }
-            loadPersonSummary(state.person.citizenid);
-        });
-    }
-
-    function buildFlowOffboardSummary() {
-        var wrap = mk('div', {});
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_offboard_summary_heading') }));
-
-        var baseline = state.flowBaseline || { certByDept: {}, permissions: {}, featureGranted: {} };
-        var certs = (state.personSummary && state.personSummary.certifications) || [];
-        var decertifiedCount = 0;
-        var stillCertifiedCount = 0;
-        for (var i = 0; i < certs.length; i++) {
-            var c = certs[i];
-            if (!c || typeof c.departmentKey !== 'string') continue;
-            var wasActive = !!(baseline.certByDept[c.departmentKey] && baseline.certByDept[c.departmentKey].active);
-            if (wasActive && !c.active) decertifiedCount++;
-            if (c.active) stillCertifiedCount++;
-        }
-        wrap.appendChild(mk('p', { class: decertifiedCount > 0 ? 'k9tablet-feature-state k9tablet-feature-state--available' : 'k9tablet-muted', text: formatTemplate(S('flow_offboard_summary_decertified_template'), { count: decertifiedCount }) }));
-        if (stillCertifiedCount > 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_still_certified_template'), { count: stillCertifiedCount }) }));
-        }
-
-        var features = (state.personFeatures && state.personFeatures.features) || [];
-        var revokedFeatures = 0;
-        var remainingFeatures = 0;
-        for (var j = 0; j < features.length; j++) {
-            var f = features[j];
-            if (!f || typeof f.key !== 'string') continue;
-            var wasGranted = !!baseline.featureGranted[f.key];
-            if (wasGranted && !f.granted) revokedFeatures++;
-            if (f.granted) remainingFeatures++;
-        }
-        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_offboard_summary_features_revoked_template'), { count: revokedFeatures }) }));
-        if (remainingFeatures > 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_features_remaining_template'), { count: remainingFeatures }) }));
-        }
-
-        var perms = (state.personSummary && state.personSummary.permissions) || [];
-        var permsSet = {};
-        for (var k = 0; k < perms.length; k++) { if (typeof perms[k] === 'string') permsSet[perms[k]] = true; }
-        var revokedPerms = 0;
-        var remainingPerms = 0;
-        for (var permKey in baseline.permissions) {
-            if (Object.prototype.hasOwnProperty.call(baseline.permissions, permKey) && !permsSet[permKey]) revokedPerms++;
-        }
-        for (var pk in permsSet) { if (Object.prototype.hasOwnProperty.call(permsSet, pk)) remainingPerms++; }
-        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_offboard_summary_permissions_revoked_template'), { count: revokedPerms }) }));
-        if (remainingPerms > 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_permissions_remaining_template'), { count: remainingPerms }) }));
-        }
-
-        if (state.flowOffboardAppearanceReverted) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: S('flow_offboard_summary_reverted') }));
-        } else {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_offboard_summary_not_reverted') }));
-        }
-
-        return wrap;
-    }
-
-    function buildFlowOffboardScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_offboard_heading') }));
-        wrap.appendChild(buildFlowStepNav(flowOffboardStepLabels(), state.flowStep, goFlowOffboardStep));
-
-        var body = mk('div', { class: 'k9tablet-flow-step-body' });
-
-        if (state.flowStep === 0 || !state.person) {
-            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
-                flowSelectPerson(citizenid, name);
-                goFlowOffboardStep(1);
-            }));
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        wrap.appendChild(buildFlowPersonContext());
-
-        var guard = buildFlowPersonSummaryGuard();
-        if (guard) {
-            body.appendChild(guard);
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        ensureFlowBaseline();
-        var canCertify = state.viewer.effectivePermissions.indexOf('k9.certify') !== -1;
-
-        if (state.flowStep === 1) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_decertify_intro') }));
-            var activeCerts = (state.personSummary.certifications || []).filter(function (c) { return c && c.active; });
-            if (activeCerts.length === 0) {
-                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_offboard_no_active_certs') }));
-            } else {
-                body.appendChild(buildCertificationList(activeCerts, canCertify ? handlePersonCertAction : null));
-            }
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(0); }, onNext: function () { goFlowOffboardStep(2); }, hasAction: activeCerts.length > 0 }));
-        } else if (state.flowStep === 2) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_access_intro') }));
-            body.appendChild(buildFlowPersonAccessControls());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(1); }, onNext: function () { goFlowOffboardStep(3); }, hasAction: true }));
-        } else if (state.flowStep === 3) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_appearance_intro') }));
-            body.appendChild(mkConfirmButton(S('role_revert_label'), 'k9tablet-btn k9tablet-btn--danger', flowOffboardRevertAppearance, { disabled: state.pendingAction }));
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(2); }, onNext: function () { goFlowOffboardStep(4); }, hasAction: true }));
-        } else if (state.flowStep === 4) {
-            body.appendChild(buildFlowOffboardSummary());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
-        }
-
-        wrap.appendChild(body);
-        return wrap;
-    }
-
-    // ---- Problem Player: Select -> Review Record -> Audit Trail -> Take Action -> Summary ----
-
-    var FLOW_PROBLEM_STEP_KEYS = ['flow_problem_step_select', 'flow_problem_step_review', 'flow_problem_step_audit', 'flow_problem_step_act', 'flow_problem_step_summary'];
-    var FLOW_PROBLEM_AUDIT_STEP = 2;
-
-    function flowProblemStepLabels() {
-        var out = [];
-        for (var i = 0; i < FLOW_PROBLEM_STEP_KEYS.length; i++) out.push(S(FLOW_PROBLEM_STEP_KEYS[i]));
-        return out;
-    }
-
-    /**
-     * "Carry context between steps" -- the citizenid picked in Select is
-     * carried straight into the Audit Trail form (state.auditMode/
-     * state.auditCitizenId, the SAME fields the standalone Audit tab
-     * reads/writes) so the operator never retypes it. Guarded on the
-     * citizenid actually DIFFERING from what is already there -- not
-     * "every time this step is entered" -- so revisiting this step (Back,
-     * then a step button) never silently overwrites a mode/value/result
-     * the operator has since changed by hand, matching this page's own
-     * established "typed field values are left alone on a tab
-     * re-visit" convention (see buildAuditModeSwitch()'s own comment).
-     * @param {number} index
-     */
-    function goFlowProblemStep(index) {
-        if (index === FLOW_PROBLEM_AUDIT_STEP && state.person && state.auditCitizenId !== state.person.citizenid) {
-            state.auditMode = 'cert';
-            state.auditCitizenId = state.person.citizenid;
-            state.auditResult = null;
-            state.auditError = null;
-        }
-        state.flowStep = index;
-        render();
-    }
-
-    function buildFlowProblemSummary() {
-        var wrap = mk('div', {});
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_problem_summary_heading') }));
-
-        if (state.auditResult && Array.isArray(state.auditResult.rows)) {
-            wrap.appendChild(mk('p', { text: formatTemplate(S('flow_problem_summary_audit_ran_template'), { mode: auditModeLabel(state.auditMode), count: state.auditResult.rows.length }) }));
-        } else {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_problem_summary_audit_not_run') }));
-        }
-
-        var baseline = state.flowBaseline || { featureBlocked: {}, permissions: {} };
-        var features = (state.personFeatures && state.personFeatures.features) || [];
-        var newlyBlocked = 0;
-        for (var i = 0; i < features.length; i++) {
-            var f = features[i];
-            if (!f || typeof f.key !== 'string') continue;
-            if (f.blocked && !baseline.featureBlocked[f.key]) newlyBlocked++;
-        }
-
-        var perms = (state.personSummary && state.personSummary.permissions) || [];
-        var permsSet = {};
-        for (var j = 0; j < perms.length; j++) { if (typeof perms[j] === 'string') permsSet[perms[j]] = true; }
-        var revokedPerms = 0;
-        for (var permKey in baseline.permissions) {
-            if (Object.prototype.hasOwnProperty.call(baseline.permissions, permKey) && !permsSet[permKey]) revokedPerms++;
-        }
-
-        if (newlyBlocked === 0 && revokedPerms === 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_problem_summary_no_actions') }));
-        } else {
-            if (newlyBlocked > 0) {
-                wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--blocked', text: formatTemplate(S('flow_problem_summary_features_blocked_template'), { count: newlyBlocked }) }));
-            }
-            if (revokedPerms > 0) {
-                wrap.appendChild(mk('p', { text: formatTemplate(S('flow_problem_summary_permissions_revoked_template'), { count: revokedPerms }) }));
-            }
-        }
-
-        return wrap;
-    }
-
-    function buildFlowProblemScreen() {
-        var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
-        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_problem_heading') }));
-        wrap.appendChild(buildFlowStepNav(flowProblemStepLabels(), state.flowStep, goFlowProblemStep));
-
-        var body = mk('div', { class: 'k9tablet-flow-step-body' });
-
-        if (state.flowStep === 0 || !state.person) {
-            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
-                flowSelectPerson(citizenid, name);
-                goFlowProblemStep(1);
-            }));
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        wrap.appendChild(buildFlowPersonContext());
-
-        var guard = buildFlowPersonSummaryGuard();
-        if (guard) {
-            body.appendChild(guard);
-            wrap.appendChild(body);
-            return wrap;
-        }
-
-        ensureFlowBaseline();
-
-        if (state.flowStep === 1) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_review_intro') }));
-            body.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_certifications_heading') }));
-            body.appendChild(buildCertificationList(state.personSummary.certifications, null));
-            body.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_xp_heading') }));
-            body.appendChild(mk('p', { class: 'k9tablet-xp-line', text: xpLine(state.personSummary.xp, state.personSummary.tierLabel) }));
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(0); }, onNext: function () { goFlowProblemStep(2); }, hasAction: false }));
-        } else if (state.flowStep === FLOW_PROBLEM_AUDIT_STEP) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_audit_intro') }));
-            if (!state.auditEnabled) {
-                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_disabled_note') }));
-            }
-            body.appendChild(buildAuditModeSwitch());
-            body.appendChild(buildAuditForm());
-            body.appendChild(buildAuditResults());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(1); }, onNext: function () { goFlowProblemStep(3); }, hasAction: true }));
-        } else if (state.flowStep === 3) {
-            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_act_intro') }));
-            body.appendChild(buildFlowPersonAccessControls());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(FLOW_PROBLEM_AUDIT_STEP); }, onNext: function () { goFlowProblemStep(4); }, hasAction: true }));
-        } else if (state.flowStep === 4) {
-            body.appendChild(buildFlowProblemSummary());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
-        }
-
-        wrap.appendChild(body);
-        return wrap;
-    }
-
-    // ---- Tuning: Overview -> Feature Toggles -> Tunables -> Certification Tiers -> XP Thresholds -> Shop Items ----
-    //
-    // UNLIKE the three person-centric flows above, this one is a TOUR, not
-    // a chain of dependent actions -- there is no "person" to carry, and
-    // no single completion state, only five independent settings screens
-    // an operator visits in sequence. Every step embeds the REAL,
-    // UNMODIFIED existing screen/section builder (buildRuntimeFeatures
-    // Section/buildRuntimeTunablesSection/buildCertTiersScreen/
-    // buildXpTiersScreen/buildShopItemsSection) -- so every edit made from
-    // inside this flow is the identical call, with the identical
-    // authorization, as making it from that screen's own standalone tab.
-    // The Overview step answers "here is what I have changed" HONESTLY,
-    // by reading fields the SERVER already reports (`overridden` on every
-    // runtime feature/tunable -- server/runtimecontrol.lua's own PART 1/1B)
-    // rather than by tracking edits client-side, which could drift from
-    // what the server actually holds the moment two operators or two
-    // tabs touch the same value.
 
     var FLOW_TUNING_STEP_KEYS = ['flow_tuning_step_overview', 'flow_tuning_step_features', 'flow_tuning_step_tunables', 'flow_tuning_step_tiers', 'flow_tuning_step_xp', 'flow_tuning_step_shop'];
 
@@ -11479,7 +10492,10 @@
 
     function buildFlowTuningScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
+        // NO "back to flows" LINK: this screen IS the tab now, so the link
+        // would have pointed at the hub that used to hold four cards and
+        // no longer exists. The tab bar above is the way out, same as
+        // every other top-level screen.
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_tuning_heading') }));
         wrap.appendChild(buildFlowStepNav(flowTuningStepLabels(), state.flowStep, goFlowTuningStep));
 
@@ -11508,7 +10524,12 @@
             onNext: state.flowStep < 5 ? (function (step) { return function () { goFlowTuningStep(step + 1); }; }(state.flowStep)) : null,
             hasAction: false,
             isLast: state.flowStep === 5,
-            onFinish: goToFlowsScreen,
+            // Finishing returns to this flow's own Overview (step 0), which
+            // is the honest "here is what you have changed" summary. It
+            // used to return to the flows hub; with the hub gone, leaving
+            // the tab entirely would be a surprising thing for a "Finish"
+            // button to do.
+            onFinish: function () { goFlowTuningStep(0); },
         }));
 
         wrap.appendChild(body);
