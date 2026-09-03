@@ -4,7 +4,19 @@ Author: audit pass · Date: 2026-09-03
 Scope: `html/tablet.js`, `html/tablet-catalog.js`, `html/tablet.css`,
 `client/tablet.lua`, `server/tablet.lua`.
 
-**This is a planning document. No behaviour was changed while producing it.**
+> **STATUS: items A–H are DONE.** The owner asked for all eight
+> recommendations and for none of the five §6 "deliberately NOT
+> recommended" items. Both were honoured. Item I was never a
+> recommendation — it asked for a re-measure and an owner decision, and
+> that measurement is now in §8 below, still awaiting that decision.
+>
+> Two of this document's own claims turned out to be wrong when the code
+> was read properly, and both are corrected in place below rather than
+> quietly executed: the §3 search-bar inventory over-counted by two, and
+> item E's premise was false. See §8.
+
+**This was a planning document. Sections 1–7 describe the tablet as it was
+before the work; §8 records what actually landed.**
 
 **Nothing in here adds a feature, a command, an export, an event, or a
 config option.** Every item is a merge, a removal, or a re-route to
@@ -296,3 +308,91 @@ cross-check in particular is what will catch a merged screen that left a
 string behind, and the three-way string contract means every removal has
 to happen in `tablet-catalog.js`, `client/tablet.lua` and
 `locales/en.json` together.
+
+---
+
+## 8. What actually landed, and what this document got wrong
+
+Written after implementing A–H, against the real tree.
+
+### Measured again, the same way as §1
+
+| | Before | After |
+|---|---|---|
+| Tabs (High Command) | 19 | **11** |
+| Tabs (ordinary handler) | 6 | **3** |
+| Screens | 21 | 15 |
+| Text inputs | 44 | 42 |
+| Player-visible strings | ~1,000 | **976** |
+
+The eleven tabs an administrator now sees: My Record, Partnerships, Guide,
+Command Console, Guided Flows, Tablet Theme, Catalogs, Personnel Roster,
+K9 Supply Shop, Runtime Control, Audit Trail.
+
+An ordinary handler sees three: **My Record, Partnerships, Guide.**
+
+### Two things this document got wrong
+
+Both were found by reading the code before acting on the recommendation,
+and both are recorded here rather than quietly fixed, because a plan that
+hides its own errors is worse than one that never made them.
+
+**§3's inventory over-counted the search boxes.** Two of the eleven, listed
+as "Roster — open by ID bar" and "Roster — search", do not exist: the
+Roster screen has no input at all. Those two line numbers were the Guided
+Flows person picker, counted twice. The true figure was nine, of which two
+are the Audit log query that §3 itself excluded.
+
+**Item E's premise was false.** It said the Partnerships tab's admin
+section was purely a second door to something the Person screen already
+rendered, so the whole section could go. It was not: the Person screen
+shows the CURRENT partnership, but the history list and the Force End
+button existed only in that admin section. Executing the item as written
+would have removed a real capability. The section was moved onto the Person
+screen instead, and only the duplicate lookup was deleted — which is what
+the item was actually after.
+
+One consequence for §3's arithmetic: after E and D, the only duplicate
+person-finders left are the Guided Flows picker's two, and removing those
+while keeping Flows would leave the flows unable to select a person at all.
+So they are bound to item I. The Command Console keeps its three, because
+each reaches a genuinely different set — the certified roster, any citizen
+id (the only door for a narrowed `k9.certify`/`k9.givexp` viewer), and the
+online-players list — and merging them needs guessing logic that does not
+exist today.
+
+### A regression this work introduced, and caught
+
+Merging Help and Commands spliced out the router branch between them, which
+was the Partnerships screen — the tab dead-ended into the fallback. Caught
+by `tablet_partnerships_spec.js` in the same change and fixed before the
+commit. Recorded because it is the exact hazard of this kind of work.
+
+### Item I: the re-measure this plan asked for
+
+Now that A–H have landed, here is what each Guided Flow actually contains,
+read from the source:
+
+| Flow | What it is built from |
+|---|---|
+| Set Up a New Handler | person picker → certification list/detail → role control → person features → summary |
+| Offboard | person picker → certification list → access controls → audit → summary |
+| Problem Player | person picker → access controls → audit → summary |
+| Tune the Server | runtime features → runtime tunables → cert tiers → XP ranks → shop items |
+
+**The first three are now, step for step, the Person screen.** Every part
+they sequence is rendered on that one screen, in that order, for whoever is
+open on it. They amount to "open the person from Console, then work down
+the page" — with their own person picker bolted on, which is the last pair
+of duplicate search boxes on the tablet.
+
+**The fourth is thinner but not empty.** Its five steps used to span five
+tabs; after F and G they span three (Runtime Control, Catalogs, K9 Supply
+Shop). It still sequences work across tabs, which the other three no longer
+do.
+
+**This remains the owner's call, as §4's item I said.** Retiring the three
+person-shaped flows would remove the last two duplicate search boxes, one
+tab and roughly 90 strings, and would cost a walkthrough that a
+never-certified-anyone operator might still want. Keeping the Tuning flow
+alone is a coherent middle: it is the one that still crosses screens.
