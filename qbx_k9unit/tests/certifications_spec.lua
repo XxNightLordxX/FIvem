@@ -1052,6 +1052,60 @@ t.test('GrantCertification: self-certification is rejected when Config.AllowSelf
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.self_certification_disabled_hint'), 'error'))
 end)
 
+-- ======================================================================
+-- THE OWNER'S OWN LIVE REPORT, END TO END
+--
+-- "i am rank 8 on the police job and it says i am not high command to
+-- certify myself with /k9certify" -- on a STOCK install, which ships
+-- Config.Database.enabled = false.
+--
+-- The cause was in server/permissions.lua (memory-only mode being read as
+-- "cannot verify blocks", so block.k9.certify came back TRUE for
+-- everyone) and permissions_spec.lua's own CASE 0 block pins that unit
+-- directly. What NOTHING pinned was the whole journey: a boss-ranked
+-- officer, nobody having blocked them, actually getting certified by
+-- pressing the thing they pressed.
+--
+-- Those are different failures. The unit test would still pass if some
+-- later change broke self-certification for a boss somewhere further down
+-- GrantCertification -- proximity, eligibility, the self-cert branch --
+-- and the owner would be looking at the same refusal message again. This
+-- asserts the outcome he actually cared about.
+-- ======================================================================
+
+t.test('OWNER REPORT, END TO END: a boss-ranked officer self-certifies successfully on a stock install with nothing blocked', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CHIEF', { name = 'police', isboss = true, grade = { level = 8 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    -- Stock install: no permission rows exist at all, so HasPermission
+    -- answers false for EVERY key -- including block.k9.certify. This is
+    -- exactly the state the CASE 0 fix restored; before it, this same
+    -- accessor returned true for the block key and refused the request.
+    f.env.HasPermission = function() return false end
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+
+    t.isFalse(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'),
+        'THE REPORTED BUG: a rank-8 boss must never be told they are not authorized to certify on a stock install')
+    t.isFalse(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.self_certification_disabled_hint'), 'error'),
+        'and Config.AllowSelfCertification ships true, so self-certification must not be refused either')
+end)
+
+t.test('OWNER REPORT, CONTROL: reintroducing the defect (block.k9.certify reading true, as memory-mode used to) refuses that same officer', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CHIEF', { name = 'police', isboss = true, grade = { level = 8 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    -- The pre-fix behaviour, reproduced exactly: memory-only mode made the
+    -- block namespace fail closed, so this key answered true for a
+    -- citizenid nobody had ever blocked.
+    f.env.HasPermission = function(_, key) return key == 'block.k9.certify' end
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'),
+        'proves the test above is really watching this path -- with the defect back, the same officer is refused again')
+end)
+
 t.test('GrantCertification: an offline target (not currently connected) is rejected -- grant requires an online target', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })

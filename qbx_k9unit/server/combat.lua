@@ -1276,14 +1276,6 @@ local COMBAT_REJECT_MESSAGES = {
     -- for longer than intended.
     implausible_movement = locale('combat.implausible_movement'),
     target_in_vehicle    = locale('combat.target_in_vehicle'),
-    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See
-    -- ValidateCombatRequest's own call site (immediately before its final
-    -- `return true`) and this file's header FILE-TO-FILE CONTRACT entry for
-    -- IsApprehensionWarned for the full writeup. Landed in locales/en.json
-    -- FIRST (this file's own established "land the key, then swap the
-    -- mapping in" discipline -- tier_capability_denied's own history above
-    -- names why), so this table never risks referencing a key that does not
-    -- exist yet.
     -- EXCLUSIVE BODY-CLAIM REGISTRY denial (server/bodyclaims.lua, this
     -- pass — see ValidateCombatRequest's own call site for the full
     -- writeup). Kept as an explicit mapping here, same "a reader of this
@@ -1318,7 +1310,16 @@ local COMBAT_FEATURE_DISPLAY_LABEL = {
 --- @param reason string?
 --- @param featureKey string? -- ONLY consulted for 'combat_blocked'/'combat_not_granted' below -- every other reason ignores it, so passing it unconditionally at every call site (this file's own convention now) is always safe.
 --- @return string
-local function CombatRejectMessage(reason, featureKey)
+--- @param reason string
+--- @param featureKey string|nil -- 'BiteAndHold'|'NonLethalTakedown'|'PropDragging'
+--- @param detail table|nil -- per-reason numbers the message can name:
+---   { remainingMs = number }   for 'on_cooldown'
+---   { observedSpeed = number } for 'not_fleeing'
+--- A TABLE RATHER THAN MORE POSITIONAL ARGUMENTS on purpose: each reason
+--- needs a different number, and two or three optional numbers in a row is
+--- the kind of signature where a caller eventually passes the right value
+--- in the wrong slot and the message quietly lies.
+local function CombatRejectMessage(reason, featureKey, detail)
     local label = COMBAT_FEATURE_DISPLAY_LABEL[featureKey] or featureKey or '?'
     if reason == 'combat_blocked' then
         return locale('combat.denied_blocked', label)
@@ -1326,6 +1327,69 @@ local function CombatRejectMessage(reason, featureKey)
     if reason == 'combat_not_granted' then
         return locale('combat.denied_not_granted', label)
     end
+
+    -- TWO REFUSALS THAT USED TO TELL THE PLAYER NOTHING ACTIONABLE, and
+    -- both land mid-pursuit, which is the worst moment to be given a
+    -- shrug. Resolved at call time (like the two denied_* cases above)
+    -- rather than out of the pre-resolved COMBAT_REJECT_MESSAGES table,
+    -- because both need a number the table cannot hold.
+    --
+    -- 'too_far' now names the range you have to be inside. Read from
+    -- Config.Combat.<feature>.range -- the SAME field every caller passes
+    -- into ValidateCombatRequest as its `rangeMeters` parameter, so the
+    -- message and the check can never disagree. (Note the mismatch in
+    -- names: the config key is `range`, the parameter it feeds is
+    -- `rangeMeters`. Reading `rangeMeters` off the config table, as a first
+    -- pass here did, silently found nothing and degraded to the generic
+    -- sentence forever.) Only used when the lookup produces a real
+    -- number, so a missing or malformed config still degrades cleanly
+    -- rather than printing "nilm".
+    --
+    -- Deliberately NOT the live distance: that would mean threading a
+    -- seventh return value out through all nineteen of
+    -- ValidateCombatRequest's `return false` paths, and the actionable
+    -- half is the range you need, not the gap you currently have.
+    if reason == 'too_far' then
+        local cfg = type(Config) == 'table' and type(Config.Combat) == 'table' and Config.Combat[featureKey]
+        local range = type(cfg) == 'table' and tonumber(cfg.range)
+        if range and range > 0 then
+            return locale('combat.too_far_within', string.format('%.1f', range))
+        end
+    end
+
+    -- 'on_cooldown' now says how many seconds are left. Rounded UP, so it
+    -- never reads "0s" while still refusing, and never promises a shorter
+    -- wait than the player actually has.
+    local remainingMs = type(detail) == 'table' and tonumber(detail.remainingMs)
+    if reason == 'on_cooldown' and remainingMs and remainingMs > 0 then
+        return locale('combat.on_cooldown_seconds', tostring(math.ceil(remainingMs / 1000)))
+    end
+
+    -- 'not_fleeing' USED TO BE THE MOST MYSTIFYING REFUSAL IN THE FILE, and
+    -- it lands mid-chase. The player presses takedown, the server samples
+    -- the target's position twice across speedSampleWindowMs, and only THEN
+    -- refuses -- so the button feels laggy and then says "the target does
+    -- not appear to be fleeing" about someone the player is watching run.
+    --
+    -- It now names what was measured and what was needed, so the refusal is
+    -- a fact about a speed rather than an opinion about intent. Both numbers
+    -- are already in scope at the one call site.
+    --
+    -- WORTH KNOWING, and NOT changed here because it is a balance decision:
+    -- the measurement is straight-line displacement between two samples, so
+    -- a suspect who turns a hard corner or circles inside that window reads
+    -- as slower than they are actually running, and can defeat the check
+    -- without ever slowing down.
+    local observed = type(detail) == 'table' and tonumber(detail.observedSpeed)
+    if reason == 'not_fleeing' and observed then
+        local cfg = type(Config) == 'table' and type(Config.Combat) == 'table' and Config.Combat.NonLethalTakedown
+        local needed = type(cfg) == 'table' and tonumber(cfg.minTargetSpeed)
+        if needed and needed > 0 then
+            return locale('combat.not_fleeing_speed',
+                string.format('%.1f', observed), string.format('%.1f', needed))
+        end
+    end
+
     return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
 end
 
@@ -2892,7 +2956,11 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     -- valid config and gets the safe fallback for an invalid one, for free.
     if BiteHoldCooldown.IsOnCooldown(src)
         or BiteHoldTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        -- The LONGER of the two waits -- telling the player about the one
+        -- that expires first would have them try again and be refused by
+        -- the other.
+        local waitMs = math.max(BiteHoldCooldown.RemainingMs(src), BiteHoldTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'BiteAndHold', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3102,7 +3170,8 @@ local function HandleTakedownRequest(src, targetNetId)
     -- request.
     if TakedownCooldown.IsOnCooldown(src)
         or TakedownTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        local waitMs = math.max(TakedownCooldown.RemainingMs(src), TakedownTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3145,7 +3214,8 @@ local function HandleTakedownRequest(src, targetNetId)
     local dtSeconds = Config.Combat.NonLethalTakedown.speedSampleWindowMs / 1000.0
     local observedSpeed = dtSeconds > 0 and (#(afterPos - basePos) / dtSeconds) or 0.0
     if observedSpeed < Config.Combat.NonLethalTakedown.minTargetSpeed then
-        NotifyPlayer(src, CombatRejectMessage('not_fleeing'), 'error')
+        NotifyPlayer(src, CombatRejectMessage('not_fleeing', 'NonLethalTakedown',
+            { observedSpeed = observedSpeed }), 'error')
         return
     end
 
@@ -3161,7 +3231,14 @@ local function HandleTakedownRequest(src, targetNetId)
         -- cooldowns during the wait above despite the pre-check. Fail
         -- closed rather than apply a takedown with an inconsistent
         -- cooldown state.
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        --
+        -- Says the wait here too. This is the rarest of the four cooldown
+        -- refusals, and the ONE most likely to feel like a bug from the
+        -- player's side: the pre-check passed, they waited out the speed
+        -- sample, and only then were refused. A silent "you must wait"
+        -- after that sequence reads as the takedown being broken.
+        local waitMs = math.max(TakedownCooldown.RemainingMs(src), TakedownTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', { remainingMs = waitMs }), 'error')
         return
     end
 
@@ -3523,7 +3600,8 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     -- requestBiteHold's own pair.
     if DragCooldown.IsOnCooldown(src)
         or DragTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        local waitMs = math.max(DragCooldown.RemainingMs(src), DragTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'PropDragging', { remainingMs = waitMs }), 'error')
         return
     end
 

@@ -3839,7 +3839,7 @@ local EXPECTED_TABLE_COLUMNS = {
     -- function's own header and DatabaseEnabled's own "SCHEMA COLLISION
     -- SAFETY NET" comment above for why a single wrong entry here is a
     -- resource-wide fail-closed event, not a small one.
-    k9_wellbeing                       = { 'citizenid', 'fatigue', 'mood', 'fear_stress', 'injury', 'hunger', 'thirst', 'updated_at' },
+    k9_wellbeing                       = { 'citizenid', 'fatigue', 'updated_at' },
 }
 
 --- Short, operator-facing phrase for each table in EXPECTED_TABLE_COLUMNS
@@ -3879,7 +3879,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_permission_key_audit            = 'the permission-key audit log',
     k9_dog_characters                  = 'admin-pinned "this citizenid is permanently a dog" records (/k9setdog, /k9removedog -- mana_policedogs feature parity) -- NOTE: while this table is missing, every currently-pinned dog character falls back to memory only for the rest of this session (nobody\'s actual K9 role/certification is affected either way -- this table has never decided whether a citizenid may act as a K9, only whether their dog form is pinned in place; see server/dogcharacter.lua\'s own header)',
     k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see docs/history/ROSTER_SPEC.md §8)',
-    k9_wellbeing                       = 'K9 fatigue/mood/fear-stress/injury/hunger/thirst -- NOTE: while this table is missing, every online K9\'s condition resets to fresh-and-uninjured on the next restart (nobody\'s actual certification/permission/feature access is affected either way -- see server/wellbeing.lua\'s own header "DATABASE PERSISTENCE")',
+    k9_wellbeing                       = 'K9 fatigue -- NOTE: while this table is missing, every online K9\'s fatigue resets to fully-rested on the next restart (nobody\'s actual certification/permission/feature access is affected either way -- see server/wellbeing.lua\'s own header "DATABASE PERSISTENCE")',
 }
 
 --- A table this resource treats as MISSING when the table it is listed

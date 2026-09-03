@@ -289,7 +289,6 @@ local function newTabletFixture(opts)
         ReleaseDrag = record('ReleaseDrag'), RequestDrag = record('RequestDrag'),
         IsPartnered = queryFn('IsPartnered', 'isPartnered'), BreakPartnership = record('BreakPartnership'),
         RequestPartnerUp = record('RequestPartnerUp'),
-        RequestRecall = record('RequestRecall'),
         IsFetchCarryEngaged = queryFn('IsFetchCarryEngaged', 'isFetchCarryEngaged'),
         ReleaseFetchBall = record('ReleaseFetchBall'), RequestThrowFetchBall = record('RequestThrowFetchBall'),
         RequestToggleK9PropAttachment = record('RequestToggleK9PropAttachment'),

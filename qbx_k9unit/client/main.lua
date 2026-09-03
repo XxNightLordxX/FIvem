@@ -261,16 +261,30 @@ end
 --- Command blocked the ability, the feature is off) because they pass
 --- this check and fall through to the real gate underneath.
 ---
---- DELIBERATELY LOCAL-ONLY, NO SERVER ROUND TRIP. This runs on a keypress,
---- which means it can run many times a second for every player on the
---- server at once. IsOwnModelK9() is a pure local model read (plus
---- client/appearance.lua's IsK9Role(), itself a locally-cached flag the
---- server pushes) -- it never awaits a callback, unlike HasK9Access(). A
---- player who is not a K9 therefore costs exactly one model comparison per
---- accidental keypress and generates no server traffic at all, which is
---- the whole point: the previous behavior had every player in the city
---- awaiting 'qbx_k9unit:server:hasK9Access' every time they changed camera
---- view.
+--- CHEAP ON A KEYPRESS, BUT NOT FREE -- and the difference is worth
+--- stating precisely, because an earlier version of this comment claimed
+--- "no server traffic at all" and that was simply not true.
+---
+--- This runs on a keypress, which means it can run many times a second for
+--- every player on the server at once. Two steps, in this order:
+---   1. IsOwnModelK9() -- a pure local model read, no callback, no cache.
+---      Whoever is currently wearing the K9 ped stops here.
+---   2. client/appearance.lua's IsK9Role() -- which DOES await
+---      'qbx_k9unit:server:hasK9Role', behind a 1-second TTL cache.
+--- So an ordinary citizen mashing a bound key costs one model comparison
+--- plus AT MOST ONE server callback per second, not one per keypress.
+---
+--- That is the real improvement over the behavior this fixed, where every
+--- player in the city awaited 'qbx_k9unit:server:hasK9Access' -- uncached
+--- -- on every single keypress, and got a refusal toast for it. One capped
+--- callback per second and no toast is a different thing from zero
+--- traffic; do not plan on this being free.
+---
+--- WHY THE TTL IS NOT SIMPLY LONGER: appearance.lua invalidates that cache
+--- when the ped model is swapped, which covers becoming or ceasing to be
+--- the dog -- but NOT a role granted or revoked server-side without a swap.
+--- A longer TTL would leave a freshly-certified player pressing a key that
+--- does nothing for the length of it. One second is the compromise.
 ---
 --- NOT A SECURITY BOUNDARY, same as IsOwnModelK9() above -- it decides
 --- whether to show a message, nothing more. Every action reached past it

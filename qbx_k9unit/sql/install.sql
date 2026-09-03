@@ -1703,12 +1703,20 @@ CREATE TABLE IF NOT EXISTS `k9_personnel` (
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS `k9_wellbeing` (
   `citizenid`   VARCHAR(50)  NOT NULL,
+  -- FATIGUE IS THE ONLY WELLBEING COLUMN. This table used to carry five
+  -- more -- mood, fear_stress, injury, hunger, thirst -- for subsystems
+  -- removed at the owner's request on 2026-09-02. A fresh install no
+  -- longer creates them.
+  --
+  -- AN EXISTING DATABASE KEEPS ITS OWN COPIES, on purpose: an unused
+  -- column costs nothing, and a migration that DROPs columns is
+  -- irreversible against live data. Nothing reads or writes them, and the
+  -- startup shape check no longer expects them, so they are inert. Drop
+  -- them by hand if you want the table tidy:
+  --   ALTER TABLE `k9_wellbeing`
+  --     DROP COLUMN `mood`, DROP COLUMN `fear_stress`, DROP COLUMN `injury`,
+  --     DROP COLUMN `hunger`, DROP COLUMN `thirst`;
   `fatigue`     DECIMAL(6,2) NOT NULL DEFAULT 100.00,
-  `mood`        DECIMAL(6,2) NOT NULL DEFAULT 100.00,
-  `fear_stress` DECIMAL(6,2) NOT NULL DEFAULT 0.00,
-  `injury`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
-  `hunger`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
-  `thirst`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
   `updated_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`citizenid`)

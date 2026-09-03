@@ -22,7 +22,7 @@ encryption, is what stops redistribution.
 **This is the one document for installing, configuring, and running this
 resource.** Everything about *playing* it — every command, what each one
 needs, and step-by-step walkthroughs for setting up a handler, running a
-search, and so on — lives in the K9 Command Tablet's own in-game Help tab
+search, and so on — lives in the K9 Command Tablet's own in-game Guide tab
 (`/k9tablet`), not here. This document covers what that tablet can't:
 getting the resource running in the first place, the decisions you need
 to make before real players touch it, and what to do if it misbehaves.
@@ -35,7 +35,7 @@ The full feature set, in brief, so nothing here is a surprise you find
 out about from a support ticket. All of these ship **on** by default
 unless noted; every one is an independent switch in `Config.Features`
 and can be turned off. Full command syntax for all of these is in the
-tablet's own Help tab, not here.
+tablet's own Guide tab, not here.
 
 - **Certification** — the access-control core: a supervisor certifies a
   department member as a K9 handler, or high command assigns the role
@@ -44,12 +44,14 @@ tablet's own Help tab, not here.
   day-to-day handler/K9 interactions.
 - **Tracking** (scent/blood/gunpowder trails), **search zones and
   contraband alerts**, **thermal/night vision**, **door interaction**.
-- **Combat**: Bite & Hold, Non-Lethal Takedown, Prop Dragging,
-  Handler-Down Defense — see "Before you trust the combat features in
-  production" below before relying on these.
-- **Wellbeing**: mood, fatigue, fear/stress, distraction, injury/limping
-  — each independently switched, each with a small movement-speed
-  effect when it's low.
+- **Combat**: Bite & Hold, Non-Lethal Takedown, Prop Dragging — see
+  "Before you trust the combat features in production" below before
+  relying on these.
+- **Wellbeing**: fatigue — a sustained sprint decays a value that
+  reduces top speed until the K9 rests. It is the only wellbeing system
+  this resource ships. Mood, fear/stress, distraction and injury/limping
+  were removed at the owner's request on 2026-09-02 and are not switched
+  off but gone: there are no `Config.Features` keys for them.
 - **XP/progression, K9 inventory, a K9 medkit, a vitality HUD, prop
   attachments (a cosmetic vest), fetch, a deployable kennel, a K9 supply
   shop, and a leaderboard.**
@@ -58,42 +60,31 @@ tablet's own Help tab, not here.
   limitations" below for the one real gap in its anti-farming guard) and
   a partner camera-feed toggle (full-screen view-switch to your
   partner's viewpoint, not a literal picture-in-picture — see below).
-- **Four reaction/"hunting" features, easy to miss because they're new
-  enough that even this resource's own internal history file hadn't
-  caught up on them — all shipped, on by default, and worth knowing
-  about specifically:**
+- **Two reaction/"hunting" features, easy to miss, both shipped and on
+  by default, and worth knowing about specifically:**
   - **Find Alerts** — a search or completed track makes the K9
     automatically sit and bark, reacting differently depending on the
     outcome. No manual trigger, and it doesn't depend on the XP system
     being on.
-  - **Scent Trail Hunt was removed** (owner-approved — judged genuinely
-    redundant with the scent-tracking "follow a fading signal"
-    mechanic above, which already covers the same interaction shape
-    against a real destination instead of a made-up one). It is
-    **not** one of the four below, and it is not merely toggled off:
-    `Config.Features.ScentTrailHunt` no longer exists in `config.lua`
-    at all, so `/k9nosehunt` cannot be turned on by editing config —
-    see that key's own former spot in `config.lua`'s `Config.Features`
-    comment for the full reasoning and exactly how to bring it back.
   - **Pursuit Sprint** — a short, cooldown-gated burst of genuinely
     extra speed for a certified K9 chasing a *wanted* target only.
     Every speed source this resource has (breed, XP tier, fatigue,
     this burst) is clamped to a combined maximum, so it can't be
     stacked into something an escaping target has no real chance
     against.
-  - **Scent Lineup** — several players line up and must all explicitly
-    accept; the server secretly picks one and reveals nothing until the
-    K9 commits a single final guess. No XP, since the outcome is random.
-  - **SAR Calls** — a hidden search-and-rescue target (a missing person
-    or lost property); the K9 reacts more strongly on approach. Always
-    resolves as a rescue, never an arrest, and the "target" is always
-    scenery, never a real player without their consent.
-  - All four need an individual grant from high command on top of their
-    global switch by default (see `Config.FeatureControl.RequireGrant`
-    in "The command tablet" section below) — nobody has any of them
-    until high command hands them out one person at a time.
-- **A training mode** — a practice sandbox against a scripted dummy;
-  touches no real player, no real inventory, and awards zero XP.
+  - Neither needs an individual grant out of the box:
+    `Config.FeatureControl.RequireGrant` ships **empty**, so every feature
+    whose global switch is on is available to every certified handler.
+    Add a feature name to that table if you want high command to hand it
+    out one person at a time instead.
+
+**Removed, and not merely switched off.** Scent Trail Hunt, Scent Lineup,
+SAR Calls, training mode, Handler-Down Defense, the danger-warn and
+apprehension-announcement alerts, the "call your K9 off" recall, and the
+mood/fear-stress/distraction/injury wellbeing systems were all taken out at
+the owner's request. There are no `Config.Features` keys for any of them, so
+none can be brought back by editing config — restoring one means restoring
+its code.
 
 ---
 
@@ -300,7 +291,7 @@ and step 2 of "Your first session" below) — you can check almost everything
 by yourself: reaching High Command (a
 department boss already qualifies, and so does anyone at the configured
 `highCommandGrade`), self-certifying (on by default), turning into the
-K9, opening `/k9tablet`, reading its Help tab, and using every
+K9, opening `/k9tablet`, reading its Guide tab, and using every
 single-player ability (search, tracking, vision, wellbeing, the radial
 menu, and so on).
 
@@ -627,8 +618,8 @@ verified against the current code, not a guess.)*
 `/k9tablet` (or an item, depending on `Config.CommandTablet.openMode`)
 opens the K9 Command Tablet — the in-game control panel for everything
 in this resource, and the place to go for a full command reference and
-guided walkthroughs (its own Help/Commands tabs cover that; this
-section only covers what you need to know *before* you trust it).
+guided walkthroughs (its own Guide tab covers both; this section only
+covers what you need to know *before* you trust it).
 
 It is a **view only** — every action it offers is re-checked
 server-side exactly as if the matching chat command had been typed, so
@@ -814,4 +805,4 @@ needed to get this resource running:
   They are listed here only so that finding them in the folder does not
   send you off reading the wrong thing — `docs/history/TABLET_REWORK_SPEC.md` in
   particular is named after a feature you *will* use, and is not its
-  documentation. The tablet documents itself, in its own Help tab.
+  documentation. The tablet documents itself, in its own Guide tab.
