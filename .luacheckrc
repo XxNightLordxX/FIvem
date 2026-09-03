@@ -1138,7 +1138,7 @@ globals = {
     -- server/certifications.lua's GetCertificationTier. Keep that split:
     -- one is a catalogue, the other is a record.
     "ListCertificationTiers", "IsKnownCertificationTierKey",
-    "GetCertificationTierOrdinal", "GetCertificationTierCapabilities",
+    "GetCertificationTierOrdinal",
     "TierHasCapability", "TierEditMutex",
     -- server/k9profiles.lua -- the per-INDIVIDUAL-K9 override layer (GAP 1
     -- closure: promoted from `local` to a resource-global in the SAME pass

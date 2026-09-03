@@ -58,7 +58,7 @@
     GetCertificationTier/MeetsTierRequirement/HasSpecialization/
     QueryCertificationRecord/QueryActiveSpecializations): this file adds
     IsKnownCertificationTierKey/GetCertificationTierOrdinal/
-    ListCertificationTiers/GetCertificationTierCapabilities/
+    ListCertificationTiers/
     TierHasCapability. server/certifications/'s own five accessors are
     UNCHANGED in name and signature; only their internal ordinal/
     known-key lookups now defer to this file's live catalog instead of a
@@ -799,25 +799,6 @@ function ListCertificationTiers()
         list[#list + 1] = { key = key, label = entry.label, ordinal = entry.ordinal, capabilities = capsCopy }
     end
     return list
-end
-
---- NO IN-RESOURCE CALLER, deliberately kept (2026-09-03 dead-code sweep).
---- Its three siblings in this accessor seam -- IsKnownCertificationTierKey,
---- GetCertificationTierOrdinal and ListCertificationTiers -- have six to
---- eight call sites each; this one has none. It is kept because the seam is
---- a documented resource-global API another script on the server can call,
---- and because a capabilities-by-tier lookup is the obvious fourth member of
---- that set. Said out loud so nobody mistakes it for load-bearing: deleting
---- it would break nothing inside this resource.
---- @param key any
---- @return table<string, true> -- a COPY; {} for an unknown key, never nil
-function GetCertificationTierCapabilities(key)
-    local entry = type(key) == 'string' and TierByKey[key]
-    local copy = {}
-    if entry then
-        for capKey in pairs(entry.capabilities) do copy[capKey] = true end
-    end
-    return copy
 end
 
 --- @param key any

@@ -10984,22 +10984,6 @@
                 // never guessed when the server itself sent nothing usable.
                 job: (result.job && typeof result.job === 'object') ? result.job : null,
                 partnership: (result.partnership && typeof result.partnership === 'object') ? result.partnership : null,
-                // server/tablet.lua's OWN re-derivation field: which ped
-                // model this person is actually assigned, read back from
-                // the server rather than inferred from any click's claimed
-                // result. string|null, never guessed.
-                //
-                // NOTHING CURRENTLY RENDERS IT. Its only reader was the
-                // Onboarding flow's K9 Role summary line, which went with
-                // that flow when the three person-shaped flows were
-                // retired. Kept normalised here rather than dropped
-                // because the server still sends it and the Person
-                // screen's K9 profile section is its natural home if
-                // anyone wants it shown -- surfacing it would be a new
-                // feature, which this pass deliberately does not add. Said
-                // plainly so the next reader does not go hunting for the
-                // display code that renders it.
-                assignedK9Model: (typeof result.assignedK9Model === 'string' && result.assignedK9Model.length > 0) ? result.assignedK9Model : null,
             };
             if (result.target && typeof result.target.name === 'string' && state.person) {
                 state.person.name = result.target.name;

@@ -187,8 +187,9 @@ local LiveFeatureFlags = {
 --
 -- WHAT THIS REPLACES: every one of the seven fields below used to be read
 -- directly off THIS CLIENT's own static `Config.Wellbeing.<Stat>.<Field>`
--- copy at the exact point of use (`ApplyMoveRateModifiers` and the Injury
--- sprint/jump block thread further down) -- fixed at THIS client's own
+-- copy at the exact point of use (`ApplyMoveRateModifiers`, and the
+-- injury sprint/jump thread that used to sit further down until that
+-- subsystem was removed) -- fixed at THIS client's own
 -- resource start, never updated by a runtime tablet edit
 -- (server/runtimecontrol.lua's runtimeSetTunable/runtimeResetTunable only
 -- ever mutate the SERVER's own in-memory Config table). server/wellbeing.lua
@@ -236,8 +237,10 @@ local LiveWellbeingTunables = {
     fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
     fatigueSpeedPenaltyMultiplier    = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
     -- NATIVE SPRINT STAMINA ASSIST -- see the "NATIVE SPRINT STAMINA ASSIST"
-    -- section further below (right after the Injury sprint/jump block) for
-    -- the consumer of this field. Same ingest/default-value rules as the
+    -- section further below for the consumer of this field. (It used to be
+    -- located by "right after the Injury sprint/jump block"; that block
+    -- went with the injury subsystem, so the section is now simply the
+    -- last one in this file.) Same ingest/default-value rules as the
     -- seven fields above -- read fresh by that section every check, seeded
     -- from this client's own static config copy until the first snapshot
     -- arrives, same safety argument (nothing here is a security boundary).
@@ -431,11 +434,14 @@ end
 -- game" (untestable here).
 --
 -- GATE: CanShowK9UI() (client/main.lua's own IsOwnModelK9() AND
--- HasK9Access() combinator) -- the SAME self-only-ability gate this exact
--- file already uses for RequestK9CalmDown above, reused rather than
--- inventing a second one. LiveFeatureFlags.FatigueSystem is checked FIRST,
--- cheap and local, before CanShowK9UI()'s own native calls -- same "cheap
--- local flag first" discipline the Injury block above already established.
+-- HasK9Access() combinator) -- the standard self-only-ability gate used
+-- across this resource, reused rather than inventing a second one. It used
+-- to be described as "the same gate this file already uses for
+-- RequestK9CalmDown above"; that action, and the Injury block that set the
+-- "cheap local flag first" precedent named below, both went with the
+-- subsystems removed on 2026-09-02. LiveFeatureFlags.FatigueSystem is
+-- still checked FIRST, cheap and local, before CanShowK9UI()'s own native
+-- calls.
 -- FatigueSystem off means this resource makes NO claim about managing a
 -- K9's stamina at all (this file's own established "read at the point of
 -- activation" discipline, applied here to a second stamina system, not just
