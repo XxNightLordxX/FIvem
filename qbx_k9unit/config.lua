@@ -3169,7 +3169,21 @@ Config.Combat = {
         -- client-side -- see PropDragging.toggleKeybind above for the full
         -- disclosure of the REAL CONSTRAINT: RegisterKeyMapping only sets a
         -- DEFAULT and cannot move a player's own already-rebound key.
-        keybind             = 'T',
+        -- MOVED OFF 'T' (live-bug fix, owner report -- see the "DEFAULT
+        -- KEYS AND CONTROL COLLISIONS" note in client/keybinds.lua's
+        -- header): 'T' is the key that opens the FiveM chat box on every
+        -- server, and a FiveM key mapping fires ALONGSIDE the game's/
+        -- framework's own binding rather than replacing it -- so a K9 who
+        -- typed anything in chat also threw a non-lethal takedown at
+        -- whoever happened to be in front of them. 'LBRACKET' ( the `[`
+        -- key ) is deliberately unglamorous: it is one of the few keys
+        -- vanilla GTA V leaves unbound, and every letter key that is both
+        -- free in GTA V and unused elsewhere in this resource was already
+        -- taken by the sit/bark moves in the same fix. PICK YOUR OWN if
+        -- `[` is awkward for your players -- that is exactly what this
+        -- setting is for. Just do not put it back on 'T', 'V' (Change
+        -- Camera View) or 'C' (Look Behind).
+        keybind             = 'LBRACKET',
     },
 
     AgilityAdvanced = {

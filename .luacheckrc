@@ -1243,7 +1243,7 @@ globals = {
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua
-    "IsOwnModelK9", "CanShowK9UI", "DenyK9UIAccess", "PlaySoundOnNetworkEntity",
+    "IsOwnModelK9", "CanShowK9UI", "DenyK9UIAccess", "IsK9KeybindAudience", "PlaySoundOnNetworkEntity",
     -- Read-only "is this session active" accessors, same shape and purpose
     -- as IsPartnered/GetPartnerServerId below: each is set by its own
     -- client file and read by the tablet's command-reference screen to show

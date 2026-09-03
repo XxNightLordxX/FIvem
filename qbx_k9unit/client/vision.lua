@@ -796,6 +796,13 @@ end
 -- the same honest-degrade posture client/tracking.lua's 'k9track' already
 -- established for "certified for nothing right now."
 RegisterCommand('k9vision', function()
+    -- KEYBIND SILENCE GATE (live-bug fix) -- a keypress carries no
+    -- evidence that a K9 action was intended, so a player who is not a K9
+    -- gets nothing at all instead of a refusal toast. See
+    -- IsK9KeybindAudience() in client/main.lua for the full writeup of the
+    -- city-wide toast spam this closes.
+    if not IsK9KeybindAudience() then return end
+
     CycleVision()
 end, false)
 
@@ -1131,7 +1138,16 @@ function ToggleCameraFeed()
 end
 
 if Config.Features.CameraFeedPiP then
-    RegisterCommand('qbx_k9unit:toggleCameraFeed', function() ToggleCameraFeed() end, false)
+    RegisterCommand('qbx_k9unit:toggleCameraFeed', function()
+        -- KEYBIND SILENCE GATE (live-bug fix) -- a keypress carries no
+        -- evidence that a K9 action was intended, so a player who is not a K9
+        -- gets nothing at all instead of a refusal toast. See
+        -- IsK9KeybindAudience() in client/main.lua for the full writeup of the
+        -- city-wide toast spam this closes.
+        if not IsK9KeybindAudience() then return end
+
+        ToggleCameraFeed()
+    end, false)
     RegisterKeyMapping('qbx_k9unit:toggleCameraFeed', locale('cameraFeed.toggle_keybind_label'), 'keyboard', GetCameraFeedConfig().toggleKey)
 end
 
@@ -1157,11 +1173,29 @@ end
 -- one keybind/command gets registered at all") — do not couple their
 -- registration together.
 if Config.Features.ThermalVision then
-    RegisterCommand('qbx_k9unit:toggleThermalVision', function() ToggleThermalVision() end, false)
+    RegisterCommand('qbx_k9unit:toggleThermalVision', function()
+        -- KEYBIND SILENCE GATE (live-bug fix) -- a keypress carries no
+        -- evidence that a K9 action was intended, so a player who is not a K9
+        -- gets nothing at all instead of a refusal toast. See
+        -- IsK9KeybindAudience() in client/main.lua for the full writeup of the
+        -- city-wide toast spam this closes.
+        if not IsK9KeybindAudience() then return end
+
+        ToggleThermalVision()
+    end, false)
     RegisterKeyMapping('qbx_k9unit:toggleThermalVision', locale('vision.thermal_keybind_label'), 'keyboard', Config.Vision.Thermal.toggleKey)
 end
 if Config.Features.NightVision then
-    RegisterCommand('qbx_k9unit:toggleNightVision', function() ToggleNightVision() end, false)
+    RegisterCommand('qbx_k9unit:toggleNightVision', function()
+        -- KEYBIND SILENCE GATE (live-bug fix) -- a keypress carries no
+        -- evidence that a K9 action was intended, so a player who is not a K9
+        -- gets nothing at all instead of a refusal toast. See
+        -- IsK9KeybindAudience() in client/main.lua for the full writeup of the
+        -- city-wide toast spam this closes.
+        if not IsK9KeybindAudience() then return end
+
+        ToggleNightVision()
+    end, false)
     RegisterKeyMapping('qbx_k9unit:toggleNightVision', locale('vision.night_keybind_label'), 'keyboard', Config.Vision.Night.toggleKey)
 end
 -- These two OLD per-mode toggles are still deliberately NOT added to

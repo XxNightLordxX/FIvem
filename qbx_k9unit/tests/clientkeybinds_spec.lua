@@ -120,6 +120,15 @@ local function newKeybindsFixture(opts)
     local function CanShowK9UI() return canShowK9UI end
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- KEYBIND SILENCE GATE (client/main.lua's IsK9KeybindAudience). Defaults
+    -- TRUE so every pre-existing test in this file keeps exercising the same
+    -- path it always did -- the gate is a filter in front of the behavior
+    -- these tests describe, not a change to it. Section G below flips it
+    -- false and proves each command goes completely silent.
+    local keybindAudience = opts.keybindAudience
+    if keybindAudience == nil then keybindAudience = true end
+    local function IsK9KeybindAudience() return keybindAudience end
+
     local serverEvents = {}
     local function TriggerServerEvent(eventName, ...)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
@@ -169,6 +178,7 @@ local function newKeybindsFixture(opts)
         RegisterKeyMapping = RegisterKeyMapping,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        IsK9KeybindAudience = IsK9KeybindAudience,
         TriggerServerEvent = TriggerServerEvent,
     }
     if opts.provideToggleScentVision ~= false then
@@ -211,6 +221,7 @@ local function newKeybindsFixture(opts)
         serverEvents = serverEvents,
         denyCallCount = function() return denyCalls end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setKeybindAudience = function(v) keybindAudience = v end,
         setBiteHoldEngaged = function(v) biteHoldEngaged = v end,
         setDragEngaged = function(v) dragEngaged = v end,
         setDragTargetEngaged = function(v) dragTargetEngaged = v end,
@@ -316,11 +327,21 @@ end)
 t.test('k9sit / k9bark keybind descriptions match their locale labels (defaults are literal, not config-driven -- see this file own header)', function()
     local f = newKeybindsFixture()
     local sit = f.findKeyMapping('k9sit')
-    t.equals(sit.defaultKey, 'V')
+    -- 'G', NOT 'V'. PINNED DELIBERATELY, not incidentally: 'V' is GTA V's
+    -- own Change Camera View and 'C' is Look Behind, and a FiveM key
+    -- mapping fires ALONGSIDE the game's binding rather than replacing it.
+    -- Shipping those two defaults meant every player on the server ran
+    -- /k9sit and /k9bark constantly just by playing, and each ended in a
+    -- refusal toast for anyone who is not a K9 -- a permanent, server-wide
+    -- "You are not certified for K9 duty" stream (owner's live report).
+    -- If either of these assertions is ever "fixed" by putting the old key
+    -- back, that bug comes back with it. See client/keybinds.lua's header
+    -- section "DEFAULT KEYS AND CONTROL COLLISIONS".
+    t.equals(sit.defaultKey, 'G')
     t.equals(sit.description, locale('radial.sit_keybind_label'))
 
     local bark = f.findKeyMapping('k9bark')
-    t.equals(bark.defaultKey, 'C')
+    t.equals(bark.defaultKey, 'U')
     t.equals(bark.description, locale('radial.bark_keybind_label'))
 end)
 
@@ -638,6 +659,148 @@ t.test('k9takedown: tolerates IsTakedownEngaged/ReleaseTakedown being entirely u
     t.isNil(f.env.ReleaseTakedown)
     local ok = pcall(f.runCommand, 'k9takedown')
     t.isTrue(ok)
+end)
+
+-- ======================================================================
+-- SECTION G -- THE KEYBIND SILENCE GATE
+--
+-- REGRESSION GUARD FOR A LIVE, REPORTED PRODUCTION BUG. The owner's
+-- report, verbatim: "Keeps on spamming you are not a certifed k9 soon as
+-- a cop is on and everyone in city cop or not gets it."
+--
+-- ROOT CAUSE. Every command in this file is exposed through
+-- RegisterKeyMapping, and a FiveM key mapping fires ALONGSIDE whatever
+-- GTA V / FiveM already bind that key to -- it does not replace it. Two
+-- of the shipped defaults were core controls every player presses many
+-- times a minute ('V' Change Camera View for Sit, 'C' Look Behind for
+-- Bark), and a third, Config.Combat.NonLethalTakedown.keybind, was 'T',
+-- the FiveM chat key. So every player in the city -- civilian, cop,
+-- anyone -- was silently running these commands all day, and each one
+-- ends in a visible ox_lib refusal toast for a player who is not a K9.
+--
+-- THE FIX THESE TESTS PIN. Each command now starts by asking
+-- IsK9KeybindAudience() (client/main.lua) and returns SILENTLY when the
+-- answer is no. Moving the three colliding defaults (covered by the
+-- default-key assertions in Section A above) was NOT sufficient on its
+-- own and must never be mistaken for the fix: any player can rebind any
+-- of these onto a key they use constantly, and a default only ever
+-- reaches someone who never touched the setting.
+--
+-- WHAT MAKES THESE CONTROLS AND NOT DECORATION: every test below asserts
+-- BOTH halves -- that nothing was called AND that no toast was raised --
+-- and the fixture defaults the gate TRUE, so deleting any single
+-- `if not IsK9KeybindAudience() then return end` line from
+-- client/keybinds.lua turns exactly the matching test red while leaving
+-- the rest of this file green.
+-- ======================================================================
+
+t.test('SILENCE GATE: a player who is not a K9 gets NOTHING from any of the six action keybinds -- no call, no toast (this is the reported city-wide spam bug)', function()
+    local f = newKeybindsFixture({ scentVision = true, keybindAudience = false })
+
+    f.runCommand('k9sit')
+    f.runCommand('k9bark')
+    f.runCommand('k9bitehold')
+    f.runCommand('k9takedown')
+    f.runCommand('k9dragtoggle')
+    f.runCommand('k9scentvision')
+
+    t.equals(f.k9SitCallCount(), 0, 'k9sit must not reach K9Sit()')
+    t.equals(f.requestBiteHoldCallCount(), 0, 'k9bitehold must not reach RequestBiteHold()')
+    t.equals(f.requestTakedownCallCount(), 0, 'k9takedown must not reach RequestTakedown()')
+    t.equals(f.requestDragCallCount(), 0, 'k9dragtoggle must not reach RequestDrag()')
+    t.equals(f.toggleScentVisionCallCount(), 0, 'k9scentvision must not reach ToggleScentVision()')
+    t.equals(#f.serverEvents, 0, 'k9bark must not fire relayBark -- a camera-view keypress is not a bark request')
+
+    -- THE ACTUAL BUG. Every one of the six presses above used to end here.
+    t.equals(f.denyCallCount(), 0,
+        'ZERO refusal toasts: this is the whole point -- a keypress carries no evidence a K9 action was intended, so a non-K9 must be told nothing at all')
+end)
+
+t.test('SILENCE GATE: a real K9 is unaffected -- the gate filters who gets a message, it never removes an ability', function()
+    local f = newKeybindsFixture({ scentVision = true })  -- audience defaults true
+
+    f.runCommand('k9sit')
+    f.runCommand('k9bitehold')
+    f.runCommand('k9takedown')
+    f.runCommand('k9dragtoggle')
+    f.runCommand('k9scentvision')
+    f.runCommand('k9bark')
+
+    t.equals(f.k9SitCallCount(), 1)
+    t.equals(f.requestBiteHoldCallCount(), 1)
+    t.equals(f.requestTakedownCallCount(), 1)
+    t.equals(f.requestDragCallCount(), 1)
+    t.equals(f.toggleScentVisionCallCount(), 1)
+    t.equals(#f.serverEvents, 1, 'bark still reaches the server for a genuine K9')
+end)
+
+t.test('SILENCE GATE: a real K9 whose access lapsed STILL gets told why -- silencing non-K9s must not silence the people the message is for', function()
+    -- Audience true (they are a K9), CanShowK9UI false (their certification
+    -- lapsed / High Command blocked them / the feature went off). This is
+    -- precisely the person the refusal string was written for, and the
+    -- ONLY reason the gate keys on "is a K9" rather than on CanShowK9UI().
+    local f = newKeybindsFixture({ canShowK9UI = false })
+    f.runCommand('k9bark')
+    t.equals(f.denyCallCount(), 1, 'a genuine K9 must still be told why the key did nothing')
+    t.equals(#f.serverEvents, 0, 'and still must not reach the server')
+end)
+
+t.test('SILENCE GATE: the three STOP halves stay unconditional -- a K9 mid-hold/drag/takedown can always let go, gate or no gate', function()
+    -- GATE THE START OF A THING, NEVER THE STOP. If the gate were placed
+    -- ABOVE the release branches instead of below them, an engaged K9 who
+    -- somehow failed the audience check (model swapped out from under them
+    -- mid-hold, role cache momentarily empty) would be trapped holding a
+    -- suspect with no way to release. Proven by forcing the worst case:
+    -- engaged AND not an audience member.
+    local f = newKeybindsFixture({ keybindAudience = false })
+
+    f.setBiteHoldEngaged(true)
+    f.runCommand('k9bitehold')
+    t.equals(f.releaseBiteHoldCallCount(), 1, 'bite-hold release must never be gated')
+
+    f.setDragEngaged(true)
+    f.runCommand('k9dragtoggle')
+    t.equals(f.releaseDragCallCount(), 1, 'drag release must never be gated')
+
+    f.setTakedownEngaged(true)
+    f.runCommand('k9takedown')
+    t.equals(f.releaseTakedownCallCount(), 1, 'takedown release must never be gated')
+
+    t.equals(f.denyCallCount(), 0, 'and none of the three stop paths raises a toast either')
+end)
+
+t.test('SILENCE GATE: k9exitkennel is DELIBERATELY not gated at all -- it is a pure exit path', function()
+    local f = newKeybindsFixture({ keybindAudience = false, canShowK9UI = false })
+    f.runCommand('k9exitkennel')
+    t.equals(f.exitKennelRestCallCount(), 1,
+        'the kennel exit must run for anyone who presses it -- ExitKennelRest() is already a no-op for someone who is not resting, so it was never part of the spam bug and must never be gated')
+    t.equals(f.denyCallCount(), 0)
+end)
+
+t.test('SILENCE GATE: every action command in this file consults IsK9KeybindAudience -- a newly-added keybind cannot quietly skip it', function()
+    -- Read the real file off disk rather than trusting the sandbox: this is
+    -- the test that catches a SEVENTH command being added later without the
+    -- gate, which no behavioral test above can see because it would not know
+    -- to call it.
+    local fh = assert(io.open('../client/keybinds.lua', 'r'))
+    local src = fh:read('*a')
+    fh:close()
+
+    -- STRIP COMMENTS FIRST, AND BLOCK COMMENTS BEFORE LINE COMMENTS. This
+    -- file's own header quotes the gate line verbatim while explaining it,
+    -- and so does the section banner above -- counting raw text scores
+    -- those prose mentions as real gates. The ordering is load-bearing for
+    -- the same reason tests/softdependencyguards_spec.lua documents:
+    -- stripping line comments first eats the `--[[` opener and leaves the
+    -- block body reading as live code.
+    local code = src:gsub('%-%-%[%[.-%]%]', ''):gsub('%-%-[^\n]*', '')
+
+    local gateCount = 0
+    for _ in code:gmatch('if%s+not%s+IsK9KeybindAudience%(%)%s+then%s+return%s+end') do
+        gateCount = gateCount + 1
+    end
+    t.equals(gateCount, 6,
+        'exactly six gated commands (k9bitehold, k9takedown, k9dragtoggle, k9sit, k9bark, k9scentvision) -- k9exitkennel is the one deliberate exclusion. If you added a keybind, add its gate and update this number; if this dropped, a command lost its gate and the city-wide toast spam is back for it')
 end)
 
 os.exit(t.summary())

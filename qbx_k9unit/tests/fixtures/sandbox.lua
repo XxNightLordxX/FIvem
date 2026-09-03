@@ -157,6 +157,33 @@ function Sandbox.newEnv(overrides)
     env.vector3 = Sandbox.vector3
     env.vector2 = Sandbox.vector2
     env.vector4 = Sandbox.vector4
+
+    -- KEYBIND SILENCE GATE, DEFAULTED TRUE (client/main.lua's
+    -- IsK9KeybindAudience). Every RegisterKeyMapping'd command in this
+    -- resource now opens with `if not IsK9KeybindAudience() then return
+    -- end` -- the fix for the reported city-wide "You are not certified
+    -- for K9 duty" toast spam (see client/keybinds.lua's header section
+    -- "DEFAULT KEYS AND CONTROL COLLISIONS"). Supplied here, once, rather
+    -- than in each of the six spec files that load one of those production
+    -- files, because it is a FILTER IN FRONT OF the behavior those specs
+    -- describe, never part of it: defaulting it true keeps every existing
+    -- test exercising exactly the path it always did.
+    --
+    -- LAYERED BEFORE `overrides` ON PURPOSE, so a spec that wants to test
+    -- the gate itself just passes its own -- tests/clientkeybinds_spec.lua
+    -- Section G does exactly that, and is where the gate's real coverage
+    -- lives (both halves: nothing called AND no toast raised, for each of
+    -- the six commands, plus a source-level count so a seventh command
+    -- cannot be added without one).
+    --
+    -- DISCLOSED: this is one name a spec can no longer prove untouched by
+    -- omitting it from the sandbox and relying on the resulting nil-call
+    -- error. That technique still works for every other global; if a
+    -- future spec needs it for THIS name specifically, pass
+    -- `IsK9KeybindAudience = nil` is not enough (this assignment already
+    -- ran) -- set `env.IsK9KeybindAudience = nil` on the returned table.
+    env.IsK9KeybindAudience = function() return true end
+
     for key, value in pairs(overrides or {}) do
         env[key] = value
     end

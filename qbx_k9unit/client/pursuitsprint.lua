@@ -314,6 +314,13 @@ function RequestPursuitSprint()
 end
 
 RegisterCommand('qbx_k9unit:pursuitsprint', function()
+    -- KEYBIND SILENCE GATE (live-bug fix) -- a keypress carries no
+    -- evidence that a K9 action was intended, so a player who is not a K9
+    -- gets nothing at all instead of a refusal toast. See
+    -- IsK9KeybindAudience() in client/main.lua for the full writeup of the
+    -- city-wide toast spam this closes.
+    if not IsK9KeybindAudience() then return end
+
     RequestPursuitSprint()
 end, false)
 

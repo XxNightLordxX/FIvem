@@ -231,6 +231,63 @@ function IsOwnModelK9()
     return false
 end
 
+--- LIVE BUG FIX (owner report: "Keeps on spamming you are not a certified
+--- k9 soon as a cop is on and everyone in city cop or not gets it").
+---
+--- THE BUG. Every K9 keybind in this resource is registered with
+--- RegisterKeyMapping, and several of the default keys collide with
+--- controls that EVERY player on the server presses constantly -- 'V' is
+--- GTA V's own Change Camera View, 'C' is Look Behind, 'T' opens FiveM
+--- chat. FiveM's key mappings do not replace the game's own binding, they
+--- fire ALONGSIDE it, so every single player in the city -- civilian,
+--- cop, anyone -- was silently running /k9sit and /k9bark dozens of times
+--- an hour just by playing normally. Each of those commands ends in
+--- DenyK9UIAccess() for anyone who is not a K9, which is a visible ox_lib
+--- toast: hence a server-wide, unstoppable stream of "You are not
+--- certified for K9 duty". The default keys are being moved off the
+--- colliding controls in the same pass, but a key can be REBOUND by any
+--- player to anything at all, so moving them is not on its own a fix --
+--- this predicate is.
+---
+--- THE RULE. A refusal toast is correct when a player DELIBERATELY chose
+--- a K9 action -- picked it from the radial menu, pressed a button in the
+--- tablet, used an ox_target option on a dog. It is never correct for a
+--- keypress, because a keypress carries no evidence that a K9 action was
+--- what the player meant. So every keybind entry point in this resource
+--- asks this first, and returns SILENTLY when the answer is no. Nothing
+--- else changes: the radial/tablet/target paths keep their full, specific
+--- refusal messages, and a player who genuinely IS a K9 still gets told
+--- exactly why a keypress did nothing (their certification lapsed, High
+--- Command blocked the ability, the feature is off) because they pass
+--- this check and fall through to the real gate underneath.
+---
+--- DELIBERATELY LOCAL-ONLY, NO SERVER ROUND TRIP. This runs on a keypress,
+--- which means it can run many times a second for every player on the
+--- server at once. IsOwnModelK9() is a pure local model read (plus
+--- client/appearance.lua's IsK9Role(), itself a locally-cached flag the
+--- server pushes) -- it never awaits a callback, unlike HasK9Access(). A
+--- player who is not a K9 therefore costs exactly one model comparison per
+--- accidental keypress and generates no server traffic at all, which is
+--- the whole point: the previous behavior had every player in the city
+--- awaiting 'qbx_k9unit:server:hasK9Access' every time they changed camera
+--- view.
+---
+--- NOT A SECURITY BOUNDARY, same as IsOwnModelK9() above -- it decides
+--- whether to show a message, nothing more. Every action reached past it
+--- still runs its own real CanShowK9UI()/HasK9Access() gate, and the
+--- server re-authorizes independently regardless.
+---
+--- NEVER APPLIED TO A STOP/EXIT KEYBIND. 'k9exitkennel' (client/keybinds.lua)
+--- deliberately does NOT consult this, per this resource's standing "gate
+--- the START of a thing, never the STOP" rule -- it is already silent for
+--- a player who is not resting in a kennel, so it was never part of this
+--- bug in the first place.
+--- @return boolean
+function IsK9KeybindAudience()
+    if IsOwnModelK9() then return true end
+    return type(IsK9Role) == 'function' and IsK9Role() == true
+end
+
 -- Lightweight TTL cache for HasK9Access() below. Hot call sites (ox_target
 -- canInteract predicates in client/vehicle.lua and client/movement.lua's
 -- leash option in particular) can run several times a second while

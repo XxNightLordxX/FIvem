@@ -142,13 +142,47 @@
     fetched this pass): `RegisterKeyMapping(commandString, description,
     defaultMapper, defaultParameter)` -- signature and the "default" framing
     both confirmed directly from that page, not assumed from prose
-    elsewhere. Default keys chosen below avoid every OTHER RegisterKeyMapping
-    default already shipped in this resource (L camera, X vault, N pursuit
-    sprint, H camera feed, K thermal vision, J night vision, G handler-down
-    confirm) and every core WASD movement key -- picked the same way this
-    codebase's own existing choices were (a free, uncommonly-bound letter,
-    not a forced mnemonic -- 'X' for vault and 'N' for pursuit sprint are
-    the established precedent that a perfect mnemonic is not required).
+    elsewhere.
+
+    DEFAULT KEYS AND CONTROL COLLISIONS (live-bug fix, owner report:
+    "Keeps on spamming you are not a certified k9 soon as a cop is on and
+    everyone in city cop or not gets it"). THE MISTAKE THIS FILE MADE, and
+    the reason the paragraph that used to sit here was wrong: it checked
+    each new default only against the OTHER RegisterKeyMapping defaults
+    this resource already shipped, and never against the keys GTA V and
+    FiveM themselves bind. A FiveM key mapping does NOT replace the game's
+    own binding for that key -- both fire. So shipping 'V' for Sit and 'C'
+    for Bark meant every player on the server, K9 or not, silently ran
+    /k9sit every time they changed camera view and /k9bark every time they
+    looked behind, and each of those ends in a visible refusal toast for
+    anyone who is not a K9. The result was a permanent, server-wide stream
+    of "You are not certified for K9 duty" that no player could stop.
+    Config.Combat.NonLethalTakedown.keybind had the same defect on 'T',
+    the FiveM chat key -- see that setting's own comment in config.lua.
+
+    TWO INDEPENDENT FIXES, BOTH NEEDED. (1) The three colliding defaults
+    moved: Sit 'V' -> 'G', Bark 'C' -> 'U', Takedown 'T' -> 'LBRACKET'.
+    (2) Far more importantly, every keybind entry point in this resource
+    now starts with `if not IsK9KeybindAudience() then return end` --
+    silence, not a toast, for a player who is not a K9. (1) alone would
+    not have been a fix: any player can rebind any of these to any key,
+    including back onto a control they use constantly, and the defaults
+    below can only ever affect someone who never touched the setting.
+    (2) is what actually closes the bug. See IsK9KeybindAudience()'s own
+    doc comment in client/main.lua for the full writeup, including why the
+    exit/stop keybind ('k9exitkennel', bottom of this file) deliberately
+    does NOT consult it.
+
+    CHOOSING A NEW DEFAULT, if you ever add another keybind here: it must
+    be free in vanilla GTA V (NOT 'V' Change Camera View, 'C' Look Behind,
+    'L' vehicle lights, 'M' interaction menu, 'P' pause, 'F' enter/exit,
+    'R' reload, 'Q' cover, or any WASD/Shift/Ctrl/Space movement control),
+    free in FiveM ('T' opens chat), and free in this resource's own list
+    -- currently G sit, U bark, Y bite/hold, LBRACKET takedown, B drag,
+    Z scent vision, O exit kennel, N pursuit sprint, X vault, I vision
+    cycle, H camera feed, K thermal vision, J night vision, L camera
+    toggle. That list is close to saturated, which is why the takedown
+    move landed on a bracket key rather than a letter.
     Like every other keybind in this resource, none of this is enforced --
     the SAME gated resource-global function runs whether the player typed
     the `/k9x` command, pressed the bound key, or (for Sit/Bite & Hold/
@@ -196,6 +230,14 @@ if Config.Features.BiteAndHold then
             return
         end
 
+        -- KEYBIND SILENCE GATE (live-bug fix -- see IsK9KeybindAudience()
+        -- in client/main.lua for the full writeup). Placed AFTER the
+        -- release branch above, never before it: the STOP path stays
+        -- unconditional, per this resource's standing "gate the START of a
+        -- thing, never the STOP" rule. A player who is not a K9 can never
+        -- be engaged, so this is only ever reached by the request branch.
+        if not IsK9KeybindAudience() then return end
+
         if type(RequestBiteHold) == 'function' then
             RequestBiteHold()
         end
@@ -238,6 +280,14 @@ if Config.Features.NonLethalTakedown then
             end
             return
         end
+
+        -- KEYBIND SILENCE GATE (live-bug fix -- see IsK9KeybindAudience()
+        -- in client/main.lua for the full writeup). Placed AFTER the
+        -- release branch above, never before it: the STOP path stays
+        -- unconditional, per this resource's standing "gate the START of a
+        -- thing, never the STOP" rule. A player who is not a K9 can never
+        -- be engaged, so this is only ever reached by the request branch.
+        if not IsK9KeybindAudience() then return end
 
         if type(RequestTakedown) == 'function' then
             RequestTakedown()
@@ -282,6 +332,14 @@ if Config.Features.PropDragging then
             return
         end
 
+        -- KEYBIND SILENCE GATE (live-bug fix -- see IsK9KeybindAudience()
+        -- in client/main.lua for the full writeup). Placed AFTER the
+        -- release branch above, never before it: the STOP path stays
+        -- unconditional, per this resource's standing "gate the START of a
+        -- thing, never the STOP" rule. A player who is not a K9 can never
+        -- be engaged, so this is only ever reached by the request branch.
+        if not IsK9KeybindAudience() then return end
+
         if type(RequestDrag) == 'function' then
             RequestDrag()
         end
@@ -304,12 +362,21 @@ end
 -- it via other means (e.g. the tablet), for no correctness benefit.
 -- ======================================================================
 RegisterCommand('k9sit', function()
+    -- KEYBIND SILENCE GATE (live-bug fix). This command was the single
+    -- worst offender: its default key was 'V', which is GTA V's own
+    -- Change Camera View, so every player in the city ran it constantly
+    -- and K9Sit()'s internal DenyK9UIAccess() toasted every one of them.
+    -- The default has been moved off 'V' in the same pass, but this gate
+    -- is what actually fixes it -- a player can rebind to anything.
+    -- See IsK9KeybindAudience() in client/main.lua.
+    if not IsK9KeybindAudience() then return end
+
     if type(K9Sit) == 'function' then
         K9Sit()
     end
 end, false)
 
-RegisterKeyMapping('k9sit', locale('radial.sit_keybind_label'), 'keyboard', 'V')
+RegisterKeyMapping('k9sit', locale('radial.sit_keybind_label'), 'keyboard', 'G')
 
 -- ======================================================================
 -- BARK (basic) -- the owner's own named "fast" example. Gated on
@@ -324,6 +391,14 @@ RegisterKeyMapping('k9sit', locale('radial.sit_keybind_label'), 'keyboard', 'V')
 -- ======================================================================
 if Config.Features.BasicBarkSounds then
     RegisterCommand('k9bark', function()
+        -- KEYBIND SILENCE GATE (live-bug fix). Second worst offender after
+        -- 'k9sit' above: the default key was 'C', GTA V's own Look Behind.
+        -- Checked BEFORE the CanShowK9UI()/DenyK9UIAccess() pair below so
+        -- a non-K9 gets no toast at all, while a real K9 still falls
+        -- through and is told exactly why. See IsK9KeybindAudience() in
+        -- client/main.lua.
+        if not IsK9KeybindAudience() then return end
+
         if not CanShowK9UI() then
             DenyK9UIAccess()
             return
@@ -335,7 +410,7 @@ if Config.Features.BasicBarkSounds then
         TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
     end, false)
 
-    RegisterKeyMapping('k9bark', locale('radial.bark_keybind_label'), 'keyboard', 'C')
+    RegisterKeyMapping('k9bark', locale('radial.bark_keybind_label'), 'keyboard', 'U')
 end
 
 
@@ -359,6 +434,15 @@ end
 -- ======================================================================
 if Config.Features.ScentVision then
     RegisterCommand('k9scentvision', function()
+        -- KEYBIND SILENCE GATE (live-bug fix) -- ToggleScentVision()
+        -- carries its own CanShowK9UI()/DenyK9UIAccess() gate internally,
+        -- so an accidental keypress by a non-K9 toasted them exactly like
+        -- 'k9sit' did. See IsK9KeybindAudience() in client/main.lua.
+        -- NOT applied to the toggle-OFF path: ToggleScentVision() checks
+        -- `scentVisionActive` first and stops unconditionally, and a
+        -- non-K9 can never have it active, so the stop path is untouched.
+        if not IsK9KeybindAudience() then return end
+
         if type(ToggleScentVision) == 'function' then
             ToggleScentVision()
         end
