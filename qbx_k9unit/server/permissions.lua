@@ -1424,10 +1424,41 @@ function HasPermission(citizenid, permissionKey)
     -- preserves prior state when it cannot check. That looks inconsistent
     -- and is not: there, the harm is losing access you earned; here, the
     -- harm is regaining access someone took away.
-    if permissionKey:match('^block%.') and type(K9Store) == 'table' then
+    --
+    -- CASE 0 -- DELIBERATE MEMORY-ONLY MODE IS NOT "CANNOT VERIFY"
+    -- (live production bug, owner report: a rank-8 police officer told
+    -- "You are not authorized to certify K9 handlers" on a stock install).
+    -- Config.Database.enabled = false is the SHIPPED DEFAULT, and it used
+    -- to route into case 1 below alongside a genuine schema collision,
+    -- because all three causes share one accessor (IsDatabaseEnabled). The
+    -- consequence: `block.k9.access` and `block.k9.certify` came back TRUE
+    -- for EVERY player, so HasK9Access and IsEligibleCertifier were false
+    -- for everyone, and a default install could never certify its first
+    -- K9 -- not even a High Command officer certifying themselves. The
+    -- whole resource was dead out of the box.
+    --
+    -- The fail-closed rule is right; the input to it was wrong. "Could not
+    -- confirm" is the condition, and deliberate memory mode is not it: the
+    -- in-memory store IS the authoritative store for this session, every
+    -- block granted in it reads back perfectly through the ordinary cache
+    -- path below, and nothing survived from a previous session because the
+    -- operator explicitly asked for that. There is no unread block row to
+    -- be wrong about. Cases 1 and 2 below are untouched and still fail
+    -- closed -- those are the ones where the operator DOES expect
+    -- persistence and we genuinely cannot read it.
+    --
+    -- Guarded with `type(...) == 'function'`, this resource's
+    -- soft-dependency convention: if server/datastore.lua ever stops
+    -- exposing IsDatabaseConfiguredOff, this reads as `false` and the
+    -- strict pre-fix behavior returns -- never the other way around.
+    local deliberateMemoryMode = type(K9Store) == 'table'
+        and type(K9Store.IsDatabaseConfiguredOff) == 'function'
+        and K9Store.IsDatabaseConfiguredOff() == true
+
+    if permissionKey:match('^block%.') and type(K9Store) == 'table' and not deliberateMemoryMode then
         local dbAccessorAvailable = type(K9Store.IsDatabaseEnabled) == 'function'
         if dbAccessorAvailable and not K9Store.IsDatabaseEnabled('k9_permissions') then
-            return true -- case 1: memory-only for the session
+            return true -- case 1: the table is unreadable while persistence WAS expected (schema collision, or this table missing from an otherwise-installed database)
         end
         if PermissionCheckUnresolved[citizenid] == true and PermissionCache[citizenid] == nil then
             return true -- case 2: this citizenid's own read never resolved
@@ -2670,11 +2701,24 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- every 'block.<Name>' feature just started denying everyone, in one
     -- place, instead of having to notice it from missing tablet
     -- functionality.
-    if Config.Features and Config.Features.PermissionGrants == true and not K9Store.IsDatabaseEnabled('k9_permissions') then
+    -- NARROWED to the two causes that actually still fail closed (see
+    -- HasPermission's own CASE 0 above): a schema collision, or this table
+    -- missing from an otherwise-installed database. Deliberate memory-only
+    -- mode (Config.Database.enabled = false, the shipped default) no longer
+    -- blocks anyone, so warning about it here would be telling the operator
+    -- their features are off when they are not -- the exact false alarm
+    -- that made a real lockout hard to spot.
+    local deliberateMemoryMode = type(K9Store.IsDatabaseConfiguredOff) == 'function'
+        and K9Store.IsDatabaseConfiguredOff() == true
+
+    if Config.Features and Config.Features.PermissionGrants == true
+        and not deliberateMemoryMode and not K9Store.IsDatabaseEnabled('k9_permissions') then
         print(
-            '[qbx_k9unit] permissions.lua WARNING: k9_permissions is not database-backed this session (see ' ..
-            'server/datastore.lua\'s own boot message above for exactly why -- Config.Database.enabled = false, ' ..
-            'this one table missing from an otherwise-intact database, or a schema collision). Any per-person ' ..
+            '[qbx_k9unit] permissions.lua WARNING: k9_permissions is unreadable this session even though this ' ..
+            'server is configured to use a database (see server/datastore.lua\'s own boot message above for ' ..
+            'exactly why -- this one table missing from an otherwise-intact database, or a schema collision. ' ..
+            'Config.Database.enabled = false is NOT one of the causes any more: deliberate memory-only mode is ' ..
+            'a normal, fully-working mode and blocks nobody). Any per-person ' ..
             '`block.<Name>` restriction granted before this restart cannot be verified right now, so -- to avoid ' ..
             'silently handing access back to someone a human admin specifically restricted -- EVERY block-gated ' ..
             'feature is being treated as BLOCKED FOR EVERYONE for the rest of this session, regardless of who ' ..

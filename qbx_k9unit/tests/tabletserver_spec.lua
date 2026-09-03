@@ -1314,7 +1314,7 @@ t.test('FAIL-OPEN FIX control: the SAME setup with a HEALTHY read and no block r
     t.equals(row.state, 'available', 'a genuinely healthy read with no block row must still resolve available -- this fix must not be a blanket new denial')
 end)
 
-t.test('FAIL-OPEN FIX: k9_permissions memory-mode (Config.Database.enabled = false / schema fallback) reports blocked too, even though the memory-mode read itself throws no error', function()
+t.test('FAIL-OPEN FIX: an UNREADABLE k9_permissions (schema collision / this table missing from an otherwise-installed database) reports blocked too, even though the fallback read itself throws no error', function()
     local f = newFixture({
         hasK9Access = function() return true end,
         config = {
@@ -1338,7 +1338,43 @@ t.test('FAIL-OPEN FIX: k9_permissions memory-mode (Config.Database.enabled = fal
     local row
     for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
     t.isNotNil(row)
-    t.equals(row.state, 'blocked', 'memory-mode for k9_permissions must fail closed for the block namespace, matching HasPermission\'s own case 1 exactly')
+    t.equals(row.state, 'blocked', 'an unreadable k9_permissions must fail closed for the block namespace, matching HasPermission\'s own case 1 exactly')
+end)
+
+t.test('CASE 0: a STOCK INSTALL (Config.Database.enabled = false) reports available, not blocked -- deliberate memory-only mode is a working mode, not a degraded one', function()
+    -- COMPANION TO server/permissions.lua's OWN CASE 0 (see the section of
+    -- that name in tests/permissions_spec.lua for the full writeup of the
+    -- live lockout this closes). This function's whole contract is that it
+    -- never shows `available` for something a real HasPermission call would
+    -- refuse -- and being STRICTER than HasPermission breaks that promise
+    -- just as badly in the other direction: the tablet would tell every
+    -- player on a stock install that every ability is blocked, while the
+    -- abilities themselves work fine. The two must move together.
+    local f = newFixture({
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+            -- The one difference from the test directly above: the SAME
+            -- observable IsDatabaseEnabled('k9_permissions') == false, but
+            -- reached deliberately, through the shipped default.
+            Database = { enabled = false },
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.env.K9Store.IsDatabaseEnabled = function(tableName)
+        if tableName == 'k9_permissions' then return false end
+        return true
+    end
+    f.env.K9Store.IsDatabaseConfiguredOff = function() return true end
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'available', 'a stock, drag-and-drop install must not have every block-gated feature reported as blocked')
 end)
 
 t.test('FAIL-OPEN FIX: high command is NOT under-reported by this fix -- a healthy read still shows available via rank with no personal grant', function()

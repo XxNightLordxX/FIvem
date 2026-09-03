@@ -267,6 +267,55 @@ end
 --- forwarded as-is; omit for the resource-wide answer.
 K9Store.IsDatabaseEnabled = DatabaseEnabled
 
+--- "Is the database DELIBERATELY off, by the operator's own config choice?"
+--- -- as opposed to "is it unexpectedly unreachable right now?".
+---
+--- WHY THIS IS A SEPARATE QUESTION FROM IsDatabaseEnabled, AND WHY IT HAD
+--- TO EXIST (live production bug, owner report: a rank-8 police officer
+--- told "You are not authorized to certify K9 handlers", on a stock
+--- install). DatabaseEnabled above answers ONE question -- "can I read this
+--- table?" -- and returns false for three causes that are NOT the same
+--- kind of thing:
+---   (a) Config.Database.enabled == false -- the operator chose memory-only
+---       mode. This is the SHIPPED DEFAULT (see config.lua's own
+---       Config.Database block: "so the resource is drag-and-drop").
+---   (b) this one table was confirmed missing from an otherwise-installed
+---       database (PART-INSTALLED fallback above).
+---   (c) a whole-resource schema collision was detected.
+--- Callers that must fail closed on "I cannot verify a per-person BLOCK"
+--- (server/permissions.lua's HasPermission, server/tablet.lua's
+--- BlockNamespaceUnreliable) were treating all three identically. For (b)
+--- and (c) that is exactly right: the operator expects persistence, real
+--- block rows may exist in a table we genuinely cannot read, and handing
+--- someone back an ability an admin took away is the worse error. For (a)
+--- it is flatly wrong, and it broke every stock install: in deliberate
+--- memory mode there is no unreadable prior state to be wrong about --
+--- every grant and every block that exists at all this session is in the
+--- in-memory store and reads back perfectly, and nothing persisted from a
+--- previous session because the operator asked for exactly that. Treating
+--- that as "cannot verify" made HasPermission report `block.k9.access` and
+--- `block.k9.certify` TRUE for every player on the server, which turned
+--- HasK9Access and IsEligibleCertifier false for everyone: nobody could
+--- use a single K9 feature, and nobody could certify anyone -- including
+--- themselves -- so the resource could never be bootstrapped at all.
+---
+--- ANSWERS ONLY (a). Deliberately does NOT consult SCHEMA_COLLISION_DETECTED
+--- or TABLE_MISSING_THIS_SESSION: a caller wanting "can I read it" already
+--- has IsDatabaseEnabled, and folding the two together here would recreate
+--- the exact conflation this exists to undo. Same fail-safe default as
+--- DatabaseEnabled for a config that predates the flag (a missing
+--- Config.Database is "a real database", never "deliberately off"), so an
+--- older config.lua is treated as expecting persistence and keeps the
+--- strict fail-closed behavior.
+--- @return boolean
+local function DatabaseConfiguredOff()
+    return type(Config) == 'table'
+        and type(Config.Database) == 'table'
+        and Config.Database.enabled == false
+end
+
+K9Store.IsDatabaseConfiguredOff = DatabaseConfiguredOff
+
 -- ======================================================================
 -- BOOT-ORDER SETTLEMENT -- closes the race between the schema-collision
 -- probe below (VerifyTableShapesAgainstKnownSchema, a real, YIELDING

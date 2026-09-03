@@ -3151,6 +3151,136 @@ t.test('MEMORY-MODE BLOCK ASYMMETRY: an ORDINARY person is NOT accidentally deni
     t.isTrue(f.env.HasPermission('ORDINARY-CITIZEN', 'block.BiteAndHold'), 'the same citizenid must still be treated as blocked for block.<Name> -- the point is that ONLY the block namespace denies-by-default, nothing else')
 end)
 
+-- ============================================================================
+-- DELIBERATE MEMORY-ONLY MODE IS NOT "CANNOT VERIFY"  (HasPermission CASE 0)
+--
+-- REGRESSION GUARD FOR A LIVE, REPORTED PRODUCTION BUG that made a STOCK
+-- INSTALL of this resource completely unusable. Owner's report: a rank-8
+-- police officer, on a department configured with certifierGrade = 4 and
+-- highCommandGrade = 4, was told "You are not authorized to certify K9
+-- handlers -- you need your department's certifying rank, the k9.certify
+-- permission, or High Command status."
+--
+-- HOW IT HAPPENED. config.lua ships Config.Database.enabled = false on
+-- purpose ("so the resource is drag-and-drop"). DatabaseEnabled() in
+-- server/datastore.lua answers false for that cause and for two entirely
+-- different ones (a schema collision, and this table missing from an
+-- otherwise-installed database), and HasPermission's block-namespace
+-- fail-closed branch keyed off that single answer. So on every default
+-- install, `block.k9.access` and `block.k9.certify` came back TRUE for
+-- EVERY citizenid -- which made HasK9Access() and IsEligibleCertifier()
+-- (server/certifications/) false for everyone, for every route: no
+-- certification, no permission grant, no autoAccessGrade, not even High
+-- Command. Nobody could use a K9 feature and nobody could certify anyone,
+-- so the resource could never be bootstrapped out of that state at all.
+--
+-- THE DISTINCTION THESE TESTS PIN. Fail-closed is the right rule; the
+-- input to it was wrong. "Could not confirm" must mean an operator who
+-- EXPECTS persistence and has an unreadable table. Deliberate memory-only
+-- mode is not that: the in-memory store IS the authoritative store for the
+-- session, every block granted in it reads back perfectly, and nothing
+-- persisted from a previous session because that is what was asked for.
+--
+-- The three tests immediately ABOVE this section (forcePermissionsTableMissing)
+-- are the other half of the same contract and must stay green: they cover
+-- the genuinely-unreadable case, which still denies everyone.
+-- ============================================================================
+
+--- Puts a fixture into the exact state a stock, drag-and-drop install runs
+--- in: Config.Database.enabled = false. Set AFTER construction rather than
+--- through an opts flag because both DatabaseEnabled and
+--- DatabaseConfiguredOff read Config live on every call (never cached at
+--- load time), so this is the same thing the real config.lua does, not a
+--- simulation of it.
+--- @param f table
+local function makeDatabaseConfiguredOff(f)
+    f.env.Config.Database = { enabled = false }
+end
+
+t.test('CASE 0: a stock install (Config.Database.enabled = false) does NOT block everyone -- block.k9.access and block.k9.certify read FALSE for a citizenid nobody blocked', function()
+    local f = newFixture()
+    makeDatabaseConfiguredOff(f)
+    f.fireOnResourceStart()
+
+    -- SANITY: prove we are genuinely in the state that used to deny. If
+    -- this assertion ever goes false the test below stops proving anything.
+    t.isFalse(f.env.K9Store.IsDatabaseEnabled('k9_permissions'),
+        'sanity: deliberate memory mode must still make IsDatabaseEnabled false -- CASE 0 is about what that MEANS, not about changing it')
+    t.isTrue(f.env.K9Store.IsDatabaseConfiguredOff(),
+        'sanity: and must be distinguishable as the deliberate cause')
+
+    t.isFalse(f.env.HasPermission('ANY-OFFICER', 'block.k9.access'),
+        'THE BUG: this reading true is what made HasK9Access() false for every player on every default install')
+    t.isFalse(f.env.HasPermission('ANY-OFFICER', 'block.k9.certify'),
+        'THE BUG: this reading true is what told a rank-8 officer they were not authorized to certify anyone')
+    t.isFalse(f.env.HasPermission('ANY-OFFICER', 'block.BiteAndHold'),
+        'and the same for every ordinary per-feature block')
+end)
+
+t.test('CASE 0: a block genuinely granted in memory mode STILL enforces -- the fix restores default-allow, it does not disable blocks', function()
+    local f = newFixture({ isHighCommand = function(source) return source == 100 end })
+    makeDatabaseConfiguredOff(f)
+    local hcSrc = f.registerPlayer(100, 'HC-GRANTER', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(103, 'BLOCKED-CITIZEN', { name = 'police', grade = { level = 1 } })
+    f.fireOnResourceStart()
+
+    t.isFalse(f.env.HasPermission('BLOCKED-CITIZEN', 'block.BiteAndHold'), 'not blocked before the grant')
+
+    local ok, outcome = f.env.GrantPermission(hcSrc, 'BLOCKED-CITIZEN', 'block.BiteAndHold')
+    t.isTrue(ok, tostring(outcome))
+
+    -- THE OTHER HALF OF THE CONTRACT. If the fix had simply skipped the
+    -- block namespace in memory mode, this would read false and High
+    -- Command would have lost the ability to restrain anyone on a stock
+    -- install -- trading one silent failure for another.
+    t.isTrue(f.env.HasPermission('BLOCKED-CITIZEN', 'block.BiteAndHold'),
+        'a real, in-session block must be honoured in memory mode exactly as it is with a database')
+
+    -- And it must still be liftable.
+    f.advanceTime(2000)
+    f.env.RevokePermission(hcSrc, 'BLOCKED-CITIZEN', 'block.BiteAndHold')
+    t.isFalse(f.env.HasPermission('BLOCKED-CITIZEN', 'block.BiteAndHold'))
+end)
+
+t.test('CASE 0: the two causes are genuinely distinguished -- an UNREADABLE k9_permissions still fails closed even though it also reports IsDatabaseEnabled false', function()
+    -- Same observable IsDatabaseEnabled('k9_permissions') == false in both
+    -- fixtures; opposite, correct answers. This is the whole point of
+    -- splitting the accessor, and the test that fails if a future change
+    -- collapses them back together.
+    local stock = newFixture()
+    makeDatabaseConfiguredOff(stock)
+    stock.fireOnResourceStart()
+
+    local broken = newFixture({ forcePermissionsTableMissing = true })
+    broken.fireOnResourceStart()
+
+    t.isFalse(stock.env.K9Store.IsDatabaseEnabled('k9_permissions'))
+    t.isFalse(broken.env.K9Store.IsDatabaseEnabled('k9_permissions'))
+
+    t.isFalse(stock.env.HasPermission('SOMEBODY', 'block.k9.access'), 'deliberate memory mode: allow')
+    t.isTrue(broken.env.HasPermission('SOMEBODY', 'block.k9.access'), 'unreadable while persistence was expected: still deny')
+end)
+
+t.test('CASE 0: a stock install raises NO "block state cannot be verified" boot warning -- a false alarm here is what made the real lockout hard to spot', function()
+    local f = newFixture()
+    makeDatabaseConfiguredOff(f)
+    f.fireOnResourceStart()
+
+    for _, line in ipairs(f.printLog) do
+        t.isFalse(line:find('cannot be verified', 1, true) ~= nil,
+            'deliberate memory mode is a normal, fully-working mode and must not be reported as a degraded one: ' .. tostring(line))
+    end
+end)
+
+t.test('CASE 0: an older config.lua with no Config.Database at all keeps the STRICT behavior -- absence means "expects a database", never "deliberately off"', function()
+    local f = newFixture({ forcePermissionsTableMissing = true })
+    t.isNil(f.env.Config.Database, 'sanity: this fixture ships no Config.Database, exactly like a config predating the flag')
+    f.fireOnResourceStart()
+    t.isFalse(f.env.K9Store.IsDatabaseConfiguredOff())
+    t.isTrue(f.env.HasPermission('SOMEBODY', 'block.k9.access'),
+        'a config that has never heard of the flag must be treated as expecting persistence, so it still fails closed')
+end)
+
 t.test('MEMORY-MODE BLOCK ASYMMETRY: with k9_permissions genuinely database-backed, an unblocked citizenid still correctly reads NOT blocked -- this fix changes nothing on the healthy path', function()
     local f = newFixture()
     f.fireOnResourceStart()

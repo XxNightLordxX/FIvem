@@ -572,9 +572,29 @@ end
 --- @param readOk boolean -- QueryActivePermissionSet's own second return
 --- @return boolean
 local function BlockNamespaceUnreliable(readOk)
+    -- CASE 0, MIRRORING HasPermission's OWN (server/permissions.lua --
+    -- read that function's CASE 0 comment for the full writeup of the
+    -- live production bug this closes). Deliberate memory-only mode
+    -- (Config.Database.enabled = false, the SHIPPED DEFAULT) is not
+    -- "cannot verify": the in-memory store is the authoritative store for
+    -- the session and reads back every block that exists. Treating it as
+    -- unverifiable made this tablet show every block-gated feature as
+    -- blocked for every person on a stock install, on top of the real
+    -- enforcement lockout HasPermission was independently causing. Must
+    -- stay exactly in step with HasPermission's own rule -- this function's
+    -- whole contract (see its doc comment above) is that it never shows
+    -- `available` for something a real HasPermission call would refuse,
+    -- and being STRICTER than HasPermission is the other way to break that
+    -- promise: the tablet would report a feature blocked that the player
+    -- can actually use.
+    if type(K9Store) == 'table' and type(K9Store.IsDatabaseConfiguredOff) == 'function'
+        and K9Store.IsDatabaseConfiguredOff() == true then
+        return readOk == false -- deliberate memory mode: only THIS read failing is still a real "cannot verify"
+    end
+
     if type(K9Store) == 'table' and type(K9Store.IsDatabaseEnabled) == 'function'
         and not K9Store.IsDatabaseEnabled('k9_permissions') then
-        return true -- case 1: memory-only (or schema-collided/part-installed) for k9_permissions this session
+        return true -- case 1: unreadable while persistence WAS expected (schema collision, or this table missing from an otherwise-installed database)
     end
     return readOk == false -- case 2: this citizenid's own read did not succeed
 end
