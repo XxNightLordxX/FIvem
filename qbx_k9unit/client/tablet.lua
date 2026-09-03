@@ -1474,6 +1474,8 @@ local TABLET_STRING_KEYS = {
     -- ADDED (this pass): Deploy a Kennel / Use Scent Vision walkthroughs --
     -- see html/tablet.js's own DEFAULT_STRINGS comment at these same keys.
     'help_task_kennel_heading', 'help_task_kennel_1', 'help_task_kennel_2', 'help_task_kennel_3', 'help_task_kennel_4',
+    'help_task_stop_being_k9_heading', 'help_task_stop_being_k9_1', 'help_task_stop_being_k9_2',
+    'help_task_stop_being_k9_3', 'help_task_stop_being_k9_4',
     'help_task_scent_vision_heading', 'help_task_scent_vision_1', 'help_task_scent_vision_2', 'help_task_scent_vision_3',
     'help_task_hc_certify_someone_heading', 'help_task_hc_certify_someone_1', 'help_task_hc_certify_someone_2_template',
     'help_task_hc_flow_steps_template', 'help_task_hc_toggle_feature_heading', 'help_task_hc_toggle_feature_1', 'help_task_hc_toggle_feature_2',

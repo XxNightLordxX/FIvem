@@ -4000,6 +4000,24 @@
             S('help_task_kennel_4'),
         ]));
 
+        // THE ONE QUESTION A K9 PLAYER ASKS THAT NOTHING USED TO ANSWER.
+        // Every string about reverting was written for the high-command
+        // reader looking at somebody else ("this target", "this person"),
+        // so the player actually wearing the dog had no way to find out
+        // that a way back exists, or who to ask for it. They conclude they
+        // are stuck, or bugged, and ask in chat.
+        //
+        // Shown to EVERYONE, not gated on being the K9 right now: the
+        // people most likely to look this up are deciding whether to
+        // become one, and someone already reverted may want to know how it
+        // worked. Nothing here is admin-only information.
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_stop_being_k9_heading'), [
+            S('help_task_stop_being_k9_1'),
+            S('help_task_stop_being_k9_2'),
+            S('help_task_stop_being_k9_3'),
+            S('help_task_stop_being_k9_4'),
+        ]));
+
         wrap.appendChild(buildHelpTaskBlock(S('help_task_scent_vision_heading'), [
             S('help_task_scent_vision_1'),
             S('help_task_scent_vision_2'),
