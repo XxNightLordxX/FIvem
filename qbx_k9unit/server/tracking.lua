@@ -1960,8 +1960,7 @@ RegisterNetEvent('qbx_k9unit:server:reportTrackSourceArrival', function()
     if not trackerCitizenid then return end
 
     -- Runtime existence guard, same soft-dependency convention as this
-    -- file's own GetXPTier call site above and server/medkit.lua's
-    -- RestoreInjury precedent — no load-order assumption on
+    -- file's own GetXPTier call site above — no load-order assumption on
     -- server/progression.lua either way.
     if type(AwardXP) == 'function' then
         AwardXP(trackerCitizenid, 'trackSourceResolved')

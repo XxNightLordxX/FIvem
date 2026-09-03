@@ -434,7 +434,7 @@ server_scripts {
     -- this file's ForceBreakPartnershipForCitizenId -- same "runtime
     -- existence guard, not a load-order assumption" convention as every
     -- other soft cross-file dependency in this manifest (see this file's
-    -- own comment on server/medkit.lua's RestoreInjury reuse below); those
+    -- own comment on server/search.lua's AwardXP reuse below); those
     -- four call sites (confirmed as four, not the three an earlier revision
     -- of this comment claimed) guard the call with a `type(...) == 'function'`
     -- check rather than assuming load order, since by the time any of them
@@ -448,7 +448,7 @@ server_scripts {
     'server/inventory.lua', -- K9Inventory, DEVELOPER_REFERENCE.md §13.4.2
     'server/kennel.lua',    -- R&D (DeployableKennel, DEVELOPER_REFERENCE.md#phase-5-research §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
     'server/vehicle.lua',   -- SEAT-RACE FIX (NEW FILE) -- server-side seat claim for client/vehicle.lua's VehicleEntryExit, closing the one paired mechanic left client-authoritative (see that file's own header for the concurrency audit finding). No file-load-time dependency of its own beyond Config/GetHashKey (both already available via shared_scripts); HasK9Access/ResolveNetworkEntity/NotifyPlayer are consulted only at RUN time, inside its RegisterNetEvent handlers, so placement here is purely thematic (grouped with server/kennel.lua, the other paired-mechanic file its own design most directly mirrors), not a hard ordering requirement.
-    'server/medkit.lua',    -- K9Medkit, DEVELOPER_REFERENCE.md §13.4.4 -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
+    'server/medkit.lua',    -- K9Medkit, DEVELOPER_REFERENCE.md §13.4.4 -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model). It has no ordering dependency on server/progression.lua either: AwardHandlerXP is called through a runtime existence guard, not a load-order assumption
     -- Unified wellbeing subsystem, DEVELOPER_REFERENCE.md §13.0 Decision 1 --
     -- loaded after cooldowns.lua (NewCooldown at file-load time) and
     -- certifications.lua (HasK9Access). Deliberately loaded AFTER
@@ -498,15 +498,12 @@ server_scripts {
     -- entities.lua/certifications.lua (ResolveNetworkEntity/HasK9Access,
     -- called at runtime, but kept load-ordered before this file for the
     -- same reason every other consumer of those two already is).
-    -- Deliberately loaded AFTER server/wellbeing.lua/server/progression.lua
-    -- even though it CONSUMES IsHesitating/IsDistracted (wellbeing.lua) and
-    -- AwardXP (progression.lua) -- same "runtime existence guard, not a
+    -- Deliberately loaded AFTER server/progression.lua even though it
+    -- CONSUMES AwardXP from it -- same "runtime existence guard, not a
     -- load-order assumption" convention every other soft cross-file
-    -- dependency in this manifest already follows (see this file's own
-    -- comment on server/medkit.lua's RestoreInjury above); loading after
-    -- both simply means those guards are non-nil from this file's very
-    -- first tick rather than only after a resource restart, not a
-    -- correctness requirement.
+    -- dependency in this manifest already follows; loading after it simply
+    -- means that guard is non-nil from this file's very first tick rather
+    -- than only after a resource restart, not a correctness requirement.
     'server/combat.lua',
     'server/propattachment.lua',
     'server/bonetool.lua',

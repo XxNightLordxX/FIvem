@@ -189,8 +189,8 @@ K9Cert = K9Cert or {}
       needs). All three underlying calls stay guarded at
       `type(...) == 'function'` runtime existence checks (this resource's
       established "runtime existence guard, not a load-order assumption"
-      convention — see fxmanifest.lua's own comment on server/medkit.lua's
-      RestoreInjury reuse for the precedent), and are called UNCONDITIONALLY
+      convention — see fxmanifest.lua's own comment on server/search.lua's
+      AwardXP reuse for the precedent), and are called UNCONDITIONALLY
       of Config.Features.HandlerPartnership's current value — a partnership
       row established while the feature was on must still be torn down by
       a cert revoke/department change even if the flag was later flipped
@@ -1079,7 +1079,7 @@ function HasK9Access(source)
     -- bypass (see that file's own header PART 1 for the full contract).
     -- Guarded by a `type(...) == 'function'` runtime existence check, this
     -- resource's established soft-dependency convention (see
-    -- fxmanifest.lua's comment on server/medkit.lua's RestoreInjury reuse
+    -- fxmanifest.lua's comment on server/search.lua's AwardXP reuse
     -- for the precedent) -- this function still works exactly as before if
     -- server/highcommand.lua is ever removed or Config.Features.HighCommand
     -- is false (IsHighCommand re-checks that flag itself and returns false).

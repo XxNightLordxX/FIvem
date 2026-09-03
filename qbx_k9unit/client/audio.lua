@@ -132,7 +132,7 @@
     one-line delegate call MUST guard with `type(PlayK9Sound) ==
     'function'` before calling it, per this resource's own established
     "runtime existence guard, not a load-order assumption" convention (see
-    config.lua's globals comment on RestoreInjury/AwardXP/GetXPTier for the
+    config.lua's globals comment on AwardXP/GetXPTier for the
     precedent this follows) — with Config.Features.BasicBarkSounds false,
     PlayK9Sound simply does not exist as a global at all, and that guard is
     what keeps that call site from hard-erroring in that state.
@@ -164,7 +164,7 @@ local AUDIO_MAX_DISTANCE = 30.0
 --- file's own comment on this entry). Every caller MUST still guard with
 --- `type(GetK9AudioMaxDistance) == 'function'` before calling this -- this
 --- resource's own "runtime existence guard, not a load-order assumption"
---- convention (config.lua's globals comment on RestoreInjury/
+--- convention (config.lua's globals comment on
 --- AwardXP/GetXPTier is the precedent) -- this file does not define this
 --- function at all while Config.Features.BasicBarkSounds is false, no
 --- matter what fxmanifest.lua's own load order promises.

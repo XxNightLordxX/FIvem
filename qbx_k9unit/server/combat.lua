@@ -362,8 +362,8 @@
       dependencies of this file). No ordering dependency on
       server/wellbeing.lua or server/progression.lua either way (both are
       consumed through runtime existence guards, not a load-order
-      assumption) — same posture server/medkit.lua's own fxmanifest.lua
-      comment already documents for RestoreInjury.
+      assumption) — same posture fxmanifest.lua documents for every soft
+      cross-file dependency in this resource.
     - Calls `ClaimBody(citizenid, 'combat_target', ttlMs, detail)` and
       `ReleaseBody(citizenid, 'combat_target')`, exposed by
       server/bodyclaims.lua (kennel-vs-vehicle-seat race fix pass,
@@ -1221,7 +1221,7 @@ local COMBAT_REJECT_MESSAGES = {
     on_cooldown        = locale('combat.on_cooldown'),
     -- server/wellbeing.lua-driven — these describe the REQUESTING K9's own
     -- state, never the target's (see this file's header FILE-TO-FILE
-    -- CONTRACT entry for IsHesitating/IsDistracted).
+    -- CONTRACT entry for a since-removed wellbeing accessor).
     -- MESSAGE-ROUTING FIX (coder-backend handoff, this pass): 'permission_denied'
     -- used to be the ONE reason both an explicit block.<Name> AND a missing
     -- feature.<Name> grant collapsed into, mapped to the same generic

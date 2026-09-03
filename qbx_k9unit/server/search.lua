@@ -158,8 +158,7 @@
       `contrabandFound == true` is known — via a
       `type(AwardXP) == 'function'` runtime existence guard, the same
       soft-dependency convention server/tracking.lua's own AwardXP/GetXPTier
-      call sites and server/medkit.lua's RestoreInjury call site already
-      establish. No load-order assumption on server/progression.lua either
+      call sites already establish. No load-order assumption on server/progression.lua either
       way. See config.lua's `Config.XP.awards.searchContrabandFound` comment
       for the award's own design rationale.
     - SEARCHER-BUSY GUARD (server-side half of client/search.lua's own
@@ -1856,7 +1855,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- its own `searcher_citizenid` audit column (not reused directly since
     -- that function doesn't expose the resolved value back to its caller).
     -- Same runtime-existence-guard convention as server/tracking.lua's own
-    -- GetXPTier/AwardXP call sites and server/medkit.lua's RestoreInjury —
+    -- GetXPTier/AwardXP call sites —
     -- no load-order assumption on server/progression.lua either way.
     if contrabandFound and Config.Features.XPProgression and type(AwardXP) == 'function' then
         -- ECONOMY-AUDIT FIX — see ContrabandXpState's own

@@ -327,7 +327,7 @@
       job-change) -- each guarded by a `type(...) == 'function'` runtime
       existence check per this resource's established "runtime existence
       guard, not a load-order assumption" convention (see fxmanifest.lua's
-      own comment on server/medkit.lua's RestoreInjury reuse for the same
+      own comment on server/search.lua's AwardXP reuse for the same
       precedent), since THIS FILE is loaded AFTER server/certifications/
       in fxmanifest.lua (see that file's own header for why: this file
       also needs `IsConfiguredK9Model`/`HasK9Access` at RUNTIME, inside the

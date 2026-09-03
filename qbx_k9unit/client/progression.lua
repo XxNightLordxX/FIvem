@@ -64,8 +64,8 @@
           call — it is a shared table, not a function), it writes
           `K9MoveRateModifiers.xpTier = CachedXPTierSpeedMultiplier` and
           then calls `RecomputeK9MoveRate()` IF that also exists
-          (`type(...) == 'function'` guard, mirroring server/medkit.lua's
-          established `type(RestoreInjury) == 'function'` soft-dependency
+          (`type(...) == 'function'` guard, mirroring server/search.lua's
+          established `type(AwardXP) == 'function'` soft-dependency
           convention, kept here as a defensive guard against a future
           load-order change rather than as an assumption the composer
           might still be missing today). `client/movement.lua` defines
@@ -217,7 +217,7 @@
          runtimeSetFeature and runtimeResetFeature already funnel through
          it) should call this new function, behind the same soft-
          dependency `type(...) == 'function'` guard this codebase already
-         uses pervasively (server/medkit.lua's `type(RestoreInjury) ==
+         uses pervasively (server/search.lua's `type(AwardXP) ==
          'function'`, this file's own `type(RecomputeK9MoveRate) ==
          'function'`):
              local function ApplyFeatureOverride(name, value)
@@ -406,7 +406,7 @@ local function ApplyXPTierMoveRateEffect()
     -- POINT"), so this branch is not expected to be taken on a
     -- normal load order. Left in place as a harmless no-op rather than an
     -- assert, matching this resource's own soft-dependency convention
-    -- (server/medkit.lua's `type(RestoreInjury) == 'function'` guard) for
+    -- (server/search.lua's `type(AwardXP) == 'function'` guard) for
     -- the case where some future refactor changes load order again.
     -- CachedXPTierSpeedMultiplier above still holds the correct, current,
     -- server-authoritative value regardless, and this function is

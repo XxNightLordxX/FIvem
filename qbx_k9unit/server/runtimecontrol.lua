@@ -2271,7 +2271,7 @@ end
 --- established convention for a cross-file call that is always real in a
 --- normal boot but must never hard-crash this function if
 --- server/progression.lua were ever absent/reordered (server/medkit.lua's
---- `type(RestoreInjury) == 'function'`, client/progression.lua's own
+--- `type(AwardXP) == 'function'`, client/progression.lua's own
 --- `type(RecomputeK9MoveRate) == 'function'`).
 ---
 --- HandlerXPProgression NOW HAS THE SAME HOOK, and this comment used to say

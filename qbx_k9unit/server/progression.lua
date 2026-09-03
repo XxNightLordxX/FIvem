@@ -124,9 +124,8 @@
             §5 — correctness of the applied gameplay effect never depends on
             DB round-trip latency). Called from server/search.lua and
             server/tracking.lua this pass via a `type(AwardXP) == 'function'`
-            runtime existence guard (the same guard server/medkit.lua's
-            RestoreInjury call site already established for an equivalent
-            soft cross-file dependency) — NOT a load-order assumption, so
+            runtime existence guard (the same guard every equivalent soft
+            cross-file dependency in this resource uses) — NOT a load-order assumption, so
             this file's position in fxmanifest.lua's server_scripts list is
             not load-bearing for those callers. server/combat.lua, once
             built, should call this the same way for 'biteHoldSuccess'/
@@ -2142,7 +2141,7 @@ end
 --- flips, behind a soft-dependency `type(...) == 'function'` guard --
 --- see that file's own call site for why the guard, even though this
 --- function is always defined in a real boot (same convention as
---- server/medkit.lua's `type(RestoreInjury) == 'function'`).
+--- server/search.lua's `type(AwardXP) == 'function'`).
 ---
 --- Deliberately WITHOUT PlayerLoaded's own onResourceStart backfill loop's
 --- `if not Config.Features.XPProgression then return end` early exit --

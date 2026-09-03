@@ -104,7 +104,7 @@
     'function'` runtime existence guard immediately before the call -- this
     resource's own documented "runtime existence guard, not a load-order
     assumption" convention (config.lua's globals comment on
-    RestoreInjury/AwardXP/GetXPTier is the precedent this follows).
+    AwardXP/GetXPTier is the precedent this follows).
     Config.Features.ProximityAudioFX being true does not, by itself,
     guarantee client/audio.lua has already executed and defined those
     globals by the time THIS file's own client_scripts position runs --

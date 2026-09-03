@@ -515,7 +515,7 @@ end
 --- returns without defining it at all when Config.Features.
 --- BasicBarkSounds is false, so the global genuinely may not exist (same
 --- runtime-existence-guard convention config.lua's globals comment already
---- documents for RestoreInjury/AwardXP/GetXPTier). soundName here is
+--- documents for AwardXP/GetXPTier). soundName here is
 --- always either BARK_SOUND_NAME or a Config.AdvancedBarkRadial-authored
 --- entry from BarkTypeSoundNames below — never a raw caller-supplied
 --- string — so this passes PlayK9Sound the exact same trusted,

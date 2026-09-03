@@ -73,7 +73,7 @@
         first in fxmanifest.lua's client_scripts list.
       Every cross-file global added after Phase 1 is called behind
       a `type(fn) == 'function'` runtime existence guard (this codebase's
-      established soft-dependency convention — see e.g. RestoreInjury/AwardXP
+      established soft-dependency convention — see e.g. AwardXP
       in server/tracking.lua) because client/radial.lua loads FIRST among
       client_scripts (fxmanifest.lua), before every file listed above that
       defines one of these globals — the guard is never a load-order
@@ -1548,7 +1548,7 @@ local function RegisterK9RadialMenu()
             icon = 'handshake-slash',
             onSelect = function()
                 -- type(...) == 'function' guard per this codebase's established
-                -- soft-dependency convention (e.g. RestoreInjury, AwardXP/
+                -- soft-dependency convention (e.g. AwardXP/
                 -- GetXPTier) -- effectively always true here in practice, since
                 -- this item is only ever registered under the SAME
                 -- Config.Features.HandlerPartnership flag that gates

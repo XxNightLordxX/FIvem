@@ -345,7 +345,7 @@
     none of which it defines, all behind `type(...) == 'function'` runtime-
     existence guards per this resource's established "guard, not a
     load-order assumption" convention (see fxmanifest.lua's own comment on
-    server/medkit.lua's RestoreInjury reuse for the precedent this follows):
+    server/search.lua's AwardXP reuse for the precedent this follows):
         GetActivePartnerCitizenId(citizenid) -- server/partnership.lua, used
             ONLY as a cheap in-memory pre-filter to decide whether a
             currently-connected citizenid is even worth a DB round trip this

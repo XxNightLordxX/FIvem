@@ -67,7 +67,7 @@
             calls this behind a `type(BreakPartnership) == 'function'`
             guard, this codebase's established soft-dependency convention,
             exactly like every other conditionally-defined resource-global
-            here (e.g. RestoreInjury, AwardXP/GetXPTier).
+            here (e.g. AwardXP/GetXPTier).
         IsPartnered() -> boolean
         GetPartnerServerId() -> number?
             Read-only, SYNCHRONOUS (never yields) accessors over this

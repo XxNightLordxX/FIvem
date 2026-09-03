@@ -376,8 +376,8 @@
     NOT IN THIS FILE — deliberate, with reasons:
     - Any grant/revoke/award/force-detach MUTATION (GrantCertification,
       RevokeCertification*, AwardXP, ForceDetachLeashForSource,
-      ForceDetachOfficerLeashForSource, ForceBreakPartnershipForCitizenId,
-      RestoreInjury). Every one of these has its own reviewed eligibility/
+      ForceDetachOfficerLeashForSource, ForceBreakPartnershipForCitizenId).
+      Every one of these has its own reviewed eligibility/
       proximity/cooldown/notification logic specific to how this resource's
       own client-triggered flow calls it; exporting the mutation directly
       would let an external resource skip all of that context (e.g. an MDT
