@@ -887,8 +887,6 @@ globals = {
     -- exposed for server/recall.lua. Authorization is the CALLER's job;
     -- gating a termination path is how an unbounded trap gets built.
     "EndActiveEffectForHolder",
-    -- client/recall.lua -- the handler's escape hatch.
-    "RequestRecall",
     -- server/entities.lua -- the shared cross-feature netId claim registry.
     -- ResolveNetworkEntity deliberately performs NO ownership or proximity
     -- check (see its own doc comment), so every caller must add one. The
@@ -1104,20 +1102,10 @@ globals = {
     -- client-side answer here may make a menu option appear; the server
     -- re-checks on the action, so it must never make the action succeed.
     "IsK9Role", "IsK9RoleForPlayer",
-    -- client/pursuitsprint.lua (K9_IDEAS.md §5). Same "resource-global so
-    -- the radial and a chat command can both reach it" convention as
-    -- RequestRecall above.
+    -- client/pursuitsprint.lua (K9_IDEAS.md §5) -- a resource-global so the
+    -- radial and a chat command can both reach ONE entry point rather than
+    -- forking the command body.
     "RequestPursuitSprint",
-    -- client/sarcalls.lua (K9_IDEAS.md §3). RequestAbandonSarCall is
-    -- UNCONDITIONAL by design -- never gated on access or certification --
-    -- because abandoning a call is a termination path, and gating one is
-    -- how the unbounded trap this resource forbids gets built.
-    "RequestStartSarCall", "RequestAbandonSarCall",
-    -- client/training.lua exposes these three so client/radial.lua can drive
-    -- Training Mode and the two drills from the menu without forking the
-    -- command bodies -- the same "one entry point, two surfaces" rule the
-    -- ScratchAtDoor/NudgeDoor incident in fxmanifest.lua exists to enforce.
-    "RequestSetTrainingMode", "RequestTrainingSearchDrill", "RequestTrainingBiteDrill",
     -- server/datastore.lua -- the single accessor layer behind
     -- Config.Database.enabled. ONE code path, TWO backends: every DB read
     -- and write in this resource goes through K9Store, which dispatches to
@@ -1244,12 +1232,6 @@ globals = {
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua
     "IsOwnModelK9", "CanShowK9UI", "DenyK9UIAccess", "IsK9KeybindAudience", "PlaySoundOnNetworkEntity",
-    -- Read-only "is this session active" accessors, same shape and purpose
-    -- as IsPartnered/GetPartnerServerId below: each is set by its own
-    -- client file and read by the tablet's command-reference screen to show
-    -- whether a command is usable right now. Presentation only -- the
-    -- server still decides what actually works, so neither is ever a gate.
-    "IsSarCallActive", "IsTrainingModeActive",
     -- server/entities.lua (REFACTOR_ROADMAP.md near-term item 2) AND,
     -- separately, client/main.lua's OWN client-side function of the same
     -- name -- two distinct Lua VMs (server vs. client), same name by
@@ -1327,34 +1309,6 @@ globals = {
     -- client/radial.lua's "Exit Kennel" item, mirroring
     -- DetachLeash/ExitK9Vehicle above.
     "ExitKennelRest",
-    -- server/wellbeing.lua (Phase 4, PHASE4_SPEC.md §13.1 sub-phase 4c/4d,
-    -- the unified wellbeing subsystem). RestoreInjury is read (never
-    -- written) by server/medkit.lua behind a `type(RestoreInjury) ==
-    -- 'function'` existence check; that guard is kept even now that
-    -- server/wellbeing.lua really defines it, per this resource's
-    -- "runtime existence guard, not a load-order assumption" convention.
-    -- IsHesitating/IsDistracted are the read-only accessors PHASE4_SPEC.md
-    -- §13.5 names as the cross-cutting dependency Phase 3's
-    -- server/combat.lua consumes.
-    "RestoreInjury", "IsHesitating", "IsDistracted",
-    -- server/wellbeing.lua -- pure config read, no per-citizenid state, so a
-    -- companion stun/flashbang resource can check immunity before applying an
-    -- effect. Same cross-file accessor contract as IsHesitating/IsDistracted.
-    "IsFlashbangImmune",
-    -- client/wellbeing.lua (Phase 4) -- the calm-down action a future
-    -- radial entry calls rather than re-deriving its own validation.
-    "RequestK9CalmDown",
-    -- client/wellbeing.lua -- MOOD MERGE (this pass, coder-backend):
-    -- COMMAND_CONSOLIDATION_SPEC.md §7 / FEATURE_STRUCTURE_SPEC.md §5's own
-    -- deferred "Pet K9"/"Feed K9" ox_target consolidation, picked up once
-    -- both specs' own "revisit once wellbeing.lua is quiet" condition held.
-    -- RequestCareForK9 is the one merged entry point the ox_target option
-    -- itself now calls, resolving between the other two. RequestPetK9/
-    -- RequestFeedK9 are the two former standalone onSelect bodies,
-    -- preserved as callable resource-globals (HIDDEN ALIASES -- see that
-    -- file's own header note on this section) after their own ox_target
-    -- table entries were folded into the merged option above.
-    "RequestCareForK9", "RequestPetK9", "RequestFeedK9",
     -- server/progression.lua (Phase 4, PHASE4_SPEC.md §13.4.1,
     -- XPProgression) -- real, implemented this pass. AwardXP/GetXPTier are
     -- read from server/tracking.lua (the only current call sites) behind a
@@ -1506,12 +1460,6 @@ globals = {
     -- client/partnership.lua rather than called raw from client/radial.lua,
     -- so every partnership round trip stays owned by one file.
     "RefreshPartnershipStateFromServer",
-    -- client/defense.lua (Phase 3 HandlerDownDefense, PHASE3_SPEC.md
-    -- §12.5.3). Per §12.0 item 2 this is UI/auto-targeting convenience,
-    -- not an AI takeover -- ConfirmHandlerDownDefense is the PLAYER's
-    -- confirmation of a surfaced prompt, never an autonomous action.
-    "ConfirmHandlerDownDefense", "HasFreshDefensePrompt",
-    "GetDefenseSuggestedTargetNetId",
     -- client/combat.lua's PropDragging trigger surface (Phase 3,
     -- PHASE3_SPEC.md §12.5.4) -- same self-initiated-trigger plus
     -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.
@@ -1621,30 +1569,6 @@ globals = {
     -- server-side) -- NOT yet wired into server/combat.lua's
     -- ValidateCombatRequest, which is that file's own call to make.
     "IsSearchInProgressForSource",
-    -- server/announce.lua -- APPREHENSION ANNOUNCEMENT
-    -- (Config.Features.ApprehensionAnnouncement). Server-authoritative gate
-    -- consulted by server/combat.lua's ValidateCombatRequest (BiteAndHold/
-    -- NonLethalTakedown only) to require a real warning before a bite/
-    -- takedown may be STARTED -- never consulted by any termination path.
-    -- Same runtime-existence-guard convention as IsSearchInProgressForSource
-    -- immediately above: an absent function here (server/announce.lua not
-    -- yet routed into server/combat.lua's own call site) is a skipped
-    -- check, never an error.
-    "IsApprehensionWarned",
-    -- client/announce.lua -- the client half of the same feature. Resource-
-    -- global so client/keybinds.lua's own k9announce command (or any future
-    -- radial/tablet entry point) can reach it, same "one entry point, many
-    -- callers" convention as RequestRecall/RequestPursuitSprint above.
-    "RequestApprehensionWarning",
-    -- client/dangerwarn.lua (DangerWarn -- the reverse direction of
-    -- HandlerDownDefense: a K9's own player, not an automatic detector,
-    -- deliberately warning their partnered handler). Same "resource-global
-    -- so a future radial entry and a chat command/keybind can both reach
-    -- it" convention as RequestRecall/RequestPursuitSprint above -- not yet
-    -- wired into client/radial.lua, see that file's own header
-    -- "RADIAL/KEYBIND CONTRACT" section for the exact hookup a future
-    -- change there needs.
-    "RequestDangerWarn",
     -- server/roster.lua (NEW FILE, ROSTER_SPEC.md, Phase A -- K9 Command
     -- Tablet rosters, data layer + server logic). These are CORE LOGIC
     -- functions exposed as globals DELIBERATELY WITHOUT their own
