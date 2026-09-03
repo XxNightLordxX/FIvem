@@ -191,6 +191,8 @@
     "target_dead": "That target is down.",
     "target_not_downed": "That target does not appear to be downed.",
     "too_far": "You are too far from the target.",
+    "too_far_within": "You are too far from the target -- move within %sm of them.",
+    "on_cooldown_seconds": "You must wait %ss before attempting that again.",
     "implausible_movement": "Your K9's movement could not be verified. Try again.",
     "target_in_vehicle": "That target is currently inside a vehicle.",
     "denied_blocked": "High Command has individually blocked you from using %s. This is not a missing grant -- ask them why.",

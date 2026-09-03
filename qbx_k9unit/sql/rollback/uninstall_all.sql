@@ -598,11 +598,11 @@ BEGIN
             -- mirrors sql/install.sql's own CREATE TABLE and
             -- server/datastore.lua's own EXPECTED_TABLE_COLUMNS entry for
             -- this table exactly.
-            UNION ALL SELECT 'k9_wellbeing', 8,
+            UNION ALL SELECT 'k9_wellbeing', 3,
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
               (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'
-                 AND COLUMN_NAME IN ('citizenid','fatigue','mood','fear_stress','injury','hunger','thirst','updated_at'))
+                 AND COLUMN_NAME IN ('citizenid','fatigue','updated_at'))
     ) shp
     WHERE shp.tbl_exists = 1
       AND (shp.obj_type <> 'BASE TABLE' OR shp.cols_found <> shp.cols_expected);
@@ -827,11 +827,11 @@ BEGIN
               (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'
                  AND COLUMN_NAME IN ('citizenid','model','active','set_by','set_at','unset_at'))
-            UNION ALL SELECT 'k9_wellbeing', 8,
+            UNION ALL SELECT 'k9_wellbeing', 3,
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
               (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'
-                 AND COLUMN_NAME IN ('citizenid','fatigue','mood','fear_stress','injury','hunger','thirst','updated_at'))
+                 AND COLUMN_NAME IN ('citizenid','fatigue','updated_at'))
         ) shp2
         WHERE shp2.tbl_exists = 1
           AND (shp2.obj_type <> 'BASE TABLE' OR shp2.cols_found <> shp2.cols_expected)

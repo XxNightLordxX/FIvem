@@ -1310,7 +1310,10 @@ local COMBAT_FEATURE_DISPLAY_LABEL = {
 --- @param reason string?
 --- @param featureKey string? -- ONLY consulted for 'combat_blocked'/'combat_not_granted' below -- every other reason ignores it, so passing it unconditionally at every call site (this file's own convention now) is always safe.
 --- @return string
-local function CombatRejectMessage(reason, featureKey)
+--- @param reason string
+--- @param featureKey string|nil -- 'BiteAndHold'|'NonLethalTakedown'|'PropDragging'
+--- @param remainingMs number|nil -- only meaningful for 'on_cooldown'
+local function CombatRejectMessage(reason, featureKey, remainingMs)
     local label = COMBAT_FEATURE_DISPLAY_LABEL[featureKey] or featureKey or '?'
     if reason == 'combat_blocked' then
         return locale('combat.denied_blocked', label)
@@ -1318,6 +1321,43 @@ local function CombatRejectMessage(reason, featureKey)
     if reason == 'combat_not_granted' then
         return locale('combat.denied_not_granted', label)
     end
+
+    -- TWO REFUSALS THAT USED TO TELL THE PLAYER NOTHING ACTIONABLE, and
+    -- both land mid-pursuit, which is the worst moment to be given a
+    -- shrug. Resolved at call time (like the two denied_* cases above)
+    -- rather than out of the pre-resolved COMBAT_REJECT_MESSAGES table,
+    -- because both need a number the table cannot hold.
+    --
+    -- 'too_far' now names the range you have to be inside. Read from
+    -- Config.Combat.<feature>.range -- the SAME field every caller passes
+    -- into ValidateCombatRequest as its `rangeMeters` parameter, so the
+    -- message and the check can never disagree. (Note the mismatch in
+    -- names: the config key is `range`, the parameter it feeds is
+    -- `rangeMeters`. Reading `rangeMeters` off the config table, as a first
+    -- pass here did, silently found nothing and degraded to the generic
+    -- sentence forever.) Only used when the lookup produces a real
+    -- number, so a missing or malformed config still degrades cleanly
+    -- rather than printing "nilm".
+    --
+    -- Deliberately NOT the live distance: that would mean threading a
+    -- seventh return value out through all nineteen of
+    -- ValidateCombatRequest's `return false` paths, and the actionable
+    -- half is the range you need, not the gap you currently have.
+    if reason == 'too_far' then
+        local cfg = type(Config) == 'table' and type(Config.Combat) == 'table' and Config.Combat[featureKey]
+        local range = type(cfg) == 'table' and tonumber(cfg.range)
+        if range and range > 0 then
+            return locale('combat.too_far_within', string.format('%.1f', range))
+        end
+    end
+
+    -- 'on_cooldown' now says how many seconds are left. Rounded UP, so it
+    -- never reads "0s" while still refusing, and never promises a shorter
+    -- wait than the player actually has.
+    if reason == 'on_cooldown' and type(remainingMs) == 'number' and remainingMs > 0 then
+        return locale('combat.on_cooldown_seconds', tostring(math.ceil(remainingMs / 1000)))
+    end
+
     return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
 end
 
@@ -2884,7 +2924,11 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     -- valid config and gets the safe fallback for an invalid one, for free.
     if BiteHoldCooldown.IsOnCooldown(src)
         or BiteHoldTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        -- The LONGER of the two waits -- telling the player about the one
+        -- that expires first would have them try again and be refused by
+        -- the other.
+        local waitMs = math.max(BiteHoldCooldown.RemainingMs(src), BiteHoldTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'BiteAndHold', waitMs), 'error')
         return
     end
 
@@ -3094,7 +3138,8 @@ local function HandleTakedownRequest(src, targetNetId)
     -- request.
     if TakedownCooldown.IsOnCooldown(src)
         or TakedownTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        local waitMs = math.max(TakedownCooldown.RemainingMs(src), TakedownTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'NonLethalTakedown', waitMs), 'error')
         return
     end
 
@@ -3515,7 +3560,8 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     -- requestBiteHold's own pair.
     if DragCooldown.IsOnCooldown(src)
         or DragTargetCooldown.IsOnCooldown(targetNetId) then
-        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        local waitMs = math.max(DragCooldown.RemainingMs(src), DragTargetCooldown.RemainingMs(targetNetId))
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown', 'PropDragging', waitMs), 'error')
         return
     end
 
